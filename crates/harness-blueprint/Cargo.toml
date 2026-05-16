@@ -13,3 +13,10 @@ harness-core = { workspace = true }
 harness-loop = { workspace = true }
 async-trait  = { workspace = true }
 futures      = { workspace = true }
+tracing      = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+
+[dev-dependencies]
+tokio           = { workspace = true }
+harness-context = { workspace = true }

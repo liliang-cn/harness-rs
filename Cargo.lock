@@ -384,8 +384,13 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "futures",
+ "harness-context",
  "harness-core",
  "harness-loop",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -492,8 +497,11 @@ name = "harness-sandbox"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "harness-context",
  "harness-core",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
