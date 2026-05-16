@@ -246,7 +246,33 @@ impl<M: Model> AgentLoop<M> {
                     let bundle = SignalSet::new(all_signals);
                     let (patches, remaining) = bundle.partition_auto_fix();
 
-                    let applied = apply_patches(&patches, world).await;
+                    // audit #7: each patch goes through PreAutoFix.
+                    // Hooks can Deny (skip silently). Default safelist on
+                    // RunCommand catches the obvious misuses with no hook.
+                    let approved: Vec<harness_core::FixPatch> = patches.into_iter().filter(|p| {
+                        if !is_default_safe_fix(p) {
+                            tracing::warn!(?p, "auto-fix rejected by default safelist (use PreAutoFix hook to override)");
+                            self.hooks.fire(&Event::PostAutoFix { patch: p, applied: false }, world);
+                            return false;
+                        }
+                        match self.hooks.fire(&Event::PreAutoFix { patch: p }, world) {
+                            HookOutcome::Deny { reason } => {
+                                tracing::warn!(?p, %reason, "auto-fix denied by hook");
+                                self.hooks.fire(&Event::PostAutoFix { patch: p, applied: false }, world);
+                                false
+                            }
+                            _ => true,
+                        }
+                    }).collect();
+
+                    let applied = apply_patches(&approved, world).await;
+                    // Emit PostAutoFix for each approved patch with the application result.
+                    for (i, p) in approved.iter().enumerate() {
+                        self.hooks.fire(
+                            &Event::PostAutoFix { patch: p, applied: i < applied.len() },
+                            world,
+                        );
+                    }
                     if !applied.is_empty() {
                         ctx.push_feedback(vec![harness_core::Signal {
                             severity:   harness_core::Severity::Hint,
@@ -270,6 +296,35 @@ impl<M: Model> AgentLoop<M> {
             tools_called,
             usage: total_usage,
         })
+    }
+}
+
+/// Audit #7: default safelist for `FixPatch::RunCommand`.
+///
+/// Sensors emitting `RunCommand` patches would otherwise be a silent
+/// arbitrary-code-execution channel. We restrict the *program* by name to a
+/// short list of well-known, side-effect-bounded formatters/fixers. Anything
+/// else returns false and the patch is rejected (write your own `PreAutoFix`
+/// hook returning `HookOutcome::Allow` to widen the policy).
+///
+/// `ReplaceFile` and `UnifiedDiff` are not restricted here — they only touch
+/// files inside the workspace and are covered by the symlink-safe path
+/// resolution in `harness-tools-fs`.
+pub fn is_default_safe_fix(patch: &harness_core::FixPatch) -> bool {
+    use harness_core::FixPatch;
+    match patch {
+        FixPatch::ReplaceFile { .. } | FixPatch::UnifiedDiff { .. } => true,
+        FixPatch::RunCommand { program, args, .. } => match program.as_str() {
+            // Cargo subcommands proven side-effect-bounded.
+            "cargo" => matches!(
+                args.first().map(String::as_str),
+                Some("fmt" | "clippy" | "fix"),
+            ),
+            "rustfmt" | "gofmt" | "prettier" | "ruff" | "black" => true,
+            _ => false,
+        },
+        // Future FixPatch variants: deny by default — review and add to the list above.
+        _ => false,
     }
 }
 
