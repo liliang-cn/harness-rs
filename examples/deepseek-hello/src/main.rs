@@ -27,21 +27,27 @@ async fn echo(_ctx: &mut Context, _w: &mut World) -> Result<(), harness::SkillEr
 }
 
 /// Run `cargo fmt` on the Rust workspace. Use before committing Rust changes.
-#[harness::skill(name = "format-rust", harness(kind = "computational", risk = "read-only"))]
+#[harness::skill(
+    name = "format-rust",
+    harness(kind = "computational", risk = "read-only")
+)]
 async fn format_rust(_ctx: &mut Context, _w: &mut World) -> Result<(), harness::SkillError> {
     Ok(())
 }
 
 /// Review an axum HTTP handler for security and error-handling issues.
-#[harness::skill(name = "review-axum", harness(kind = "inferential", risk = "read-only"))]
+#[harness::skill(
+    name = "review-axum",
+    harness(kind = "inferential", risk = "read-only")
+)]
 async fn review_axum(_ctx: &mut Context, _w: &mut World) -> Result<(), harness::SkillError> {
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let api_key = std::env::var("DEEPSEEK_API_KEY")
-        .context("DEEPSEEK_API_KEY env var is required")?;
+    let api_key =
+        std::env::var("DEEPSEEK_API_KEY").context("DEEPSEEK_API_KEY env var is required")?;
 
     // CLI args: optional model tier ("flash" | "pro") + the user question
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -76,9 +82,9 @@ async fn main() -> anyhow::Result<()> {
         system: vec![Block::Text(
             "You are a coding-agent harness orchestrator. Respond tersely.".into(),
         )],
-        guides:  vec![Block::Text(catalogue)],
+        guides: vec![Block::Text(catalogue)],
         history: vec![Turn {
-            role:   TurnRole::User,
+            role: TurnRole::User,
             blocks: vec![Block::Text(question.clone())],
         }],
         task: Task {
@@ -86,13 +92,17 @@ async fn main() -> anyhow::Result<()> {
             source: None,
             deadline: None,
         },
-        policy:   Default::default(),
+        policy: Default::default(),
         metadata: BTreeMap::new(),
-        tools:    Vec::new(),
+        tools: Vec::new(),
     };
 
     // 4. Call DeepSeek — pass model name directly, no factory layer
-    let model_id = if tier == "pro" { "deepseek-v4-pro" } else { "deepseek-v4-flash" };
+    let model_id = if tier == "pro" {
+        "deepseek-v4-pro"
+    } else {
+        "deepseek-v4-flash"
+    };
     let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
     let info = model.info();
     println!(
@@ -102,7 +112,10 @@ async fn main() -> anyhow::Result<()> {
     println!("→ question: {question}\n");
 
     let out = model.complete(&ctx).await?;
-    println!("← response ({} input + {} output tokens):", out.usage.input_tokens, out.usage.output_tokens);
+    println!(
+        "← response ({} input + {} output tokens):",
+        out.usage.input_tokens, out.usage.output_tokens
+    );
     println!("{}", out.text.unwrap_or_default());
 
     Ok(())

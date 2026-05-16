@@ -26,7 +26,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
-#[command(name = "crate-keeper", about = "Inspect a Rust workspace with a harness agent loop")]
+#[command(
+    name = "crate-keeper",
+    about = "Inspect a Rust workspace with a harness agent loop"
+)]
 struct Cli {
     /// Path to the Rust workspace to inspect.
     #[arg(default_value = ".")]
@@ -54,12 +57,18 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let cli = Cli::parse();
-    let api_key =
-        std::env::var("DEEPSEEK_API_KEY").map_err(|_| anyhow::anyhow!("DEEPSEEK_API_KEY env required"))?;
+    let api_key = std::env::var("DEEPSEEK_API_KEY")
+        .map_err(|_| anyhow::anyhow!("DEEPSEEK_API_KEY env required"))?;
 
-    let workspace = cli.workspace.canonicalize().map_err(|e| anyhow::anyhow!("workspace: {e}"))?;
+    let workspace = cli
+        .workspace
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("workspace: {e}"))?;
     if !workspace.join("Cargo.toml").exists() {
-        anyhow::bail!("not a cargo workspace: {} (no Cargo.toml)", workspace.display());
+        anyhow::bail!(
+            "not a cargo workspace: {} (no Cargo.toml)",
+            workspace.display()
+        );
     }
 
     let task_description = cli.task.unwrap_or_else(|| {
@@ -76,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     let model_id = match cli.tier.as_str() {
         "flash" => "deepseek-v4-flash",
-        _       => "deepseek-v4-pro",
+        _ => "deepseek-v4-pro",
     };
     let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
     let info = model.info();
@@ -101,16 +110,28 @@ async fn main() -> anyhow::Result<()> {
         loop_ = loop_.with_hook(Arc::new(recorder));
         println!("  recording: {}", path.display());
     }
-    println!("  tools:     {} registered (max_iters={})\n", loop_.tools.len(), cli.max_iters);
+    println!(
+        "  tools:     {} registered (max_iters={})\n",
+        loop_.tools.len(),
+        cli.max_iters
+    );
 
     let mut world = default_world(&workspace);
-    let task = Task { description: task_description, source: None, deadline: None };
-    let outcome = loop_.run_with_max_iters(task, &mut world, cli.max_iters).await?;
+    let task = Task {
+        description: task_description,
+        source: None,
+        deadline: None,
+    };
+    let outcome = loop_
+        .run_with_max_iters(task, &mut world, cli.max_iters)
+        .await?;
 
     match outcome {
         Outcome::Done { text, iters, .. } => {
             println!("\n✓ done after {iters} iteration(s)");
-            if let Some(t) = text { println!("\n--- final assistant message ---\n{t}"); }
+            if let Some(t) = text {
+                println!("\n--- final assistant message ---\n{t}");
+            }
             let notes = workspace.join("HARNESS_NOTES.md");
             if notes.exists() {
                 println!(

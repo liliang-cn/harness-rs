@@ -25,10 +25,7 @@ pub fn skill(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_skill(
-    args: Punctuated<Meta, Token![,]>,
-    item_fn: ItemFn,
-) -> syn::Result<TokenStream2> {
+fn expand_skill(args: Punctuated<Meta, Token![,]>, item_fn: ItemFn) -> syn::Result<TokenStream2> {
     let fn_ident = item_fn.sig.ident.clone();
 
     let mut name: Option<String> = None;
@@ -49,9 +46,9 @@ fn expand_skill(
                     .to_string();
                 let value = lit_str(&nv.value)?;
                 match key.as_str() {
-                    "name"          => name = Some(value),
-                    "description"   => description = Some(value),
-                    "license"       => license = Some(value),
+                    "name" => name = Some(value),
+                    "description" => description = Some(value),
+                    "license" => license = Some(value),
                     "compatibility" => compatibility = Some(value),
                     "allowed_tools" => allowed_tools = Some(value),
                     other => return err(nv, format!("unknown attribute `{other}`")),
@@ -86,7 +83,9 @@ fn expand_skill(
     validate_skill_name(&name).map_err(|r| syn::Error::new_spanned(&fn_ident, r))?;
     let description = description
         .or_else(|| extract_doc_comments(&item_fn.attrs))
-        .ok_or_else(|| syn::Error::new_spanned(&fn_ident, "missing `description` (or `///` doc-comment)"))?;
+        .ok_or_else(|| {
+            syn::Error::new_spanned(&fn_ident, "missing `description` (or `///` doc-comment)")
+        })?;
     if description.is_empty() {
         return err(&fn_ident, "description must not be empty");
     }
@@ -107,7 +106,9 @@ fn expand_skill(
             comma = true;
         }
         if let Some(r) = &harness_risk {
-            if comma { json.push(','); }
+            if comma {
+                json.push(',');
+            }
             json.push_str(&format!("\"risk\":\"{r}\""));
         }
         json.push('}');
@@ -178,10 +179,7 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_tool(
-    args: Punctuated<Meta, Token![,]>,
-    item_fn: ItemFn,
-) -> syn::Result<TokenStream2> {
+fn expand_tool(args: Punctuated<Meta, Token![,]>, item_fn: ItemFn) -> syn::Result<TokenStream2> {
     let fn_ident = item_fn.sig.ident.clone();
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
@@ -190,13 +188,17 @@ fn expand_tool(
 
     for meta in &args {
         if let Meta::NameValue(nv) = meta {
-            let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+            let key = nv
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             let value = lit_str(&nv.value)?;
             match key.as_str() {
-                "name"        => name = Some(value),
+                "name" => name = Some(value),
                 "description" => description = Some(value),
-                "risk"        => risk = value,
-                "schema"      => schema = Some(value),
+                "risk" => risk = value,
+                "schema" => schema = Some(value),
                 other => return err(nv, format!("unknown attribute `{other}`")),
             }
         } else {
@@ -207,18 +209,27 @@ fn expand_tool(
     let name = name.ok_or_else(|| syn::Error::new_spanned(&fn_ident, "missing required `name`"))?;
     let description = description
         .or_else(|| extract_doc_comments(&item_fn.attrs))
-        .ok_or_else(|| syn::Error::new_spanned(&fn_ident, "missing `description` (or `///` doc-comment)"))?;
+        .ok_or_else(|| {
+            syn::Error::new_spanned(&fn_ident, "missing `description` (or `///` doc-comment)")
+        })?;
     let schema = schema.unwrap_or_else(|| r#"{"type":"object"}"#.to_string());
     // Validate schema parses.
     if let Err(e) = serde_json::from_str::<serde_json::Value>(&schema) {
         return err(&fn_ident, format!("schema is not valid JSON: {e}"));
     }
     let risk_variant = match risk.as_str() {
-        "read-only"   => quote!(::harness_core::ToolRisk::ReadOnly),
-        "idempotent"  => quote!(::harness_core::ToolRisk::Idempotent),
+        "read-only" => quote!(::harness_core::ToolRisk::ReadOnly),
+        "idempotent" => quote!(::harness_core::ToolRisk::Idempotent),
         "destructive" => quote!(::harness_core::ToolRisk::Destructive),
-        "network"     => quote!(::harness_core::ToolRisk::Network),
-        other => return err(&fn_ident, format!("risk must be one of read-only|idempotent|destructive|network, got `{other}`")),
+        "network" => quote!(::harness_core::ToolRisk::Network),
+        other => {
+            return err(
+                &fn_ident,
+                format!(
+                    "risk must be one of read-only|idempotent|destructive|network, got `{other}`"
+                ),
+            );
+        }
     };
     let marker = format_ident!("__Harness_Tool_{}", to_pascal_case(&name));
 
@@ -273,10 +284,7 @@ pub fn guide(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_guide(
-    args: Punctuated<Meta, Token![,]>,
-    item_fn: ItemFn,
-) -> syn::Result<TokenStream2> {
+fn expand_guide(args: Punctuated<Meta, Token![,]>, item_fn: ItemFn) -> syn::Result<TokenStream2> {
     let fn_ident = item_fn.sig.ident.clone();
     let mut id: Option<String> = None;
     let mut scope: String = "always".into();
@@ -285,13 +293,19 @@ fn expand_guide(
 
     for meta in &args {
         if let Meta::NameValue(nv) = meta {
-            let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+            let key = nv
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             let value = lit_str(&nv.value)?;
             match key.as_str() {
-                "id"   => id = Some(value),
+                "id" => id = Some(value),
                 "scope" => scope = value,
-                "kind"  => kind = value,
-                "task_matches" => task_matches = value.split(',').map(|s| s.trim().to_string()).collect(),
+                "kind" => kind = value,
+                "task_matches" => {
+                    task_matches = value.split(',').map(|s| s.trim().to_string()).collect()
+                }
                 other => return err(nv, format!("unknown attribute `{other}`")),
             }
         } else {
@@ -301,8 +315,13 @@ fn expand_guide(
     let id = id.unwrap_or_else(|| fn_ident.to_string());
     let kind_variant = match kind.as_str() {
         "computational" => quote!(::harness_core::Execution::Computational),
-        "inferential"   => quote!(::harness_core::Execution::Inferential),
-        other => return err(&fn_ident, format!("kind must be computational|inferential, got `{other}`")),
+        "inferential" => quote!(::harness_core::Execution::Inferential),
+        other => {
+            return err(
+                &fn_ident,
+                format!("kind must be computational|inferential, got `{other}`"),
+            );
+        }
     };
     let scope_expr = match scope.as_str() {
         "always" => quote!(::harness_core::GuideScope::Always),
@@ -310,7 +329,14 @@ fn expand_guide(
             let items = task_matches.iter().map(|s| quote!(#s.to_string()));
             quote!(::harness_core::GuideScope::TaskMatches(vec![#(#items),*]))
         }
-        other => return err(&fn_ident, format!("unsupported scope `{other}`; use \"always\" or \"task-matches\" + task_matches=...")),
+        other => {
+            return err(
+                &fn_ident,
+                format!(
+                    "unsupported scope `{other}`; use \"always\" or \"task-matches\" + task_matches=..."
+                ),
+            );
+        }
     };
     let marker = format_ident!("__Harness_Guide_{}", to_pascal_case(&id));
 
@@ -364,10 +390,7 @@ pub fn sensor(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_sensor(
-    args: Punctuated<Meta, Token![,]>,
-    item_fn: ItemFn,
-) -> syn::Result<TokenStream2> {
+fn expand_sensor(args: Punctuated<Meta, Token![,]>, item_fn: ItemFn) -> syn::Result<TokenStream2> {
     let fn_ident = item_fn.sig.ident.clone();
     let mut id: Option<String> = None;
     let mut stage: String = "self-correct".into();
@@ -375,12 +398,16 @@ fn expand_sensor(
 
     for meta in &args {
         if let Meta::NameValue(nv) = meta {
-            let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+            let key = nv
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             let value = lit_str(&nv.value)?;
             match key.as_str() {
-                "id"   => id = Some(value),
+                "id" => id = Some(value),
                 "stage" => stage = value,
-                "kind"  => kind = value,
+                "kind" => kind = value,
                 other => return err(nv, format!("unknown attribute `{other}`")),
             }
         } else {
@@ -390,15 +417,20 @@ fn expand_sensor(
     let id = id.unwrap_or_else(|| fn_ident.to_string());
     let kind_variant = match kind.as_str() {
         "computational" => quote!(::harness_core::Execution::Computational),
-        "inferential"   => quote!(::harness_core::Execution::Inferential),
-        other => return err(&fn_ident, format!("kind must be computational|inferential, got `{other}`")),
+        "inferential" => quote!(::harness_core::Execution::Inferential),
+        other => {
+            return err(
+                &fn_ident,
+                format!("kind must be computational|inferential, got `{other}`"),
+            );
+        }
     };
     let stage_variant = match stage.as_str() {
-        "pre-action"     => quote!(::harness_core::Stage::PreAction),
-        "self-correct"   => quote!(::harness_core::Stage::SelfCorrect),
-        "pre-commit"     => quote!(::harness_core::Stage::PreCommit),
+        "pre-action" => quote!(::harness_core::Stage::PreAction),
+        "self-correct" => quote!(::harness_core::Stage::SelfCorrect),
+        "pre-commit" => quote!(::harness_core::Stage::PreCommit),
         "post-integrate" => quote!(::harness_core::Stage::PostIntegrate),
-        "continuous"     => quote!(::harness_core::Stage::Continuous),
+        "continuous" => quote!(::harness_core::Stage::Continuous),
         other => return err(&fn_ident, format!("unknown stage `{other}`")),
     };
     let marker = format_ident!("__Harness_Sensor_{}", to_pascal_case(&id));
@@ -450,20 +482,21 @@ pub fn hook(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_hook(
-    args: Punctuated<Meta, Token![,]>,
-    item_fn: ItemFn,
-) -> syn::Result<TokenStream2> {
+fn expand_hook(args: Punctuated<Meta, Token![,]>, item_fn: ItemFn) -> syn::Result<TokenStream2> {
     let fn_ident = item_fn.sig.ident.clone();
     let mut name: Option<String> = None;
     let mut event: Option<String> = None;
 
     for meta in &args {
         if let Meta::NameValue(nv) = meta {
-            let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+            let key = nv
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
             let value = lit_str(&nv.value)?;
             match key.as_str() {
-                "name"  => name = Some(value),
+                "name" => name = Some(value),
                 "event" => event = Some(value),
                 other => return err(nv, format!("unknown attribute `{other}`")),
             }
@@ -471,7 +504,8 @@ fn expand_hook(
             return err(meta, "expected `key = \"value\"`");
         }
     }
-    let event = event.ok_or_else(|| syn::Error::new_spanned(&fn_ident, "missing required `event`"))?;
+    let event =
+        event.ok_or_else(|| syn::Error::new_spanned(&fn_ident, "missing required `event`"))?;
     let name = name.unwrap_or_else(|| fn_ident.to_string());
     let marker = format_ident!("__Harness_Hook_{}", to_pascal_case(&name));
 
@@ -510,7 +544,10 @@ fn expand_hook(
 // ============================================================
 
 fn lit_str(expr: &Expr) -> syn::Result<String> {
-    if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = expr {
+    if let Expr::Lit(ExprLit {
+        lit: Lit::Str(s), ..
+    }) = expr
+    {
         Ok(s.value())
     } else {
         Err(syn::Error::new_spanned(expr, "expected string literal"))
@@ -520,19 +557,25 @@ fn lit_str(expr: &Expr) -> syn::Result<String> {
 fn opt_string(v: Option<&str>) -> TokenStream2 {
     match v {
         Some(s) => quote! { ::std::option::Option::Some(#s.to_string()) },
-        None    => quote! { ::std::option::Option::None },
+        None => quote! { ::std::option::Option::None },
     }
 }
 
 fn validate_skill_name(name: &str) -> Result<(), String> {
-    if name.is_empty() { return Err("name must not be empty".into()); }
-    if name.len() > 64 { return Err(format!("name length {} > 64", name.len())); }
+    if name.is_empty() {
+        return Err("name must not be empty".into());
+    }
+    if name.len() > 64 {
+        return Err(format!("name length {} > 64", name.len()));
+    }
     if name.starts_with('-') || name.ends_with('-') {
         return Err("name must not start or end with `-`".into());
     }
-    if name.contains("--") { return Err("name must not contain `--`".into()); }
+    if name.contains("--") {
+        return Err("name must not contain `--`".into());
+    }
     for (i, c) in name.char_indices() {
-        if !(c.is_ascii_digit() || ('a'..='z').contains(&c) || c == '-') {
+        if !(c.is_ascii_digit() || c.is_ascii_lowercase() || c == '-') {
             return Err(format!("name contains invalid char `{c}` at byte {i}"));
         }
     }
@@ -542,14 +585,22 @@ fn validate_skill_name(name: &str) -> Result<(), String> {
 fn extract_doc_comments(attrs: &[syn::Attribute]) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
     for attr in attrs {
-        if !attr.path().is_ident("doc") { continue; }
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
         if let Meta::NameValue(nv) = &attr.meta
-            && let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &nv.value
+            && let Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) = &nv.value
         {
             lines.push(s.value().trim().to_string());
         }
     }
-    if lines.is_empty() { None } else { Some(lines.join(" ").trim().to_string()) }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join(" ").trim().to_string())
+    }
 }
 
 fn to_pascal_case(s: &str) -> String {

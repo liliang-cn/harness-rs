@@ -53,24 +53,32 @@ pub trait Sandbox: Send + Sync {
 /// path, plus introspection / cleanup helpers.
 pub struct SandboxHandle {
     pub world: World,
-    pub root:  PathBuf,
-    cleanup:   Option<Box<dyn FnOnce() + Send>>,
-    keep:      bool,
-    label:     String,
+    pub root: PathBuf,
+    cleanup: Option<Box<dyn FnOnce() + Send>>,
+    keep: bool,
+    label: String,
 }
 
 impl SandboxHandle {
-    pub fn label(&self) -> &str { &self.label }
-    pub fn root(&self)  -> &Path { &self.root }
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 
     /// Skip the cleanup callback on drop. Useful when you want to inspect the
     /// sandbox afterwards.
-    pub fn keep(&mut self) { self.keep = true; }
+    pub fn keep(&mut self) {
+        self.keep = true;
+    }
 }
 
 impl Drop for SandboxHandle {
     fn drop(&mut self) {
-        if self.keep { return; }
+        if self.keep {
+            return;
+        }
         if let Some(f) = self.cleanup.take() {
             f();
         }
@@ -118,14 +126,18 @@ impl WorktreeSandbox {
 
 #[async_trait]
 impl Sandbox for WorktreeSandbox {
-    fn fs_policy(&self) -> FsPolicy { FsPolicy::Confined }
-    fn net_policy(&self) -> NetPolicy { NetPolicy::Allowed }
+    fn fs_policy(&self) -> FsPolicy {
+        FsPolicy::Confined
+    }
+    fn net_policy(&self) -> NetPolicy {
+        NetPolicy::Allowed
+    }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
         // Choose target path
         let target = match &self.target {
             Some(p) => p.clone(),
-            None    => {
+            None => {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos())
@@ -166,10 +178,12 @@ impl Sandbox for WorktreeSandbox {
 
         // Build a World pointing at the worktree.
         let world = World {
-            repo:   RepoView { root: target.clone() },
+            repo: RepoView {
+                root: target.clone(),
+            },
             runner: Arc::new(harness_context::TokioRunner),
-            clock:  Arc::new(harness_context::SystemClock),
-            kv:     Arc::new(harness_context::InMemoryKv::new()),
+            clock: Arc::new(harness_context::SystemClock),
+            kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
         };
 
@@ -221,21 +235,21 @@ impl Sandbox for WorktreeSandbox {
 /// agent intends to use (cargo, git, etc.).
 pub struct ContainerSandbox {
     /// OCI image to spawn (e.g. `rust:1.92-slim`).
-    pub image:   String,
+    pub image: String,
     /// Host directory to mount inside the container at `/workspace`.
-    pub source:  PathBuf,
+    pub source: PathBuf,
     /// Container name; auto-generated if `None`.
-    pub name:    Option<String>,
+    pub name: Option<String>,
     /// Pass `--network none` to the container.
-    pub no_net:  bool,
+    pub no_net: bool,
 }
 
 impl ContainerSandbox {
     pub fn new(image: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         Self {
-            image:  image.into(),
+            image: image.into(),
             source: source.into(),
-            name:   None,
+            name: None,
             no_net: true,
         }
     }
@@ -253,8 +267,16 @@ impl ContainerSandbox {
 
 #[async_trait]
 impl Sandbox for ContainerSandbox {
-    fn fs_policy(&self)  -> FsPolicy  { FsPolicy::Confined }
-    fn net_policy(&self) -> NetPolicy { if self.no_net { NetPolicy::None } else { NetPolicy::Allowed } }
+    fn fs_policy(&self) -> FsPolicy {
+        FsPolicy::Confined
+    }
+    fn net_policy(&self) -> NetPolicy {
+        if self.no_net {
+            NetPolicy::None
+        } else {
+            NetPolicy::Allowed
+        }
+    }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
         // probe docker
@@ -280,7 +302,17 @@ impl Sandbox for ContainerSandbox {
             )
         });
         let mount = format!("{}:/workspace", self.source.display());
-        let mut args = vec!["run", "-d", "--rm", "--name", &name, "-v", &mount, "-w", "/workspace"];
+        let mut args = vec![
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            &name,
+            "-v",
+            &mount,
+            "-w",
+            "/workspace",
+        ];
         if self.no_net {
             args.push("--network");
             args.push("none");
@@ -303,13 +335,16 @@ impl Sandbox for ContainerSandbox {
         }
 
         // Wrap the world's runner so every exec routes through `docker exec`.
-        let runner: Arc<dyn harness_core::ProcessRunner> =
-            Arc::new(DockerExecRunner { container: name.clone() });
+        let runner: Arc<dyn harness_core::ProcessRunner> = Arc::new(DockerExecRunner {
+            container: name.clone(),
+        });
         let world = World {
-            repo:   RepoView { root: self.source.clone() },
+            repo: RepoView {
+                root: self.source.clone(),
+            },
             runner,
-            clock:  Arc::new(harness_context::SystemClock),
-            kv:     Arc::new(harness_context::InMemoryKv::new()),
+            clock: Arc::new(harness_context::SystemClock),
+            kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
         };
 
@@ -342,9 +377,7 @@ impl harness_core::ProcessRunner for DockerExecRunner {
         args: &[&str],
         cwd: Option<&std::path::Path>,
     ) -> std::io::Result<harness_core::ProcessOutput> {
-        let mut docker_args: Vec<String> = vec![
-            "exec".into(),
-        ];
+        let mut docker_args: Vec<String> = vec!["exec".into()];
         if let Some(c) = cwd {
             docker_args.push("-w".into());
             // Re-anchor relative cwd inside the container's /workspace mount.
@@ -383,27 +416,35 @@ impl harness_core::ProcessRunner for DockerExecRunner {
 pub struct VmSandbox {
     pub kernel_image: PathBuf,
     pub rootfs_image: PathBuf,
-    pub source:       PathBuf,
-    pub vcpus:        u8,
-    pub mem_mb:       u32,
+    pub source: PathBuf,
+    pub vcpus: u8,
+    pub mem_mb: u32,
 }
 
 impl VmSandbox {
-    pub fn new(kernel: impl Into<PathBuf>, rootfs: impl Into<PathBuf>, source: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        kernel: impl Into<PathBuf>,
+        rootfs: impl Into<PathBuf>,
+        source: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             kernel_image: kernel.into(),
             rootfs_image: rootfs.into(),
-            source:       source.into(),
-            vcpus:        1,
-            mem_mb:       512,
+            source: source.into(),
+            vcpus: 1,
+            mem_mb: 512,
         }
     }
 }
 
 #[async_trait]
 impl Sandbox for VmSandbox {
-    fn fs_policy(&self)  -> FsPolicy  { FsPolicy::Confined }
-    fn net_policy(&self) -> NetPolicy { NetPolicy::None }
+    fn fs_policy(&self) -> FsPolicy {
+        FsPolicy::Confined
+    }
+    fn net_policy(&self) -> NetPolicy {
+        NetPolicy::None
+    }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
         // Validate config so users get an early error before learning the
@@ -439,20 +480,28 @@ pub struct NullSandbox {
 }
 
 impl NullSandbox {
-    pub fn new(root: impl Into<PathBuf>) -> Self { Self { root: root.into() } }
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
 }
 
 #[async_trait]
 impl Sandbox for NullSandbox {
-    fn fs_policy(&self) -> FsPolicy { FsPolicy::Unrestricted }
-    fn net_policy(&self) -> NetPolicy { NetPolicy::Allowed }
+    fn fs_policy(&self) -> FsPolicy {
+        FsPolicy::Unrestricted
+    }
+    fn net_policy(&self) -> NetPolicy {
+        NetPolicy::Allowed
+    }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
         let world = World {
-            repo:   RepoView { root: self.root.clone() },
+            repo: RepoView {
+                root: self.root.clone(),
+            },
             runner: Arc::new(harness_context::TokioRunner),
-            clock:  Arc::new(harness_context::SystemClock),
-            kv:     Arc::new(harness_context::InMemoryKv::new()),
+            clock: Arc::new(harness_context::SystemClock),
+            kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
         };
         Ok(SandboxHandle {
@@ -497,11 +546,11 @@ mod tests {
     #[tokio::test]
     async fn container_sandbox_fails_cleanly_without_docker() {
         let s = ContainerSandbox::new("harness-nonexistent-image-xyzzy:latest", ".");
-        let res = s.spawn().await;
-        match res {
-            Ok(_) => panic!("expected error spawning bogus container"),
-            Err(_) => {} // either docker missing OR image pull fails — both fine
-        }
+        // either docker missing OR image pull fails — both produce Err
+        assert!(
+            s.spawn().await.is_err(),
+            "expected error spawning bogus container"
+        );
     }
 
     #[tokio::test]
@@ -517,8 +566,12 @@ mod tests {
         let probe = std::process::Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .output();
-        let Ok(out) = probe else { return; };
-        if !out.status.success() { return; }
+        let Ok(out) = probe else {
+            return;
+        };
+        if !out.status.success() {
+            return;
+        }
         let src = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let branch = format!("harness-test-{}", std::process::id());
         let s = WorktreeSandbox::new(&src, &branch);

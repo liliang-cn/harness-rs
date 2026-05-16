@@ -4,9 +4,7 @@
 
 use harness_context::default_world;
 use harness_core::{Block, Task, Turn, TurnRole};
-use harness_loop::{
-    AgentLoop, Outcome, SessionEvent, SessionRecorder, SessionStats, read_session,
-};
+use harness_loop::{AgentLoop, Outcome, SessionEvent, SessionRecorder, SessionStats, read_session};
 use harness_models::{MockModel, MockResponse};
 use harness_tools_fs::ReadFile;
 use serde_json::json;
@@ -36,7 +34,11 @@ impl Drop for TestDir {
 }
 
 fn task(desc: &str) -> Task {
-    Task { description: desc.into(), source: None, deadline: None }
+    Task {
+        description: desc.into(),
+        source: None,
+        deadline: None,
+    }
 }
 
 #[tokio::test]
@@ -47,7 +49,10 @@ async fn record_captures_full_lifecycle() {
 
     let recorder = Arc::new(SessionRecorder::new(&log).unwrap());
     let model = MockModel::new()
-        .script(MockResponse::tool_call("read_file", json!({"path": "input.txt"})))
+        .script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "input.txt"}),
+        ))
         .script(MockResponse::text("file says hello"));
 
     let mut world = default_world(td.0.clone());
@@ -63,10 +68,23 @@ async fn record_captures_full_lifecycle() {
 
     // Must have: SessionStart, at least two PostModel, at least one PreTool +
     // matching PostTool, SessionEnd.
-    let model_calls = events.iter().filter(|e| matches!(e, SessionEvent::PostModel { .. })).count();
-    let pre_tools = events.iter().filter(|e| matches!(e, SessionEvent::PreTool { .. })).count();
-    let post_tools = events.iter().filter(|e| matches!(e, SessionEvent::PostTool { .. })).count();
-    assert!(events.iter().any(|e| matches!(e, SessionEvent::Start { .. })));
+    let model_calls = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::PostModel { .. }))
+        .count();
+    let pre_tools = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::PreTool { .. }))
+        .count();
+    let post_tools = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::PostTool { .. }))
+        .count();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Start { .. }))
+    );
     assert!(events.iter().any(|e| matches!(e, SessionEvent::End { .. })));
     assert_eq!(model_calls, 2, "expected 2 model calls");
     assert_eq!(pre_tools, 1, "expected 1 pre-tool event");
@@ -82,7 +100,10 @@ async fn replay_reproduces_original_outcome() {
     // ---------- record ----------
     let recorder = Arc::new(SessionRecorder::new(&log).unwrap());
     let original_model = MockModel::new()
-        .script(MockResponse::tool_call("read_file", json!({"path": "greeting.txt"})))
+        .script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "greeting.txt"}),
+        ))
         .script(MockResponse::text("greeting recorded"));
 
     let mut world1 = default_world(td.0.clone());
@@ -140,10 +161,14 @@ async fn stats_summarise_a_real_run() {
     let events = read_session(&log).unwrap();
     let s = SessionStats::from(&events);
     assert_eq!(s.model_calls, 3);
-    assert_eq!(s.tool_calls,  2);
-    assert!(s.events >= 9, "expected at least 9 events, got {}", s.events);
-    assert_eq!(s.input_tokens,  100 + 120 + 150);
-    assert_eq!(s.output_tokens, 20  + 25  + 30);
+    assert_eq!(s.tool_calls, 2);
+    assert!(
+        s.events >= 9,
+        "expected at least 9 events, got {}",
+        s.events
+    );
+    assert_eq!(s.input_tokens, 100 + 120 + 150);
+    assert_eq!(s.output_tokens, 20 + 25 + 30);
 }
 
 #[tokio::test]
@@ -151,10 +176,16 @@ async fn corrupted_log_lines_are_skipped_not_panicked() {
     let td = TestDir::new();
     let log = td.0.join("bad.jsonl");
     let mut content = String::new();
-    content.push_str(&serde_json::to_string(&SessionEvent::Start { ts_ms: 0, source: "Startup".into() }).unwrap());
+    content.push_str(
+        &serde_json::to_string(&SessionEvent::Start {
+            ts_ms: 0,
+            source: "Startup".into(),
+        })
+        .unwrap(),
+    );
     content.push('\n');
     content.push_str("{this is not valid json\n");
-    content.push_str("\n");
+    content.push('\n');
     content.push_str(&serde_json::to_string(&SessionEvent::End { ts_ms: 100 }).unwrap());
     content.push('\n');
     std::fs::write(&log, content).unwrap();
@@ -168,5 +199,8 @@ async fn corrupted_log_lines_are_skipped_not_panicked() {
 // `Block`/`Turn`/`TurnRole`.
 fn _silence_unused() {
     let _ = (Block::Text("".into()), TurnRole::User);
-    let _t = Turn { role: TurnRole::User, blocks: vec![] };
+    let _t = Turn {
+        role: TurnRole::User,
+        blocks: vec![],
+    };
 }

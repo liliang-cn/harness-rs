@@ -24,7 +24,7 @@ fn macro_validate_name(name: &str) -> Result<(), String> {
         return Err("name must not contain `--`".into());
     }
     for (i, c) in name.char_indices() {
-        if !(c.is_ascii_digit() || ('a'..='z').contains(&c) || c == '-') {
+        if !(c.is_ascii_digit() || c.is_ascii_lowercase() || c == '-') {
             return Err(format!("name contains invalid char `{c}` at byte {i}"));
         }
     }
@@ -56,7 +56,7 @@ fn validators_agree_on_corpus() {
     ];
     for name in cases {
         let runtime = validate_name(name).is_ok();
-        let macro_  = macro_validate_name(name).is_ok();
+        let macro_ = macro_validate_name(name).is_ok();
         assert_eq!(
             runtime, macro_,
             "validator disagreement for {name:?}: runtime={runtime}, macro={macro_}"

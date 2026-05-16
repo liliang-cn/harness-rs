@@ -17,8 +17,8 @@
 //! ```
 
 pub const ANTHROPIC: &str = "https://api.anthropic.com";
-pub const OPENAI:    &str = "https://api.openai.com/v1";
-pub const DEEPSEEK:  &str = "https://api.deepseek.com";
-pub const GROQ:      &str = "https://api.groq.com/openai/v1";
-pub const TOGETHER:  &str = "https://api.together.xyz/v1";
-pub const OLLAMA:    &str = "http://127.0.0.1:11434/v1";
+pub const OPENAI: &str = "https://api.openai.com/v1";
+pub const DEEPSEEK: &str = "https://api.deepseek.com";
+pub const GROQ: &str = "https://api.groq.com/openai/v1";
+pub const TOGETHER: &str = "https://api.together.xyz/v1";
+pub const OLLAMA: &str = "http://127.0.0.1:11434/v1";

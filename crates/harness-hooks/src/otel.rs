@@ -26,15 +26,15 @@ use std::sync::Mutex;
 
 pub struct OtelHook {
     tracer_name: String,
-    state:       Mutex<OtelState>,
+    state: Mutex<OtelState>,
 }
 
 #[derive(Default)]
 struct OtelState {
-    parent:            Option<BoxedSpan>,
-    in_flight_model:   Option<BoxedSpan>,
-    in_flight_tool:    Option<BoxedSpan>,
-    in_flight_sensor:  Option<BoxedSpan>,
+    parent: Option<BoxedSpan>,
+    in_flight_model: Option<BoxedSpan>,
+    in_flight_tool: Option<BoxedSpan>,
+    in_flight_sensor: Option<BoxedSpan>,
     in_flight_compact: Option<BoxedSpan>,
 }
 
@@ -42,7 +42,7 @@ impl OtelHook {
     pub fn new(tracer_name: impl Into<String>) -> Self {
         Self {
             tracer_name: tracer_name.into(),
-            state:       Mutex::new(OtelState::default()),
+            state: Mutex::new(OtelState::default()),
         }
     }
 
@@ -52,12 +52,18 @@ impl OtelHook {
 }
 
 impl Hook for OtelHook {
-    fn name(&self) -> &str { "otel-tracer" }
-    fn matches(&self, _ev: &Event<'_>) -> bool { true }
+    fn name(&self) -> &str {
+        "otel-tracer"
+    }
+    fn matches(&self, _ev: &Event<'_>) -> bool {
+        true
+    }
 
     fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
         let tracer = self.tracer();
-        let Ok(mut state) = self.state.lock() else { return HookOutcome::Allow };
+        let Ok(mut state) = self.state.lock() else {
+            return HookOutcome::Allow;
+        };
 
         match ev {
             Event::SessionStart { source } => {
@@ -89,10 +95,16 @@ impl Hook for OtelHook {
             }
             Event::PostModel { out } => {
                 if let Some(mut s) = state.in_flight_model.take() {
-                    s.set_attribute(KeyValue::new("tokens.input",  out.usage.input_tokens as i64));
-                    s.set_attribute(KeyValue::new("tokens.output", out.usage.output_tokens as i64));
-                    s.set_attribute(KeyValue::new("tool_calls",    out.tool_calls.len() as i64));
-                    s.set_attribute(KeyValue::new("stop_reason",   format!("{:?}", out.stop_reason)));
+                    s.set_attribute(KeyValue::new("tokens.input", out.usage.input_tokens as i64));
+                    s.set_attribute(KeyValue::new(
+                        "tokens.output",
+                        out.usage.output_tokens as i64,
+                    ));
+                    s.set_attribute(KeyValue::new("tool_calls", out.tool_calls.len() as i64));
+                    s.set_attribute(KeyValue::new(
+                        "stop_reason",
+                        format!("{:?}", out.stop_reason),
+                    ));
                     s.set_status(Status::Ok);
                     s.end();
                 }

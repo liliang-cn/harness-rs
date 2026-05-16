@@ -12,8 +12,8 @@
 
 use harness_context::default_world;
 use harness_core::{
-    Action, Block, Context, Event, Execution, FixPatch, GuideId, GuideScope, HookOutcome,
-    SensorId, Severity, Signal, Stage, Task, World,
+    Action, Block, Context, Event, Execution, FixPatch, GuideId, GuideScope, HookOutcome, SensorId,
+    Severity, Signal, Stage, Task, World,
 };
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::{MockModel, MockResponse};
@@ -30,8 +30,12 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
     // ----------------------------------------------------------
     let td = TestDir::new();
     let root = td.0.clone();
-    std::fs::write(root.join("CHANGELOG.md"), "## unreleased\n- TODO: rename me\n").unwrap();
-    std::fs::write(root.join("README.md"),    "# project\n").unwrap();
+    std::fs::write(
+        root.join("CHANGELOG.md"),
+        "## unreleased\n- TODO: rename me\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("README.md"), "# project\n").unwrap();
     let mut world = default_world(root.clone());
 
     // ----------------------------------------------------------
@@ -45,7 +49,9 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
                 once_cell::sync::Lazy::new(|| "project-rules".into());
             &I
         }
-        fn kind(&self) -> Execution { Execution::Inferential }
+        fn kind(&self) -> Execution {
+            Execution::Inferential
+        }
         fn scope(&self) -> &GuideScope {
             static S: once_cell::sync::Lazy<GuideScope> =
                 once_cell::sync::Lazy::new(|| GuideScope::Always);
@@ -56,7 +62,8 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
             ctx: &mut Context,
             _w: &World,
         ) -> Result<(), harness_core::GuideError> {
-            ctx.guides.push(Block::Text("Rule: changelog must mention v1.0.".into()));
+            ctx.guides
+                .push(Block::Text("Rule: changelog must mention v1.0.".into()));
             Ok(())
         }
     }
@@ -73,8 +80,12 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
                 once_cell::sync::Lazy::new(|| "changelog-sensor".into());
             &I
         }
-        fn kind(&self)  -> Execution { Execution::Computational }
-        fn stage(&self) -> Stage     { Stage::SelfCorrect }
+        fn kind(&self) -> Execution {
+            Execution::Computational
+        }
+        fn stage(&self) -> Stage {
+            Stage::SelfCorrect
+        }
         async fn observe(
             &self,
             _action: &Action,
@@ -84,15 +95,15 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             if content.contains("TODO") {
                 Ok(vec![Signal {
-                    severity:   Severity::Block,
-                    origin:     "changelog-sensor".into(),
-                    message:    "CHANGELOG still contains TODO".into(),
+                    severity: Severity::Block,
+                    origin: "changelog-sensor".into(),
+                    message: "CHANGELOG still contains TODO".into(),
                     agent_hint: Some("rewrite the changelog without TODO".into()),
-                    auto_fix:   Some(FixPatch::ReplaceFile {
-                        path:    "CHANGELOG.md".into(),
+                    auto_fix: Some(FixPatch::ReplaceFile {
+                        path: "CHANGELOG.md".into(),
                         content: "## v1.0\n- initial release\n".into(),
                     }),
-                    location:   None,
+                    location: None,
                 }])
             } else {
                 Ok(Vec::new())
@@ -107,7 +118,9 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
         n: Arc<AtomicU32>,
     }
     impl harness_core::Hook for CountingHook {
-        fn name(&self) -> &str { "counter" }
+        fn name(&self) -> &str {
+            "counter"
+        }
         fn matches(&self, ev: &Event<'_>) -> bool {
             matches!(ev, Event::PreToolUse { .. })
         }
@@ -121,11 +134,16 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
     // ----------------------------------------------------------
     // A compactor that asserts it was actually called at each iter.
     // ----------------------------------------------------------
-    struct CountingCompactor { n: Arc<AtomicU32> }
+    struct CountingCompactor {
+        n: Arc<AtomicU32>,
+    }
     #[async_trait::async_trait]
     impl harness_core::Compactor for CountingCompactor {
         fn budget(&self, _: &Context) -> harness_core::Budget {
-            harness_core::Budget { used: 0, window: 100 }    // never triggers stages
+            harness_core::Budget {
+                used: 0,
+                window: 100,
+            } // never triggers stages
         }
         async fn compact(
             &self,
@@ -169,8 +187,12 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
         .with_tool(Arc::new(WriteFile))
         .with_tool(Arc::new(EditFile))
         .with_sensor(Arc::new(ChangelogSensor))
-        .with_hook(Arc::new(CountingHook { n: tool_calls.clone() }))
-        .with_compactor(Arc::new(CountingCompactor { n: compactor_calls.clone() }))
+        .with_hook(Arc::new(CountingHook {
+            n: tool_calls.clone(),
+        }))
+        .with_compactor(Arc::new(CountingCompactor {
+            n: compactor_calls.clone(),
+        }))
         .run_with_max_iters(
             Task {
                 description: "rewrite CHANGELOG.md so the TODO is gone".into(),
@@ -197,7 +219,11 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
     }
 
     // Hook fired for every tool call (2 of them).
-    assert_eq!(tool_calls.load(Ordering::SeqCst), 2, "hook should see 2 PreToolUse events");
+    assert_eq!(
+        tool_calls.load(Ordering::SeqCst),
+        2,
+        "hook should see 2 PreToolUse events"
+    );
 
     // Compactor's budget() is called each iter (3 iters) but no stages trigger
     // because we returned 0/100. So compact() should NOT be called.

@@ -9,18 +9,16 @@
 //! convention: Done / DoneWithConcerns / Blocked / NeedsContext).
 
 use crate::{AgentLoop, Outcome};
-use harness_core::{
-    Guide, HarnessError, Model, Sensor, SubagentStatus, Task, Tool, World,
-};
+use harness_core::{Guide, HarnessError, Model, Sensor, SubagentStatus, Task, Tool, World};
 use std::sync::Arc;
 
 /// What a subagent needs to run.
 pub struct SubagentSpec {
-    pub name:      String,
-    pub task:      Task,
-    pub tools:     Vec<Arc<dyn Tool>>,
-    pub guides:    Vec<Arc<dyn Guide>>,
-    pub sensors:   Vec<Arc<dyn Sensor>>,
+    pub name: String,
+    pub task: Task,
+    pub tools: Vec<Arc<dyn Tool>>,
+    pub guides: Vec<Arc<dyn Guide>>,
+    pub sensors: Vec<Arc<dyn Sensor>>,
     pub max_iters: u32,
 }
 
@@ -29,8 +27,8 @@ impl SubagentSpec {
         Self {
             name: name.into(),
             task,
-            tools:   Vec::new(),
-            guides:  Vec::new(),
+            tools: Vec::new(),
+            guides: Vec::new(),
             sensors: Vec::new(),
             max_iters: 12,
         }
@@ -60,30 +58,36 @@ impl SubagentSpec {
 /// A subagent's structured report back to the parent.
 #[derive(Debug, Clone)]
 pub struct SubagentReport {
-    pub name:   String,
+    pub name: String,
     pub status: SubagentStatus,
-    pub text:   Option<String>,
-    pub iters:  u32,
+    pub text: Option<String>,
+    pub iters: u32,
 }
 
 /// Bind a `Model` to a `SubagentSpec` and run it.
 pub struct Subagent<M: Model> {
-    pub spec:   SubagentSpec,
-    pub loop_:  AgentLoop<M>,
+    pub spec: SubagentSpec,
+    pub loop_: AgentLoop<M>,
 }
 
 impl<M: Model> Subagent<M> {
     pub fn new(model: M, spec: SubagentSpec) -> Self {
         let mut loop_ = AgentLoop::new(model);
-        for t in &spec.tools   { loop_ = loop_.with_tool(t.clone()); }
-        for g in &spec.guides  { loop_ = loop_.with_guide(g.clone()); }
-        for s in &spec.sensors { loop_ = loop_.with_sensor(s.clone()); }
+        for t in &spec.tools {
+            loop_ = loop_.with_tool(t.clone());
+        }
+        for g in &spec.guides {
+            loop_ = loop_.with_guide(g.clone());
+        }
+        for s in &spec.sensors {
+            loop_ = loop_.with_sensor(s.clone());
+        }
         Self { spec, loop_ }
     }
 
     pub async fn run(self, world: &mut World) -> Result<SubagentReport, HarnessError> {
         let name = self.spec.name.clone();
-        let max  = self.spec.max_iters;
+        let max = self.spec.max_iters;
         let task = self.spec.task.clone();
         let outcome = self.loop_.run_with_max_iters(task, world, max).await?;
         let report = match outcome {

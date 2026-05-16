@@ -37,7 +37,11 @@ pub fn sensors() -> Vec<Arc<dyn Sensor>> {
 
 /// Curated guides shaped for axum + sqlx + tracing conventions.
 pub fn guides() -> Vec<Arc<dyn Guide>> {
-    vec![Arc::new(AxumConventions), Arc::new(SqlxConventions), Arc::new(TracingConventions)]
+    vec![
+        Arc::new(AxumConventions),
+        Arc::new(SqlxConventions),
+        Arc::new(TracingConventions),
+    ]
 }
 
 /// A self-contained Blueprint: deterministic git status → agent work →
@@ -45,50 +49,94 @@ pub fn guides() -> Vec<Arc<dyn Guide>> {
 /// it needs a model.
 pub fn blueprint<F>(agent_step: F) -> Blueprint
 where
-    F: for<'a> Fn(&'a mut World) -> futures::future::BoxFuture<'a, Result<NodeOutput, HarnessError>>
+    F: for<'a> Fn(
+            &'a mut World,
+        ) -> futures::future::BoxFuture<'a, Result<NodeOutput, HarnessError>>
         + Send
         + Sync
         + 'static,
 {
     Blueprint::new()
-        .add("status", Node::deterministic(|w| Box::pin(async move {
-            let out = w.runner.exec("git", &["status", "--short"], Some(w.repo.root.as_path())).await
-                .map_err(|e| HarnessError::Other(e.to_string()))?;
-            Ok(NodeOutput {
-                transition: Transition::Next,
-                data: serde_json::json!({"git_status": out.stdout}),
-            })
-        })))
+        .add(
+            "status",
+            Node::deterministic(|w| {
+                Box::pin(async move {
+                    let out = w
+                        .runner
+                        .exec("git", &["status", "--short"], Some(w.repo.root.as_path()))
+                        .await
+                        .map_err(|e| HarnessError::Other(e.to_string()))?;
+                    Ok(NodeOutput {
+                        transition: Transition::Next,
+                        data: serde_json::json!({"git_status": out.stdout}),
+                    })
+                })
+            }),
+        )
         .add("work", Node::agent(agent_step))
-        .add("fmt", Node::deterministic(|w| Box::pin(async move {
-            let _ = w.runner.exec("cargo", &["fmt", "--all"], Some(w.repo.root.as_path())).await;
-            Ok(NodeOutput { transition: Transition::Next, data: serde_json::json!({"fmt": "ok"}) })
-        })))
-        .add("clippy", Node::deterministic(|w| Box::pin(async move {
-            let out = w.runner.exec(
-                "cargo",
-                &["clippy", "--quiet", "--", "-D", "warnings"],
-                Some(w.repo.root.as_path()),
-            ).await.map_err(|e| HarnessError::Other(e.to_string()))?;
-            if out.status != 0 {
-                return Err(HarnessError::Other(format!("clippy failed: {}", out.stderr)));
-            }
-            Ok(NodeOutput { transition: Transition::Next, data: serde_json::json!({"clippy": "ok"}) })
-        })))
-        .add("test", Node::deterministic(|w| Box::pin(async move {
-            let out = w.runner.exec("cargo", &["test", "--quiet"], Some(w.repo.root.as_path())).await
-                .map_err(|e| HarnessError::Other(e.to_string()))?;
-            Ok(NodeOutput {
-                transition: Transition::Done,
-                data: serde_json::json!({"test_status": out.status}),
-            })
-        })))
+        .add(
+            "fmt",
+            Node::deterministic(|w| {
+                Box::pin(async move {
+                    let _ = w
+                        .runner
+                        .exec("cargo", &["fmt", "--all"], Some(w.repo.root.as_path()))
+                        .await;
+                    Ok(NodeOutput {
+                        transition: Transition::Next,
+                        data: serde_json::json!({"fmt": "ok"}),
+                    })
+                })
+            }),
+        )
+        .add(
+            "clippy",
+            Node::deterministic(|w| {
+                Box::pin(async move {
+                    let out = w
+                        .runner
+                        .exec(
+                            "cargo",
+                            &["clippy", "--quiet", "--", "-D", "warnings"],
+                            Some(w.repo.root.as_path()),
+                        )
+                        .await
+                        .map_err(|e| HarnessError::Other(e.to_string()))?;
+                    if out.status != 0 {
+                        return Err(HarnessError::Other(format!(
+                            "clippy failed: {}",
+                            out.stderr
+                        )));
+                    }
+                    Ok(NodeOutput {
+                        transition: Transition::Next,
+                        data: serde_json::json!({"clippy": "ok"}),
+                    })
+                })
+            }),
+        )
+        .add(
+            "test",
+            Node::deterministic(|w| {
+                Box::pin(async move {
+                    let out = w
+                        .runner
+                        .exec("cargo", &["test", "--quiet"], Some(w.repo.root.as_path()))
+                        .await
+                        .map_err(|e| HarnessError::Other(e.to_string()))?;
+                    Ok(NodeOutput {
+                        transition: Transition::Done,
+                        data: serde_json::json!({"test_status": out.status}),
+                    })
+                })
+            }),
+        )
         .edge("status", "work")
         .edge("work", "fmt")
         .edge("fmt", "clippy")
         .edge("clippy", "test")
         .branch_on_failure("clippy", "work", 2)
-        .branch_on_failure("test",   "work", 2)
+        .branch_on_failure("test", "work", 2)
 }
 
 // ---------- guides ----------
@@ -119,13 +167,16 @@ impl Guide for AxumConventions {
         static I: std::sync::OnceLock<GuideId> = std::sync::OnceLock::new();
         I.get_or_init(|| "axum-conventions".into())
     }
-    fn kind(&self) -> Execution { Execution::Inferential }
+    fn kind(&self) -> Execution {
+        Execution::Inferential
+    }
     fn scope(&self) -> &GuideScope {
         static S: std::sync::OnceLock<GuideScope> = std::sync::OnceLock::new();
         S.get_or_init(|| GuideScope::Always)
     }
     async fn apply(&self, ctx: &mut Context, _world: &World) -> Result<(), GuideError> {
-        ctx.guides.push(harness_core::Block::Text(AXUM_GUIDE_BODY.into()));
+        ctx.guides
+            .push(harness_core::Block::Text(AXUM_GUIDE_BODY.into()));
         Ok(())
     }
 }
@@ -137,13 +188,16 @@ impl Guide for SqlxConventions {
         static I: std::sync::OnceLock<GuideId> = std::sync::OnceLock::new();
         I.get_or_init(|| "sqlx-conventions".into())
     }
-    fn kind(&self) -> Execution { Execution::Inferential }
+    fn kind(&self) -> Execution {
+        Execution::Inferential
+    }
     fn scope(&self) -> &GuideScope {
         static S: std::sync::OnceLock<GuideScope> = std::sync::OnceLock::new();
         S.get_or_init(|| GuideScope::Always)
     }
     async fn apply(&self, ctx: &mut Context, _world: &World) -> Result<(), GuideError> {
-        ctx.guides.push(harness_core::Block::Text(SQLX_GUIDE_BODY.into()));
+        ctx.guides
+            .push(harness_core::Block::Text(SQLX_GUIDE_BODY.into()));
         Ok(())
     }
 }
@@ -155,13 +209,16 @@ impl Guide for TracingConventions {
         static I: std::sync::OnceLock<GuideId> = std::sync::OnceLock::new();
         I.get_or_init(|| "tracing-conventions".into())
     }
-    fn kind(&self) -> Execution { Execution::Inferential }
+    fn kind(&self) -> Execution {
+        Execution::Inferential
+    }
     fn scope(&self) -> &GuideScope {
         static S: std::sync::OnceLock<GuideScope> = std::sync::OnceLock::new();
         S.get_or_init(|| GuideScope::Always)
     }
     async fn apply(&self, ctx: &mut Context, _world: &World) -> Result<(), GuideError> {
-        ctx.guides.push(harness_core::Block::Text(TRACING_GUIDE_BODY.into()));
+        ctx.guides
+            .push(harness_core::Block::Text(TRACING_GUIDE_BODY.into()));
         Ok(())
     }
 }
@@ -175,7 +232,9 @@ mod tests {
     async fn guides_inject_text_blocks() {
         let world = harness_context::default_world(".");
         let mut ctx = Context::new(Task {
-            description: "t".into(), source: None, deadline: None,
+            description: "t".into(),
+            source: None,
+            deadline: None,
         });
         for g in guides() {
             g.apply(&mut ctx, &world).await.unwrap();

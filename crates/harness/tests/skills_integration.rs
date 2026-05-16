@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[harness::skill(
     name = "echo",
     license = "MIT",
-    harness(kind = "computational", risk = "read-only"),
+    harness(kind = "computational", risk = "read-only")
 )]
 async fn echo(_ctx: &mut Context, _world: &mut World) -> Result<(), harness::SkillError> {
     Ok(())
@@ -103,15 +103,23 @@ fn registry_merges_filesystem_and_macro_skills() {
 
     assert!(registry.get("echo").is_some());
     assert!(registry.get("hello-world").is_some());
-    assert!(registry.len() >= 3, "expected ≥3 skills, got {}", registry.len());
+    assert!(
+        registry.len() >= 3,
+        "expected ≥3 skills, got {}",
+        registry.len()
+    );
 
     // Catalogue is alphabetical and includes both sources.
     let cat = registry.catalogue();
-    let pos_echo  = cat.find("\n- echo:").expect("echo in catalogue");
-    let pos_fmt   = cat.find("\n- format-rust:").expect("format-rust in catalogue");
-    let pos_hello = cat.find("\n- hello-world:").expect("hello-world in catalogue");
-    assert!(pos_echo  < pos_fmt);
-    assert!(pos_fmt   < pos_hello);
+    let pos_echo = cat.find("\n- echo:").expect("echo in catalogue");
+    let pos_fmt = cat
+        .find("\n- format-rust:")
+        .expect("format-rust in catalogue");
+    let pos_hello = cat
+        .find("\n- hello-world:")
+        .expect("hello-world in catalogue");
+    assert!(pos_echo < pos_fmt);
+    assert!(pos_fmt < pos_hello);
 }
 
 /// audit #11: end-to-end round-trip for `#[skill]`-macro-registered skills.
@@ -132,20 +140,24 @@ fn macro_skill_round_trips_via_export() {
         "harness-export-roundtrip-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(&tmp).unwrap();
 
     // 2. Export everything
-    let written = skills::export_registry(&registry, &tmp)
-        .expect("export_registry succeeds");
+    let written = skills::export_registry(&registry, &tmp).expect("export_registry succeeds");
     assert!(!written.is_empty(), "at least one skill exported");
 
     // 3. Each emitted SKILL.md must validate
     for path in &written {
         assert!(path.exists(), "exported path exists: {}", path.display());
         let body = std::fs::read_to_string(path).unwrap();
-        assert!(body.starts_with("---\n"), "SKILL.md starts with YAML frontmatter");
+        assert!(
+            body.starts_with("---\n"),
+            "SKILL.md starts with YAML frontmatter"
+        );
         assert!(body.contains("---\n\n"), "frontmatter is terminated");
     }
 
@@ -159,8 +171,14 @@ fn macro_skill_round_trips_via_export() {
     assert_eq!(echo_reloaded.manifest().license.as_deref(), Some("MIT"));
 
     // 5. metadata.harness.* preserved
-    let harness_ext = echo_reloaded.manifest().harness_ext().expect("harness ext preserved");
-    assert!(matches!(harness_ext.kind, Some(harness::Execution::Computational)));
+    let harness_ext = echo_reloaded
+        .manifest()
+        .harness_ext()
+        .expect("harness ext preserved");
+    assert!(matches!(
+        harness_ext.kind,
+        Some(harness::Execution::Computational)
+    ));
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

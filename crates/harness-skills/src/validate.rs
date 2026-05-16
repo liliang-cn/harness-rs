@@ -5,17 +5,18 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// `^[a-z0-9]+(-[a-z0-9]+)*$` — equivalent to the spec's name regex.
-static NAME_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)*$").unwrap());
+static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)*$").unwrap());
 
-const NAME_MAX: usize          = 64;
-const DESCRIPTION_MAX: usize   = 1024;
+const NAME_MAX: usize = 64;
+const DESCRIPTION_MAX: usize = 1024;
 const COMPATIBILITY_MAX: usize = 500;
 
 /// Validate just the `name` field.
 pub fn validate_name(name: &str) -> Result<(), SkillError> {
     if name.is_empty() {
-        return Err(SkillError::MissingField { field: "name".into() });
+        return Err(SkillError::MissingField {
+            field: "name".into(),
+        });
     }
     if name.len() > NAME_MAX {
         return Err(SkillError::NameRegex {
@@ -50,10 +51,14 @@ pub fn validate(manifest: &SkillManifest) -> Result<(), SkillError> {
     validate_name(&manifest.name)?;
 
     if manifest.description.is_empty() {
-        return Err(SkillError::MissingField { field: "description".into() });
+        return Err(SkillError::MissingField {
+            field: "description".into(),
+        });
     }
     if manifest.description.len() > DESCRIPTION_MAX {
-        return Err(SkillError::DescriptionTooLong { len: manifest.description.len() });
+        return Err(SkillError::DescriptionTooLong {
+            len: manifest.description.len(),
+        });
     }
 
     if let Some(c) = &manifest.compatibility
@@ -83,7 +88,14 @@ mod tests {
 
     #[test]
     fn valid_names() {
-        for n in ["pdf-processing", "data-analysis", "code-review", "a", "a1", "a-b-c-d"] {
+        for n in [
+            "pdf-processing",
+            "data-analysis",
+            "code-review",
+            "a",
+            "a1",
+            "a-b-c-d",
+        ] {
             assert!(validate_name(n).is_ok(), "expected `{n}` to be valid");
         }
     }
@@ -91,7 +103,15 @@ mod tests {
     #[test]
     fn invalid_names() {
         let long = "a".repeat(65);
-        let bad = ["", "PDF-Processing", "-pdf", "pdf-", "pdf--processing", "pdf_x", long.as_str()];
+        let bad = [
+            "",
+            "PDF-Processing",
+            "-pdf",
+            "pdf-",
+            "pdf--processing",
+            "pdf_x",
+            long.as_str(),
+        ];
         for n in bad {
             assert!(validate_name(n).is_err(), "expected `{n}` to be invalid");
         }

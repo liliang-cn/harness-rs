@@ -5,35 +5,35 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
-    pub id:      Option<serde_json::Value>,
-    pub method:  String,
+    pub id: Option<serde_json::Value>,
+    pub method: String,
     #[serde(default)]
-    pub params:  serde_json::Value,
+    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
-    pub id:      serde_json::Value,
+    pub id: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result:  Option<serde_json::Value>,
+    pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error:   Option<JsonRpcError>,
+    pub error: Option<JsonRpcError>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
-    pub code:    i32,
+    pub code: i32,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data:    Option<serde_json::Value>,
+    pub data: Option<serde_json::Value>,
 }
 
-pub const ERR_PARSE:           i32 = -32700;
+pub const ERR_PARSE: i32 = -32700;
 pub const ERR_INVALID_REQUEST: i32 = -32600;
-pub const ERR_METHOD_NOT_FOUND:i32 = -32601;
-pub const ERR_INVALID_PARAMS:  i32 = -32602;
-pub const ERR_INTERNAL:        i32 = -32603;
+pub const ERR_METHOD_NOT_FOUND: i32 = -32601;
+pub const ERR_INVALID_PARAMS: i32 = -32602;
+pub const ERR_INTERNAL: i32 = -32603;
 
 // ---------- MCP-level payloads ----------
 
@@ -41,9 +41,9 @@ pub const ERR_INTERNAL:        i32 = -32603;
 pub struct InitializeResult {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
-    pub capabilities:     Capabilities,
+    pub capabilities: Capabilities,
     #[serde(rename = "serverInfo")]
-    pub server_info:      ServerInfo,
+    pub server_info: ServerInfo,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ pub struct Capabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourcesCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompts:   Option<PromptsCapability>,
+    pub prompts: Option<PromptsCapability>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ pub struct ResourcesCapability {
     #[serde(rename = "listChanged", default)]
     pub list_changed: bool,
     #[serde(default)]
-    pub subscribe:    bool,
+    pub subscribe: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -78,13 +78,13 @@ pub struct PromptsCapability {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
-    pub name:    String,
+    pub name: String,
     pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
-    pub name:        String,
+    pub name: String,
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,
@@ -97,7 +97,7 @@ pub struct ToolsListResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallToolParams {
-    pub name:      String,
+    pub name: String,
     #[serde(default)]
     pub arguments: serde_json::Value,
 }
@@ -124,12 +124,12 @@ pub struct ResourcesListResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDescriptor {
-    pub uri:         String,
-    pub name:        String,
+    pub uri: String,
+    pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
-    pub mime_type:   Option<String>,
+    pub mime_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,10 +144,10 @@ pub struct ReadResourceResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceContent {
-    pub uri:       String,
+    pub uri: String,
     #[serde(rename = "mimeType")]
     pub mime_type: String,
-    pub text:      String,
+    pub text: String,
 }
 
 // ============== prompts/list (placeholder — always empty for now) ==============

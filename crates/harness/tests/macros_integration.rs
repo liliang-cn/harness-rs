@@ -14,7 +14,10 @@ use std::collections::BTreeMap;
 // ---------- skill ----------
 
 /// Greet someone politely. Use for friendly user interactions.
-#[harness::skill(name = "polite-hello", harness(kind = "inferential", risk = "read-only"))]
+#[harness::skill(
+    name = "polite-hello",
+    harness(kind = "inferential", risk = "read-only")
+)]
 async fn polite_hello(_ctx: &mut Context, _w: &mut World) -> Result<(), harness::SkillError> {
     Ok(())
 }
@@ -44,10 +47,7 @@ async fn reverse(
 
 /// Inject a one-liner about the project.
 #[harness::guide(id = "project-intro", scope = "always", kind = "inferential")]
-async fn project_intro(
-    ctx: &mut Context,
-    _w: &harness::World,
-) -> Result<(), harness::GuideError> {
+async fn project_intro(ctx: &mut Context, _w: &harness::World) -> Result<(), harness::GuideError> {
     ctx.guides
         .push(harness::Block::Text("harness framework is loaded".into()));
     Ok(())
@@ -73,20 +73,32 @@ fn stop_watcher(_ev: &harness::Event<'_>, _w: &mut harness::World) -> harness::H
 #[test]
 fn all_macros_register_via_inventory() {
     let tool_names: Vec<_> = iter_macro_tools().map(|t| t.name().to_string()).collect();
-    let guide_ids:  Vec<_> = iter_macro_guides().map(|g| g.id().clone()).collect();
+    let guide_ids: Vec<_> = iter_macro_guides().map(|g| g.id().clone()).collect();
     let sensor_ids: Vec<_> = iter_macro_sensors().map(|s| s.id().clone()).collect();
     let hook_names: Vec<_> = iter_macro_hooks().map(|h| h.name().to_string()).collect();
 
-    assert!(tool_names.contains(&"reverse".to_string()), "tool registered: {tool_names:?}");
-    assert!(guide_ids.contains(&"project-intro".to_string()), "guide registered: {guide_ids:?}");
-    assert!(sensor_ids.contains(&"noop-sensor".to_string()), "sensor registered: {sensor_ids:?}");
-    assert!(hook_names.contains(&"stop-watcher".to_string()), "hook registered: {hook_names:?}");
+    assert!(
+        tool_names.contains(&"reverse".to_string()),
+        "tool registered: {tool_names:?}"
+    );
+    assert!(
+        guide_ids.contains(&"project-intro".to_string()),
+        "guide registered: {guide_ids:?}"
+    );
+    assert!(
+        sensor_ids.contains(&"noop-sensor".to_string()),
+        "sensor registered: {sensor_ids:?}"
+    );
+    assert!(
+        hook_names.contains(&"stop-watcher".to_string()),
+        "hook registered: {hook_names:?}"
+    );
 
     // proof that all entries also implement std-extension count
-    assert!(inventory::iter::<ToolEntry>().count()   >= 1);
-    assert!(inventory::iter::<GuideEntry>().count()  >= 1);
+    assert!(inventory::iter::<ToolEntry>().count() >= 1);
+    assert!(inventory::iter::<GuideEntry>().count() >= 1);
     assert!(inventory::iter::<SensorEntry>().count() >= 1);
-    assert!(inventory::iter::<HookEntry>().count()   >= 1);
+    assert!(inventory::iter::<HookEntry>().count() >= 1);
 }
 
 #[tokio::test]
@@ -116,7 +128,10 @@ async fn guide_macro_apply_works() {
     // metadata default + ensure compile
     let _ = BTreeMap::<String, serde_json::Value>::new();
     g.apply(&mut ctx, &world).await.expect("guide applies");
-    let injected = ctx.guides.iter().any(|b| matches!(b, harness::Block::Text(t) if t.contains("harness framework")));
+    let injected = ctx
+        .guides
+        .iter()
+        .any(|b| matches!(b, harness::Block::Text(t) if t.contains("harness framework")));
     assert!(injected);
 }
 

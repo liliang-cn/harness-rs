@@ -51,9 +51,15 @@ pub fn render_skill_md(m: &SkillManifest, body: &str) -> String {
     yaml.push_str("---\n");
     yaml.push_str(&format!("name: {}\n", m.name));
     yaml.push_str(&format!("description: {}\n", yaml_inline(&m.description)));
-    if let Some(l) = &m.license      { yaml.push_str(&format!("license: {l}\n")); }
-    if let Some(c) = &m.compatibility { yaml.push_str(&format!("compatibility: {}\n", yaml_inline(c))); }
-    if let Some(a) = &m.allowed_tools { yaml.push_str(&format!("allowed-tools: {a}\n")); }
+    if let Some(l) = &m.license {
+        yaml.push_str(&format!("license: {l}\n"));
+    }
+    if let Some(c) = &m.compatibility {
+        yaml.push_str(&format!("compatibility: {}\n", yaml_inline(c)));
+    }
+    if let Some(a) = &m.allowed_tools {
+        yaml.push_str(&format!("allowed-tools: {a}\n"));
+    }
     if !m.metadata.is_empty() {
         yaml.push_str("metadata:\n");
         emit_yaml_map(&mut yaml, &m.metadata, 1);
@@ -104,8 +110,12 @@ mod tests {
 
     struct DummySkill(SkillManifest, String);
     impl Skill for DummySkill {
-        fn manifest(&self) -> &SkillManifest { &self.0 }
-        fn body(&self) -> Cow<'_, str> { Cow::Borrowed(&self.1) }
+        fn manifest(&self) -> &SkillManifest {
+            &self.0
+        }
+        fn body(&self) -> Cow<'_, str> {
+            Cow::Borrowed(&self.1)
+        }
     }
 
     #[test]

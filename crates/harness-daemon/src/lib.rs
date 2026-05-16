@@ -59,7 +59,9 @@ pub struct Job {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
-fn default_enabled() -> bool { true }
+fn default_enabled() -> bool {
+    true
+}
 
 // =================================================================
 // Schedule parser
@@ -74,14 +76,23 @@ fn default_enabled() -> bool { true }
 /// | `"every 5m"` / `"every 1h"` | fixed interval, starts now |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Schedule {
-    Daily   { hour: u8, minute: u8 },
-    Weekly  { weekday: Weekday, hour: u8, minute: u8 },
+    Daily {
+        hour: u8,
+        minute: u8,
+    },
+    Weekly {
+        weekday: Weekday,
+        hour: u8,
+        minute: u8,
+    },
     Interval(Duration),
 }
 
 #[derive(Debug, Error)]
 pub enum ScheduleError {
-    #[error("schedule string must be 'daily HH:MM', 'weekly <day> HH:MM', or 'every Nm/h/d/s'; got: {0}")]
+    #[error(
+        "schedule string must be 'daily HH:MM', 'weekly <day> HH:MM', or 'every Nm/h/d/s'; got: {0}"
+    )]
     Format(String),
     #[error("invalid time `{0}` — use HH:MM")]
     BadTime(String),
@@ -100,11 +111,19 @@ impl Schedule {
         }
         if let Some(rest) = s.strip_prefix("weekly ") {
             let mut parts = rest.split_whitespace();
-            let wd_str = parts.next().ok_or_else(|| ScheduleError::Format(s.to_string()))?;
-            let time_str = parts.next().ok_or_else(|| ScheduleError::Format(s.to_string()))?;
+            let wd_str = parts
+                .next()
+                .ok_or_else(|| ScheduleError::Format(s.to_string()))?;
+            let time_str = parts
+                .next()
+                .ok_or_else(|| ScheduleError::Format(s.to_string()))?;
             let weekday = parse_weekday(wd_str)?;
             let (h, m) = parse_hhmm(time_str)?;
-            return Ok(Schedule::Weekly { weekday, hour: h, minute: m });
+            return Ok(Schedule::Weekly {
+                weekday,
+                hour: h,
+                minute: m,
+            });
         }
         if let Some(rest) = s.strip_prefix("every ") {
             return parse_interval(rest).map(Schedule::Interval);
@@ -118,19 +137,35 @@ impl Schedule {
             Schedule::Daily { hour, minute } => {
                 let today = now.date_naive();
                 let t = NaiveTime::from_hms_opt(hour.into(), minute.into(), 0).unwrap();
-                let candidate = Local.from_local_datetime(&today.and_time(t)).earliest().unwrap();
-                if candidate > now { candidate } else { candidate + Duration::days(1) }
+                let candidate = Local
+                    .from_local_datetime(&today.and_time(t))
+                    .earliest()
+                    .unwrap();
+                if candidate > now {
+                    candidate
+                } else {
+                    candidate + Duration::days(1)
+                }
             }
-            Schedule::Weekly { weekday, hour, minute } => {
+            Schedule::Weekly {
+                weekday,
+                hour,
+                minute,
+            } => {
                 // Step forward up to 7 days to find the right weekday.
                 let mut candidate = now;
                 for _ in 0..8 {
                     if candidate.weekday() == weekday {
                         let t = NaiveTime::from_hms_opt(hour.into(), minute.into(), 0).unwrap();
-                        let attempt = Local.from_local_datetime(&candidate.date_naive().and_time(t)).earliest().unwrap();
-                        if attempt > now { return attempt; }
+                        let attempt = Local
+                            .from_local_datetime(&candidate.date_naive().and_time(t))
+                            .earliest()
+                            .unwrap();
+                        if attempt > now {
+                            return attempt;
+                        }
                     }
-                    candidate = candidate + Duration::days(1);
+                    candidate += Duration::days(1);
                 }
                 unreachable!("weekday must occur within 7 days")
             }
@@ -140,37 +175,46 @@ impl Schedule {
 }
 
 fn parse_hhmm(s: &str) -> Result<(u8, u8), ScheduleError> {
-    let (h, m) = s.split_once(':').ok_or_else(|| ScheduleError::BadTime(s.into()))?;
+    let (h, m) = s
+        .split_once(':')
+        .ok_or_else(|| ScheduleError::BadTime(s.into()))?;
     let h: u8 = h.parse().map_err(|_| ScheduleError::BadTime(s.into()))?;
     let m: u8 = m.parse().map_err(|_| ScheduleError::BadTime(s.into()))?;
-    if h > 23 || m > 59 { return Err(ScheduleError::BadTime(s.into())); }
+    if h > 23 || m > 59 {
+        return Err(ScheduleError::BadTime(s.into()));
+    }
     Ok((h, m))
 }
 
 fn parse_weekday(s: &str) -> Result<Weekday, ScheduleError> {
     match s.to_lowercase().as_str() {
-        "mon" | "monday"    => Ok(Weekday::Mon),
-        "tue" | "tuesday"   => Ok(Weekday::Tue),
+        "mon" | "monday" => Ok(Weekday::Mon),
+        "tue" | "tuesday" => Ok(Weekday::Tue),
         "wed" | "wednesday" => Ok(Weekday::Wed),
-        "thu" | "thursday"  => Ok(Weekday::Thu),
-        "fri" | "friday"    => Ok(Weekday::Fri),
-        "sat" | "saturday"  => Ok(Weekday::Sat),
-        "sun" | "sunday"    => Ok(Weekday::Sun),
+        "thu" | "thursday" => Ok(Weekday::Thu),
+        "fri" | "friday" => Ok(Weekday::Fri),
+        "sat" | "saturday" => Ok(Weekday::Sat),
+        "sun" | "sunday" => Ok(Weekday::Sun),
         _ => Err(ScheduleError::BadWeekday(s.into())),
     }
 }
 
 fn parse_interval(s: &str) -> Result<Duration, ScheduleError> {
     let s = s.trim();
-    if s.len() < 2 { return Err(ScheduleError::BadInterval(s.into())); }
+    if s.len() < 2 {
+        return Err(ScheduleError::BadInterval(s.into()));
+    }
     let (n_str, unit) = s.split_at(s.len() - 1);
-    let n: i64 = n_str.trim().parse().map_err(|_| ScheduleError::BadInterval(s.into()))?;
+    let n: i64 = n_str
+        .trim()
+        .parse()
+        .map_err(|_| ScheduleError::BadInterval(s.into()))?;
     match unit {
         "s" => Ok(Duration::seconds(n)),
         "m" => Ok(Duration::minutes(n)),
         "h" => Ok(Duration::hours(n)),
         "d" => Ok(Duration::days(n)),
-        _   => Err(ScheduleError::BadInterval(s.into())),
+        _ => Err(ScheduleError::BadInterval(s.into())),
     }
 }
 
@@ -205,18 +249,24 @@ impl Daemon {
     pub fn from_config(cfg: DaemonConfig) -> Result<Self, DaemonError> {
         let mut resolved = Vec::new();
         for j in cfg.jobs {
-            if !j.enabled { continue; }
+            if !j.enabled {
+                continue;
+            }
             let argv = match (j.argv, j.command) {
                 (Some(a), _) if !a.is_empty() => a,
                 (_, Some(c)) => c.split_whitespace().map(String::from).collect(),
-                _ => return Err(DaemonError::NoCommand { name: j.name.clone() }),
+                _ => {
+                    return Err(DaemonError::NoCommand {
+                        name: j.name.clone(),
+                    });
+                }
             };
             resolved.push(ResolvedJob {
-                name:     j.name,
+                name: j.name,
                 schedule: Schedule::parse(&j.schedule)?,
                 argv,
-                env:      j.env,
-                cwd:      j.cwd,
+                env: j.env,
+                cwd: j.cwd,
             });
         }
         Ok(Daemon { jobs: resolved })
@@ -257,7 +307,9 @@ impl Daemon {
         // Wait for Ctrl-C; if not running on a terminal that's OK — just await forever.
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("Ctrl-C received, shutting down");
-        for h in handles { h.abort(); }
+        for h in handles {
+            h.abort();
+        }
         Ok(())
     }
 }
@@ -270,7 +322,9 @@ async fn run_job_loop(job: ResolvedJob) {
     loop {
         let now = Local::now();
         let next = job.schedule.next_after(now);
-        let wait = (next - now).to_std().unwrap_or(std::time::Duration::from_secs(1));
+        let wait = (next - now)
+            .to_std()
+            .unwrap_or(std::time::Duration::from_secs(1));
         tokio::time::sleep(wait).await;
 
         let started = std::time::Instant::now();
@@ -310,13 +364,19 @@ async fn run_once(job: &ResolvedJob) -> std::io::Result<std::process::ExitStatus
 
 fn fmt_delta(d: Duration) -> String {
     let total = d.num_seconds();
-    if total < 0 { return "due".into(); }
+    if total < 0 {
+        return "due".into();
+    }
     let h = total / 3600;
     let m = (total % 3600) / 60;
     let s = total % 60;
-    if h > 0      { format!("{h}h {m}m") }
-    else if m > 0 { format!("{m}m {s}s") }
-    else          { format!("{s}s") }
+    if h > 0 {
+        format!("{h}h {m}m")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 // =================================================================
@@ -329,8 +389,17 @@ mod tests {
 
     #[test]
     fn parse_daily() {
-        assert_eq!(Schedule::parse("daily 08:00").unwrap(), Schedule::Daily { hour: 8, minute: 0 });
-        assert_eq!(Schedule::parse("daily 23:59").unwrap(), Schedule::Daily { hour: 23, minute: 59 });
+        assert_eq!(
+            Schedule::parse("daily 08:00").unwrap(),
+            Schedule::Daily { hour: 8, minute: 0 }
+        );
+        assert_eq!(
+            Schedule::parse("daily 23:59").unwrap(),
+            Schedule::Daily {
+                hour: 23,
+                minute: 59
+            }
+        );
         assert!(Schedule::parse("daily 25:00").is_err());
         assert!(Schedule::parse("daily noon").is_err());
     }
@@ -338,16 +407,35 @@ mod tests {
     #[test]
     fn parse_weekly() {
         let s = Schedule::parse("weekly mon 09:30").unwrap();
-        assert_eq!(s, Schedule::Weekly { weekday: Weekday::Mon, hour: 9, minute: 30 });
+        assert_eq!(
+            s,
+            Schedule::Weekly {
+                weekday: Weekday::Mon,
+                hour: 9,
+                minute: 30
+            }
+        );
         assert!(Schedule::parse("weekly funday 09:30").is_err());
     }
 
     #[test]
     fn parse_interval() {
-        assert_eq!(Schedule::parse("every 30s").unwrap(), Schedule::Interval(Duration::seconds(30)));
-        assert_eq!(Schedule::parse("every 5m").unwrap(), Schedule::Interval(Duration::minutes(5)));
-        assert_eq!(Schedule::parse("every 2h").unwrap(), Schedule::Interval(Duration::hours(2)));
-        assert_eq!(Schedule::parse("every 1d").unwrap(), Schedule::Interval(Duration::days(1)));
+        assert_eq!(
+            Schedule::parse("every 30s").unwrap(),
+            Schedule::Interval(Duration::seconds(30))
+        );
+        assert_eq!(
+            Schedule::parse("every 5m").unwrap(),
+            Schedule::Interval(Duration::minutes(5))
+        );
+        assert_eq!(
+            Schedule::parse("every 2h").unwrap(),
+            Schedule::Interval(Duration::hours(2))
+        );
+        assert_eq!(
+            Schedule::parse("every 1d").unwrap(),
+            Schedule::Interval(Duration::days(1))
+        );
         assert!(Schedule::parse("every 5min").is_err());
     }
 
@@ -370,7 +458,12 @@ mod tests {
         // Saturday 2026-05-16. Schedule: weekly mon 09:30 → next is Mon 2026-05-18 09:30
         let sat = Local.with_ymd_and_hms(2026, 5, 16, 12, 0, 0).unwrap();
         assert_eq!(sat.weekday(), Weekday::Sat);
-        let next = Schedule::Weekly { weekday: Weekday::Mon, hour: 9, minute: 30 }.next_after(sat);
+        let next = Schedule::Weekly {
+            weekday: Weekday::Mon,
+            hour: 9,
+            minute: 30,
+        }
+        .next_after(sat);
         assert_eq!(next.weekday(), Weekday::Mon);
         assert_eq!(next.hour(), 9);
         assert_eq!(next.minute(), 30);
@@ -455,8 +548,8 @@ schedule = "every 1m"
         let r = Daemon::from_config(cfg);
         match r {
             Err(DaemonError::NoCommand { name }) => assert_eq!(name, "broken"),
-            Err(e)                               => panic!("expected NoCommand, got: {e}"),
-            Ok(_)                                => panic!("expected NoCommand, got Ok"),
+            Err(e) => panic!("expected NoCommand, got: {e}"),
+            Ok(_) => panic!("expected NoCommand, got Ok"),
         }
     }
 
@@ -479,7 +572,12 @@ command = "true"
         // passed today, so next fire is next Mon, NOT later today.
         let mon = Local.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
         assert_eq!(mon.weekday(), Weekday::Mon);
-        let next = Schedule::Weekly { weekday: Weekday::Mon, hour: 9, minute: 30 }.next_after(mon);
+        let next = Schedule::Weekly {
+            weekday: Weekday::Mon,
+            hour: 9,
+            minute: 30,
+        }
+        .next_after(mon);
         assert_eq!(next.weekday(), Weekday::Mon);
         assert_eq!(next.date_naive(), mon.date_naive() + Duration::days(7));
     }
@@ -503,16 +601,18 @@ command = "true"
         let s = Schedule::Interval(Duration::seconds(30));
         let next = s.next_after(now);
         let delta = next - now;
-        assert!(delta >= Duration::seconds(29) && delta <= Duration::seconds(31),
-            "expected ~30s, got {delta:?}");
+        assert!(
+            delta >= Duration::seconds(29) && delta <= Duration::seconds(31),
+            "expected ~30s, got {delta:?}"
+        );
     }
 
     #[test]
     fn fmt_delta_handles_hours_minutes_seconds() {
-        assert_eq!(fmt_delta(Duration::seconds(5)),     "5s");
-        assert_eq!(fmt_delta(Duration::seconds(65)),    "1m 5s");
-        assert_eq!(fmt_delta(Duration::seconds(3725)),  "1h 2m");
-        assert_eq!(fmt_delta(Duration::seconds(-10)),   "due");
+        assert_eq!(fmt_delta(Duration::seconds(5)), "5s");
+        assert_eq!(fmt_delta(Duration::seconds(65)), "1m 5s");
+        assert_eq!(fmt_delta(Duration::seconds(3725)), "1h 2m");
+        assert_eq!(fmt_delta(Duration::seconds(-10)), "due");
     }
 
     #[test]
@@ -550,13 +650,19 @@ cwd = "/tmp"
         for s in ["mon", "monday", "Mon", "MONDAY"] {
             assert!(matches!(
                 Schedule::parse(&format!("weekly {s} 09:00")).unwrap(),
-                Schedule::Weekly { weekday: Weekday::Mon, .. }
+                Schedule::Weekly {
+                    weekday: Weekday::Mon,
+                    ..
+                }
             ));
         }
         for s in ["sun", "sunday"] {
             assert!(matches!(
                 Schedule::parse(&format!("weekly {s} 09:00")).unwrap(),
-                Schedule::Weekly { weekday: Weekday::Sun, .. }
+                Schedule::Weekly {
+                    weekday: Weekday::Sun,
+                    ..
+                }
             ));
         }
     }
@@ -572,17 +678,19 @@ cwd = "/tmp"
             "harness-daemon-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&tmp).unwrap();
         // Write a marker via sh -c "echo $FOO > marker"; verify the env var
         // and cwd land where we expect.
         let job = ResolvedJob {
-            name:     "test".into(),
+            name: "test".into(),
             schedule: Schedule::Interval(Duration::seconds(60)),
-            argv:     vec!["sh".into(), "-c".into(), "echo \"$FOO\" > marker".into()],
-            env:      std::collections::HashMap::from([("FOO".into(), "hello-edge".into())]),
-            cwd:      Some(tmp.clone()),
+            argv: vec!["sh".into(), "-c".into(), "echo \"$FOO\" > marker".into()],
+            env: std::collections::HashMap::from([("FOO".into(), "hello-edge".into())]),
+            cwd: Some(tmp.clone()),
         };
         let status = run_once(&job).await.expect("spawn");
         assert!(status.success(), "subprocess exit: {status:?}");

@@ -49,11 +49,17 @@ pub struct InMemoryKv {
 }
 
 impl InMemoryKv {
-    pub fn new() -> Self { Self { inner: Mutex::new(HashMap::new()) } }
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 impl Default for InMemoryKv {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[async_trait]

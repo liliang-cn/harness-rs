@@ -13,13 +13,24 @@ pub enum Block {
     Text(String),
     /// Reference to a file in the world. The runtime decides whether to
     /// inline contents or hand the agent a tool call to read it.
-    FileRef { path: String, hash: Option<String>, excerpt: Option<String> },
+    FileRef {
+        path: String,
+        hash: Option<String>,
+        excerpt: Option<String>,
+    },
     /// Reference to an activated SKILL.md body.
-    Skill   { name: String, body: String },
+    Skill { name: String, body: String },
     /// A tool call the assistant requested.
-    ToolCall { call_id: String, name: String, args: serde_json::Value },
+    ToolCall {
+        call_id: String,
+        name: String,
+        args: serde_json::Value,
+    },
     /// The result of a previous tool call.
-    ToolResult { call_id: String, content: serde_json::Value },
+    ToolResult {
+        call_id: String,
+        content: serde_json::Value,
+    },
     /// Feedback signals from sensors, rendered for the model.
     Feedback(Vec<Signal>),
     /// Provider-specific reasoning trace (DeepSeek `reasoning_content`,
@@ -31,8 +42,8 @@ pub enum Block {
 /// A single conversation turn (assistant or user).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Turn {
-    pub role:    TurnRole,
-    pub blocks:  Vec<Block>,
+    pub role: TurnRole,
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,24 +59,24 @@ pub enum TurnRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub description: String,
-    pub source:      Option<String>,      // slack url, github issue, etc.
-    pub deadline:    Option<i64>,
+    pub source: Option<String>, // slack url, github issue, etc.
+    pub deadline: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Policy {
-    pub max_iters:           u32,
-    pub max_input_tokens:    u32,
-    pub max_output_tokens:   u32,
+    pub max_iters: u32,
+    pub max_input_tokens: u32,
+    pub max_output_tokens: u32,
     pub self_correct_rounds: u32,
 }
 
 impl Default for Policy {
     fn default() -> Self {
         Self {
-            max_iters:           50,
-            max_input_tokens:    150_000,
-            max_output_tokens:   8_000,
+            max_iters: 50,
+            max_input_tokens: 150_000,
+            max_output_tokens: 8_000,
             self_correct_rounds: 3,
         }
     }
@@ -74,27 +85,27 @@ impl Default for Policy {
 /// The model-visible state of an in-progress agent run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context {
-    pub system:   Vec<Block>,
-    pub guides:   Vec<Block>,
-    pub history:  Vec<Turn>,
-    pub task:     Task,
-    pub policy:   Policy,
+    pub system: Vec<Block>,
+    pub guides: Vec<Block>,
+    pub history: Vec<Turn>,
+    pub task: Task,
+    pub policy: Policy,
     pub metadata: BTreeMap<String, serde_json::Value>,
     /// Tools the agent may call this turn. Model adapters translate these to
     /// the provider's tool-calling format (OpenAI `tools`, Anthropic `tools`, …).
-    pub tools:    Vec<crate::ToolSchema>,
+    pub tools: Vec<crate::ToolSchema>,
 }
 
 impl Context {
     pub fn new(task: Task) -> Self {
         Self {
-            system:   Vec::new(),
-            guides:   Vec::new(),
-            history:  Vec::new(),
+            system: Vec::new(),
+            guides: Vec::new(),
+            history: Vec::new(),
             task,
-            policy:   Policy::default(),
+            policy: Policy::default(),
             metadata: BTreeMap::new(),
-            tools:    Vec::new(),
+            tools: Vec::new(),
         }
     }
 
@@ -116,17 +127,20 @@ impl Context {
         for c in &out.tool_calls {
             blocks.push(Block::ToolCall {
                 call_id: c.id.clone(),
-                name:    c.name.clone(),
-                args:    c.args.clone(),
+                name: c.name.clone(),
+                args: c.args.clone(),
             });
         }
-        self.history.push(Turn { role: TurnRole::Assistant, blocks });
+        self.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks,
+        });
     }
 
     /// Append feedback signals as a tool-role turn.
     pub fn push_feedback(&mut self, signals: Vec<Signal>) {
         self.history.push(Turn {
-            role:   TurnRole::Tool,
+            role: TurnRole::Tool,
             blocks: vec![Block::Feedback(signals)],
         });
     }
@@ -135,7 +149,7 @@ impl Context {
 /// One action the agent has asked to take, paired with the originating tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
-    pub tool:    String,
+    pub tool: String,
     pub call_id: String,
-    pub args:    serde_json::Value,
+    pub args: serde_json::Value,
 }

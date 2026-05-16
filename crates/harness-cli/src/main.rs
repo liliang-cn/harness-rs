@@ -101,19 +101,25 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber_init();
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Skills { cmd: SkillsCmd::Validate { path } } => {
-            match harness_skills::load_skill_dir(&path) {
-                Ok(s) => {
-                    println!("✓ valid: {} — {}", s.manifest().name, s.manifest().description);
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("✗ invalid: {e}");
-                    std::process::exit(1);
-                }
+        Cmd::Skills {
+            cmd: SkillsCmd::Validate { path },
+        } => match harness_skills::load_skill_dir(&path) {
+            Ok(s) => {
+                println!(
+                    "✓ valid: {} — {}",
+                    s.manifest().name,
+                    s.manifest().description
+                );
+                Ok(())
             }
-        }
-        Cmd::Skills { cmd: SkillsCmd::List { dir } } => {
+            Err(e) => {
+                eprintln!("✗ invalid: {e}");
+                std::process::exit(1);
+            }
+        },
+        Cmd::Skills {
+            cmd: SkillsCmd::List { dir },
+        } => {
             let skills = harness_skills::scan_skills_root(&dir)?;
             for s in &skills {
                 println!("{}  —  {}", s.manifest().name, s.manifest().description);
@@ -121,7 +127,9 @@ async fn main() -> anyhow::Result<()> {
             println!("\n{} skill(s)", skills.len());
             Ok(())
         }
-        Cmd::Skills { cmd: SkillsCmd::Lint { dir } } => {
+        Cmd::Skills {
+            cmd: SkillsCmd::Lint { dir },
+        } => {
             let findings = harness_skills::lint_dir(&dir)?;
             if findings.is_empty() {
                 println!("✓ no lint findings in {}", dir.display());
@@ -132,9 +140,18 @@ async fn main() -> anyhow::Result<()> {
             let mut infos = 0;
             for f in &findings {
                 let tag = match f.severity {
-                    harness_skills::LintSeverity::Error   => { errors   += 1; "ERROR" }
-                    harness_skills::LintSeverity::Warning => { warnings += 1; "WARN " }
-                    harness_skills::LintSeverity::Info    => { infos    += 1; "INFO " }
+                    harness_skills::LintSeverity::Error => {
+                        errors += 1;
+                        "ERROR"
+                    }
+                    harness_skills::LintSeverity::Warning => {
+                        warnings += 1;
+                        "WARN "
+                    }
+                    harness_skills::LintSeverity::Info => {
+                        infos += 1;
+                        "INFO "
+                    }
                 };
                 println!("[{tag}] {}: {}", f.skill_name, f.message);
             }
@@ -144,9 +161,10 @@ async fn main() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        Cmd::Skills { cmd: SkillsCmd::Export { target, from } } => {
-            let mut registry = harness_skills::SkillRegistry::new()
-                .with_macro_skills()?;
+        Cmd::Skills {
+            cmd: SkillsCmd::Export { target, from },
+        } => {
+            let mut registry = harness_skills::SkillRegistry::new().with_macro_skills()?;
             if let Some(p) = from {
                 registry = registry.with_filesystem_root(&p)?;
             }
@@ -154,19 +172,27 @@ async fn main() -> anyhow::Result<()> {
             for p in &paths {
                 println!("✓ {}", p.display());
             }
-            println!("\nexported {} skill(s) to {}", paths.len(), target.display());
+            println!(
+                "\nexported {} skill(s) to {}",
+                paths.len(),
+                target.display()
+            );
             Ok(())
         }
-        Cmd::New { name, path, workspace, local } => scaffold_new_project(name, path, workspace, local),
+        Cmd::New {
+            name,
+            path,
+            workspace,
+            local,
+        } => scaffold_new_project(name, path, workspace, local),
         Cmd::Trace { file, summary } => print_session_trace(file, summary),
-        Cmd::Mcp { cmd: McpCmd::Serve { workspace, skills } } => run_mcp_server(workspace, skills).await,
+        Cmd::Mcp {
+            cmd: McpCmd::Serve { workspace, skills },
+        } => run_mcp_server(workspace, skills).await,
     }
 }
 
-async fn run_mcp_server(
-    workspace: Option<PathBuf>,
-    skills:    Option<PathBuf>,
-) -> anyhow::Result<()> {
+async fn run_mcp_server(workspace: Option<PathBuf>, skills: Option<PathBuf>) -> anyhow::Result<()> {
     use std::sync::Arc;
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
     let mut world = harness_context::default_world(root);
@@ -205,9 +231,7 @@ fn print_session_trace(file: PathBuf, summary_only: bool) -> anyhow::Result<()> 
         }
         println!();
     }
-    println!(
-        "── summary ────────────────────────────────────────────────"
-    );
+    println!("── summary ────────────────────────────────────────────────");
     println!("  events:        {}", stats.events);
     println!("  model calls:   {}", stats.model_calls);
     println!("  tool calls:    {}", stats.tool_calls);

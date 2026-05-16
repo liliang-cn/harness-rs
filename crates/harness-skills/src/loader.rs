@@ -14,13 +14,13 @@ pub fn load(path: &Path) -> Result<FileSkill, SkillError> {
     let (manifest, body) = parse_frontmatter(&raw, &skill_md)?;
 
     // dir name must equal manifest.name per spec
-    let dir_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| SkillError::Invalid {
-            path: path.display().to_string(),
-            reason: "directory has no valid name".into(),
-        })?;
+    let dir_name =
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| SkillError::Invalid {
+                path: path.display().to_string(),
+                reason: "directory has no valid name".into(),
+            })?;
     validate_against_dir(&manifest, dir_name)?;
 
     let resources = scan_resources(path);
@@ -36,13 +36,17 @@ pub fn scan_skills_root(root: &Path) -> Result<Vec<FileSkill>, SkillError> {
     if !root.exists() {
         return Err(SkillError::Io(format!("not found: {}", root.display())));
     }
-    for entry in std::fs::read_dir(root)
-        .map_err(|e| SkillError::Io(format!("{}: {e}", root.display())))?
+    for entry in
+        std::fs::read_dir(root).map_err(|e| SkillError::Io(format!("{}: {e}", root.display())))?
     {
         let entry = entry.map_err(|e| SkillError::Io(e.to_string()))?;
         let p = entry.path();
-        if !p.is_dir() { continue; }
-        if !p.join("SKILL.md").is_file() { continue; }
+        if !p.is_dir() {
+            continue;
+        }
+        if !p.join("SKILL.md").is_file() {
+            continue;
+        }
         skills.push(load(&p)?);
     }
     Ok(skills)
@@ -58,24 +62,21 @@ fn parse_frontmatter<'a>(raw: &'a str, p: &Path) -> Result<(SkillManifest, &'a s
     }
     // find the closing `\n---` after position 3
     let rest = &raw[3..];
-    let end = rest
-        .find("\n---")
-        .ok_or_else(|| SkillError::Invalid {
-            path: p.display().to_string(),
-            reason: "missing closing `---` for frontmatter".into(),
-        })?;
+    let end = rest.find("\n---").ok_or_else(|| SkillError::Invalid {
+        path: p.display().to_string(),
+        reason: "missing closing `---` for frontmatter".into(),
+    })?;
     let yaml_str = &rest[..end];
     // body starts after `\n---` then optional `\n`
     let after_close = &rest[end + 4..];
     let body = after_close.strip_prefix('\n').unwrap_or(after_close);
 
     // First parse into a raw map so we can reject unknown top-level fields.
-    let yaml_val: serde_yaml::Value = serde_yaml::from_str(yaml_str).map_err(|e| {
-        SkillError::Invalid {
+    let yaml_val: serde_yaml::Value =
+        serde_yaml::from_str(yaml_str).map_err(|e| SkillError::Invalid {
             path: p.display().to_string(),
             reason: format!("YAML parse: {e}"),
-        }
-    })?;
+        })?;
     reject_unknown_top_fields(&yaml_val, p)?;
 
     let manifest: SkillManifest =
@@ -127,13 +128,19 @@ fn reject_unknown_top_fields(v: &serde_yaml::Value, p: &Path) -> Result<(), Skil
 fn scan_resources(skill_dir: &Path) -> Vec<Resource> {
     let mut out = Vec::new();
     for (sub, kind) in [
-        ("scripts",    ResourceKind::Script),
+        ("scripts", ResourceKind::Script),
         ("references", ResourceKind::Reference),
-        ("assets",     ResourceKind::Asset),
+        ("assets", ResourceKind::Asset),
     ] {
         let dir = skill_dir.join(sub);
-        if !dir.is_dir() { continue; }
-        for entry in WalkDir::new(&dir).max_depth(2).into_iter().filter_map(Result::ok) {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&dir)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             if entry.file_type().is_file() {
                 out.push(Resource {
                     kind,
@@ -148,7 +155,9 @@ fn scan_resources(skill_dir: &Path) -> Vec<Resource> {
 
 fn first_line_summary(p: &Path) -> Option<String> {
     let s = std::fs::read_to_string(p).ok()?;
-    s.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_string())
+    s.lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
 }
 
 #[cfg(test)]
@@ -172,8 +181,7 @@ mod tests {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos();
-                let p = std::env::temp_dir()
-                    .join(format!("harness-skills-test-{pid}-{nanos}-{n}"));
+                let p = std::env::temp_dir().join(format!("harness-skills-test-{pid}-{nanos}-{n}"));
                 std::fs::create_dir_all(&p).unwrap();
                 TestDir(p)
             }
@@ -202,7 +210,10 @@ mod tests {
         );
         let s = load(&p).unwrap();
         assert_eq!(s.manifest().name, "format-rust");
-        assert_eq!(s.manifest().description, "Run cargo fmt across the workspace.");
+        assert_eq!(
+            s.manifest().description,
+            "Run cargo fmt across the workspace."
+        );
     }
 
     #[test]
@@ -215,7 +226,9 @@ mod tests {
         );
         let err = load(&p).unwrap_err();
         match err {
-            SkillError::Invalid { reason, .. } => assert!(reason.contains("unknown frontmatter field `triggers`")),
+            SkillError::Invalid { reason, .. } => {
+                assert!(reason.contains("unknown frontmatter field `triggers`"))
+            }
             e => panic!("wrong error: {e:?}"),
         }
     }
