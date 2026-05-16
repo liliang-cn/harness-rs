@@ -16,7 +16,6 @@ use futures::future::BoxFuture;
 use harness_core::{HarnessError, World};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::pin::Pin;
 
 pub type NodeId = String;
 
