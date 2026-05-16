@@ -13,13 +13,14 @@ harness-core      = { workspace = true }
 harness-context   = { workspace = true }
 harness-hooks     = { workspace = true }
 harness-compactor = { workspace = true }
+harness-models    = { workspace = true }
 async-trait       = { workspace = true }
 tracing           = { workspace = true }
+serde             = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true }
 
 [dev-dependencies]
-harness-models    = { workspace = true }
 harness-skills    = { workspace = true }
 harness-tools-fs  = { workspace = true }
 once_cell         = { workspace = true }

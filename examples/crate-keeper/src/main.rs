@@ -17,7 +17,7 @@
 use clap::Parser;
 use harness_context::default_world;
 use harness_core::{Model, Task};
-use harness_loop::{AgentLoop, Outcome};
+use harness_loop::{AgentLoop, Outcome, SessionRecorder};
 use harness_models::{OpenAiCompat, providers};
 use harness_sensors_rust::CargoCheck;
 use harness_tools_fs::{ListDir, ReadFile, WriteFile};
@@ -43,6 +43,11 @@ struct Cli {
     /// Maximum agent loop iterations.
     #[arg(long, default_value_t = 12)]
     max_iters: u32,
+
+    /// Record a JSONL session log to this path; replayable via
+    /// `harness trace <file>` or `harness_loop::replay_as_mock`.
+    #[arg(long)]
+    record: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -84,12 +89,18 @@ async fn main() -> anyhow::Result<()> {
         info.context_window,
     );
 
-    let loop_ = AgentLoop::new(model)
+    let mut loop_ = AgentLoop::new(model)
         .with_tool(Arc::new(ListDir))
         .with_tool(Arc::new(ReadFile))
         .with_tool(Arc::new(WriteFile))
         .with_tool(Arc::new(ShellRead))
         .with_sensor(Arc::new(CargoCheck::new()));
+    if let Some(path) = &cli.record {
+        let recorder = SessionRecorder::new(path)
+            .map_err(|e| anyhow::anyhow!("create session log {}: {e}", path.display()))?;
+        loop_ = loop_.with_hook(Arc::new(recorder));
+        println!("  recording: {}", path.display());
+    }
     println!("  tools:     {} registered (max_iters={})\n", loop_.tools.len(), cli.max_iters);
 
     let mut world = default_world(&workspace);

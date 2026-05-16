@@ -9,9 +9,11 @@
 //! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
 
 pub mod registry;
+pub mod replay;
 pub mod subagent;
 
 pub use registry::*;
+pub use replay::*;
 pub use subagent::*;
 
 use harness_compactor::DefaultCompactor;

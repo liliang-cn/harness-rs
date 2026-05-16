@@ -715,13 +715,13 @@ harness trace ./session.jsonl            # 回放
 - [x] Anthropic 原生 provider — `AnthropicNative` 加 Messages API + content-block tool-calling；`providers::anthropic_{sonnet_46, opus_47, haiku_45}`
 - [x] Auto-fix patches 实际落地 — `FixPatch::ReplaceFile/UnifiedDiff/RunCommand` 在 `AgentLoop` 内通过 `World.runner` / fs 真实应用并报告
 
-### v0.2+ (out of scope today)
+### v0.2+
 
+- [x] **Session replay** — `SessionRecorder` Hook serialises every lifecycle event to JSONL; `read_session` + `replay_as_mock` reconstruct a deterministic `MockModel` from the log. `harness trace <file>` pretty-prints the session + summary stats. `crate-keeper --record <path>` produces live recordings.
 - [ ] VmSandbox (Firecracker) — production-grade isolation
 - [ ] ContainerSandbox (OCI) — middle-ground isolation
 - [ ] MCP 服务端 — 把本框架的工具开放给外部 MCP 客户端
-- [ ] OpenTelemetry 追踪输出 — 把 27 个 Event 转 OTel span
-- [ ] Session replay — 从 `tracing` 日志重放完整 agent run
+- [ ] OpenTelemetry 追踪输出 — 把 27 个 Event 转 OTel span (session-replay 已覆盖大部分诊断需求)
 - [ ] Harness "linter" — 检测互相冲突的 guides / sensors
 - [ ] `ModelBackedCompactor` — Microcompact + AutoCompact stages 用便宜模型语义化摘要 (今天是结构化收缩)
 - [ ] Streaming tool calls — OpenAiCompat 已支持 stream=true，但 tool_call 增量解析未接
