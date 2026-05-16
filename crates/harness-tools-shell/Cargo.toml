@@ -11,6 +11,10 @@ description = "Allowlisted read-only shell tool for harness-rs. Per-program safe
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_tools_shell"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

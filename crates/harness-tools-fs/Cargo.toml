@@ -11,6 +11,10 @@ description = "Jail-safe filesystem tools (read_file, write_file, edit_file, lis
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_tools_fs"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

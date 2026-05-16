@@ -11,6 +11,10 @@ description = "Deterministic + agent hybrid state-machine executor for harness-r
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_blueprint"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 harness-loop = { workspace = true }

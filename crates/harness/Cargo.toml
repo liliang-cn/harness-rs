@@ -11,6 +11,14 @@ description = "Rust agent framework based on harness-engineering principles (Lop
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+
+# Keep the in-source crate name as `harness` even though the published package
+# name is `harness-rs` (the bare `harness` was already taken on crates.io).
+# Lets users write `use harness::prelude::*;` without an aliasing trick.
+[lib]
+name = "harness"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core    = { workspace = true }
 harness-skills  = { workspace = true }

@@ -364,10 +364,11 @@ mod tests {
     fn tmp_world() -> (tempdir::TestDir, World) {
         let td = tempdir::TestDir::new();
         let w = World {
-            repo:   RepoView { root: td.0.clone() },
-            runner: Arc::new(NoopRunner),
-            clock:  Arc::new(NoopClock),
-            kv:     Arc::new(NoopKv),
+            repo:    RepoView { root: td.0.clone() },
+            runner:  Arc::new(NoopRunner),
+            clock:   Arc::new(NoopClock),
+            kv:      Arc::new(NoopKv),
+            profile: harness_core::UserProfile::default(),
         };
         (td, w)
     }

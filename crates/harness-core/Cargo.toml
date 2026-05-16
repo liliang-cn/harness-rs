@@ -11,6 +11,10 @@ description = "Core traits and types for the harness-rs agent framework: Model, 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_core"
+path = "src/lib.rs"
+
 [dependencies]
 async-trait     = { workspace = true }
 thiserror       = { workspace = true }

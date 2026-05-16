@@ -11,6 +11,10 @@ description = "LLM model adapters for harness-rs — OpenAiCompat (DeepSeek/Groq
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_models"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

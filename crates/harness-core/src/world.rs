@@ -13,10 +13,13 @@ pub struct RepoView {
 ///
 /// This is intentionally tiny — most work flows through Tools.
 pub struct World {
-    pub repo:   RepoView,
-    pub runner: Arc<dyn ProcessRunner>,
-    pub clock:  Arc<dyn Clock>,
-    pub kv:     Arc<dyn KvStore>,
+    pub repo:    RepoView,
+    pub runner:  Arc<dyn ProcessRunner>,
+    pub clock:   Arc<dyn Clock>,
+    pub kv:      Arc<dyn KvStore>,
+    /// Ambient information about who's using the agent (name, timezone, locale,
+    /// preferences). Loaded once at world construction. See [`crate::UserProfile`].
+    pub profile: crate::UserProfile,
 }
 
 #[async_trait]

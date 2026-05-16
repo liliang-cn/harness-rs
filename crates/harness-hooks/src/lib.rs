@@ -124,10 +124,11 @@ mod tests {
         }
 
         World {
-            repo:   RepoView { root: ".".into() },
-            runner: Arc::new(NoopRunner),
-            clock:  Arc::new(NoopClock),
-            kv:     Arc::new(NoopKv),
+            repo:    RepoView { root: ".".into() },
+            runner:  Arc::new(NoopRunner),
+            clock:   Arc::new(NoopClock),
+            kv:      Arc::new(NoopKv),
+            profile: harness_core::UserProfile::default(),
         }
     }
 
