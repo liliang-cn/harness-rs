@@ -9,9 +9,11 @@
 //!
 //! Pre-configured constructors live in [`providers`].
 
+pub mod anthropic;
 pub mod config;
 pub mod openai_compat;
 pub mod providers;
 
+pub use anthropic::*;
 pub use config::*;
 pub use openai_compat::*;

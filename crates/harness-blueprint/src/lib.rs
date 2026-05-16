@@ -12,10 +12,10 @@
 //! - Failure of a node can branch to a retry/fallback node when `branch_on_failure`
 //!   is set; up to `retry_cap` retries.
 
+use futures::future::BoxFuture;
 use harness_core::{HarnessError, World};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::future::Future;
 use std::pin::Pin;
 
 pub type NodeId = String;
@@ -51,37 +51,55 @@ pub enum Node {
 }
 
 type BoxedDetermFn = Box<
-    dyn for<'a> Fn(
-            &'a mut World,
-        ) -> Pin<Box<dyn Future<Output = Result<NodeOutput, HarnessError>> + Send + 'a>>
+    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
         + Send
         + Sync,
 >;
 
 type BoxedAgentFn = Box<
-    dyn for<'a> Fn(
-            &'a mut World,
-        ) -> Pin<Box<dyn Future<Output = Result<NodeOutput, HarnessError>> + Send + 'a>>
+    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
         + Send
         + Sync,
 >;
 
 impl Node {
-    pub fn deterministic<F, Fut>(f: F) -> Self
+    /// Wrap a closure that returns a boxed future. The closure body can borrow
+    /// `&mut World` for the future's lifetime.
+    ///
+    /// ```ignore
+    /// Node::deterministic(|w| Box::pin(async move {
+    ///     let out = w.runner.exec("git", &["status"], None).await?;
+    ///     Ok(NodeOutput { transition: Transition::Next, data: ... })
+    /// }))
+    /// ```
+    pub fn deterministic<F>(f: F) -> Self
     where
-        F: for<'a> Fn(&'a mut World) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<NodeOutput, HarnessError>> + Send + 'static,
+        F: for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
+            + Send
+            + Sync
+            + 'static,
     {
-        Node::Deterministic(Box::new(move |w| Box::pin(f(w))))
+        Node::Deterministic(Box::new(f))
     }
 
-    pub fn agent<F, Fut>(f: F) -> Self
+    pub fn agent<F>(f: F) -> Self
     where
-        F: for<'a> Fn(&'a mut World) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<NodeOutput, HarnessError>> + Send + 'static,
+        F: for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
+            + Send
+            + Sync
+            + 'static,
     {
-        Node::Agent(Box::new(move |w| Box::pin(f(w))))
+        Node::Agent(Box::new(f))
     }
+}
+
+/// Convenience: avoid the `Box::pin` boilerplate when the closure doesn't
+/// borrow `w`.
+#[macro_export]
+macro_rules! node_async {
+    (|$w:ident| $body:block) => {
+        $crate::Node::deterministic(|$w| Box::pin(async move $body))
+    };
 }
 
 /// An edge — either named or default.
@@ -258,15 +276,15 @@ mod tests {
     #[tokio::test]
     async fn linear_chain_runs_in_order() {
         let bp = Blueprint::new()
-            .add("a", Node::deterministic(|_w| async move {
+            .add("a", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Next, data: json!({"step":"a"}) })
-            }))
-            .add("b", Node::deterministic(|_w| async move {
+            })))
+            .add("b", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Next, data: json!({"step":"b"}) })
-            }))
-            .add("c", Node::deterministic(|_w| async move {
+            })))
+            .add("c", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Done, data: json!({"step":"c"}) })
-            }))
+            })))
             .edge("a", "b")
             .edge("b", "c");
         let mut w = mk_world();
@@ -284,18 +302,18 @@ mod tests {
         let bp = Blueprint::new()
             .add("flaky", Node::deterministic(move |_w| {
                 let attempts = attempts2.clone();
-                async move {
+                Box::pin(async move {
                     let n = attempts.fetch_add(1, Ordering::SeqCst);
                     if n < 1 {
                         Err(HarnessError::Other("transient".into()))
                     } else {
                         Ok(NodeOutput { transition: Transition::Done, data: json!({}) })
                     }
-                }
+                })
             }))
-            .add("fallback", Node::deterministic(|_w| async move {
+            .add("fallback", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Done, data: json!({"recovered": true}) })
-            }))
+            })))
             .branch_on_failure("flaky", "fallback", 2);
         let mut w = mk_world();
         let out = bp.run(&mut w).await.unwrap();
@@ -307,18 +325,18 @@ mod tests {
     #[tokio::test]
     async fn named_edges_route_via_transition() {
         let bp = Blueprint::new()
-            .add("router", Node::deterministic(|_w| async move {
+            .add("router", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput {
                     transition: Transition::Edge("left".into()),
                     data: json!({}),
                 })
-            }))
-            .add("left",  Node::deterministic(|_w| async move {
+            })))
+            .add("left",  Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Done, data: json!({"branch":"left"}) })
-            }))
-            .add("right", Node::deterministic(|_w| async move {
+            })))
+            .add("right", Node::deterministic(|_w| Box::pin(async move {
                 Ok(NodeOutput { transition: Transition::Done, data: json!({"branch":"right"}) })
-            }))
+            })))
             .edge_named("router", "left",  "left")
             .edge_named("router", "right", "right");
         let mut w = mk_world();
