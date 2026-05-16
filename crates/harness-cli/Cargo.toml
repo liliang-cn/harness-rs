@@ -13,9 +13,13 @@ name = "harness"
 path = "src/main.rs"
 
 [dependencies]
-harness-core   = { workspace = true }
-harness-skills = { workspace = true }
-harness-loop   = { workspace = true }
+harness-core    = { workspace = true }
+harness-skills  = { workspace = true }
+harness-loop    = { workspace = true }
+harness-mcp     = { workspace = true }
+harness-context = { workspace = true }
+harness-tools-fs = { workspace = true }
+harness-tools-shell = { workspace = true }
 clap           = { workspace = true }
 tokio          = { workspace = true }
 anyhow         = { workspace = true }

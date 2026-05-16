@@ -1,0 +1,23 @@
+[package]
+name = "harness-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP (Model Context Protocol) server that exposes the harness tool registry to external agents"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+tokio           = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tracing         = { workspace = true }
+thiserror       = { workspace = true }
+anyhow          = { workspace = true }
+
+[dev-dependencies]
+harness-tools-fs = { workspace = true }

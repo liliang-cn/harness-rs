@@ -4,6 +4,12 @@
 //! happens around tool calls, model calls, compaction, sensor runs, and so on.
 //! Long async work belongs in a sensor or tool, not a hook.
 
+#[cfg(feature = "otel")]
+pub mod otel;
+
+#[cfg(feature = "otel")]
+pub use otel::OtelHook;
+
 use harness_core::{Event, Hook, HookOutcome, World, iter_macro_hooks};
 use std::sync::Arc;
 
