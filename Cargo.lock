@@ -435,6 +435,7 @@ dependencies = [
 name = "harness-hooks"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "harness-core",
  "inventory",
  "tracing",
@@ -450,6 +451,7 @@ dependencies = [
  "harness-core",
  "harness-hooks",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

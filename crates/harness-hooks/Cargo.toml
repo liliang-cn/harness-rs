@@ -12,3 +12,4 @@ description = "HookBus and the 27 lifecycle events"
 harness-core = { workspace = true }
 inventory    = { workspace = true }
 tracing      = { workspace = true }
+async-trait  = { workspace = true }
