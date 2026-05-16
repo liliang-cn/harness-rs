@@ -85,6 +85,62 @@ fn http_client() -> reqwest::Client {
 }
 
 // =================================================================
+// Tool 0: current_time — grounds "today / this week / recent" queries
+// =================================================================
+
+/// Return the current wall-clock time. Always call this first for any query
+/// that mentions "today / yesterday / this week / recent / latest / 最近 / 今天".
+/// Uses World.profile.tz when set, falls back to UTC.
+#[harness::tool(
+    name = "current_time",
+    risk = "read-only",
+    schema = r#"{"type": "object", "properties": {}}"#,
+)]
+async fn current_time(_args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let now_ms = w.clock.now_ms();
+    let utc = chrono::DateTime::from_timestamp_millis(now_ms)
+        .ok_or_else(|| ToolError::Exec("clock returned invalid timestamp".into()))?;
+
+    let (iso_local, weekday, human, tz_source) = match w
+        .profile
+        .tz
+        .as_deref()
+        .and_then(|s| s.parse::<chrono_tz::Tz>().ok())
+    {
+        Some(tz) => {
+            let local = utc.with_timezone(&tz);
+            (
+                local.to_rfc3339(),
+                local.format("%A").to_string(),
+                local.format("%Y-%m-%d %H:%M %Z").to_string(),
+                format!("profile.tz={}", w.profile.tz.as_deref().unwrap_or("?")),
+            )
+        }
+        None => {
+            let local = utc.with_timezone(&chrono::Utc);
+            (
+                local.to_rfc3339(),
+                local.format("%A").to_string(),
+                local.format("%Y-%m-%d %H:%M UTC").to_string(),
+                "UTC (no profile tz)".to_string(),
+            )
+        }
+    };
+
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "iso_utc":   utc.to_rfc3339(),
+            "iso_local": iso_local,
+            "weekday":   weekday,
+            "human":     human,
+            "timezone":  tz_source,
+        }),
+        trace: None,
+    })
+}
+
+// =================================================================
 // Tool 1: web_search — DuckDuckGo HTML, no API key needed
 // =================================================================
 
@@ -338,7 +394,7 @@ async fn list_notes(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
 
 fn collect_tools() -> Vec<Arc<dyn Tool>> {
     use harness_core::iter_macro_tools;
-    let want = ["web_search", "web_fetch", "save_note", "list_notes"];
+    let want = ["current_time", "web_search", "web_fetch", "save_note", "list_notes"];
     iter_macro_tools().filter(|t| want.contains(&t.name())).collect()
 }
 
@@ -353,6 +409,7 @@ claim in your reply must come from a tool result you can cite — if you don't \
 have a source, say 'I don't know' instead of guessing.\n\
 \n\
 Workflow:\n\
+0. If the question mentions any relative time (today, this week, recent, latest, 最新, 最近, 今天, 上周, 本季度, etc.) — call `current_time` FIRST to ground yourself. Otherwise skip step 0.\n\
 1. Call `web_search` with a precise query. Read the top hits' titles + snippets.\n\
 2. Call `web_fetch` on the 1-3 most relevant URLs to get the actual content.\n\
 3. Cross-check: if numbers vary across sources, list both with attribution.\n\
@@ -548,7 +605,20 @@ async fn run_repl(
         if input.is_empty() { continue; }
         if EXIT.contains(&input.to_lowercase().as_str()) { println!("bye."); break; }
 
-        let hist = if history.len() > 12 { &history[history.len() - 12..] } else { &history[..] };
+        // Build a real Turn-shaped seed so the Compactor can see + shrink history.
+        // (Previously: history was stringified into task.description and bypassed
+        // the compactor entirely — see audit issue #2.)
+        let seed: Vec<harness_core::Turn> = history
+            .iter()
+            .take_while(|_| true)
+            .map(|(role, text)| {
+                let role = match role.as_str() {
+                    "user" => harness_core::TurnRole::User,
+                    _      => harness_core::TurnRole::Assistant,
+                };
+                harness_core::Turn { role, blocks: vec![harness_core::Block::Text(text.clone())] }
+            })
+            .collect();
 
         let model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key.clone());
         let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
@@ -560,10 +630,11 @@ async fn run_repl(
         }
         let mut world = with_profile(".", profile.clone());
         let task = Task {
-            description: build_task_description(input, hist),
+            // Single-turn description only — no history stuffing.
+            description: format!("{SYSTEM_PROMPT}\n\n[user] {input}"),
             source: None, deadline: None,
         };
-        match loop_.run_with_max_iters(task, &mut world, max_iters).await {
+        match loop_.run_with_seed_history(task, seed, &mut world, max_iters).await {
             Ok(Outcome::Done { text, iters }) => {
                 let response = text.unwrap_or_else(|| "(no response)".into());
                 println!("\nasst ({iters} iter)> {response}");

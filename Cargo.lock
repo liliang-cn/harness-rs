@@ -1088,6 +1088,7 @@ version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
+ "chrono-tz",
  "clap",
  "harness-rs",
  "harness-rs-context",

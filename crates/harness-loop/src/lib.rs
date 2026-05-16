@@ -99,9 +99,25 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         max_iters: u32,
     ) -> Result<Outcome, HarnessError> {
+        self.run_with_seed_history(task, Vec::new(), world, max_iters).await
+    }
+
+    /// Like `run_with_max_iters` but seeds `ctx.history` with `seed` **before**
+    /// the current user task is appended. Use this for multi-turn REPLs so
+    /// prior conversation lives in `ctx.history` (where the Compactor can see
+    /// it) instead of being concatenated into `task.description` (where it
+    /// previously bypassed compaction entirely — see audit #2).
+    pub async fn run_with_seed_history(
+        &self,
+        task: Task,
+        seed: Vec<Turn>,
+        world: &mut World,
+        max_iters: u32,
+    ) -> Result<Outcome, HarnessError> {
         let mut ctx = Context::new(task);
         ctx.policy.max_iters = max_iters;
         ctx.tools = self.tools.schemas();
+        ctx.history = seed;
 
         self.hooks.fire(&Event::SessionStart { source: SessionSource::Startup }, world);
 
