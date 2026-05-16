@@ -62,7 +62,7 @@ async fn text_only_response_returns_done_immediately() {
         .await
         .unwrap();
     match outcome {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             assert_eq!(text.as_deref(), Some("hello"));
             assert_eq!(iters, 1);
         }
@@ -93,7 +93,7 @@ async fn tool_call_then_text_takes_two_iters() {
         .unwrap();
 
     match outcome {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             assert_eq!(iters, 2);
             assert!(text.as_deref().unwrap_or("").contains("hi there"));
         }
@@ -347,7 +347,7 @@ async fn budget_exhausted_when_model_loops_on_tool_calls() {
         .run_with_max_iters(task("loop forever"), &mut world, 3)
         .await
         .unwrap();
-    assert!(matches!(outcome, Outcome::BudgetExhausted { iters: 3 }));
+    assert!(matches!(outcome, Outcome::BudgetExhausted { iters: 3, .. }));
 }
 
 // ============================================================

@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let outcome = loop_.run_with_max_iters(task, &mut world, cli.max_iters).await?;
 
     match outcome {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             println!("\n✓ done after {iters} iteration(s)");
             if let Some(t) = text { println!("\n--- final assistant message ---\n{t}"); }
             let notes = workspace.join("HARNESS_NOTES.md");
@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("\n⚠️  agent finished without writing HARNESS_NOTES.md");
             }
         }
-        Outcome::BudgetExhausted { iters } => {
+        Outcome::BudgetExhausted { iters, .. } => {
             println!("\n✗ budget exhausted after {iters} iteration(s)");
             std::process::exit(2);
         }

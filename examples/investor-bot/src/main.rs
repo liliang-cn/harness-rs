@@ -571,12 +571,18 @@ async fn run_once(
         source: None, deadline: None,
     };
     match loop_.run_with_max_iters(task, &mut world, max_iters).await? {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             println!("✓ done after {iters} iteration(s)\n");
             if let Some(t) = text { println!("{t}"); }
         }
-        Outcome::BudgetExhausted { iters } => {
-            eprintln!("✗ budget exhausted after {iters} iteration(s)");
+        Outcome::BudgetExhausted { iters, last_text, tools_called, usage, .. } => {
+            eprintln!("✗ budget exhausted after {iters} iter(s), {tools_called} tool call(s), \
+                       {} in / {} out tokens", usage.input_tokens, usage.output_tokens);
+            if let Some(t) = last_text {
+                eprintln!("\n— last assistant message before budget ran out —\n{t}");
+            }
+            eprintln!("\n→ partial findings preserved in {}. `investor --list` to recall.",
+                notes_path().display());
             std::process::exit(2);
         }
     }
@@ -635,14 +641,20 @@ async fn run_repl(
             source: None, deadline: None,
         };
         match loop_.run_with_seed_history(task, seed, &mut world, max_iters).await {
-            Ok(Outcome::Done { text, iters }) => {
+            Ok(Outcome::Done { text, iters, .. }) => {
                 let response = text.unwrap_or_else(|| "(no response)".into());
                 println!("\nasst ({iters} iter)> {response}");
                 history.push(("user".into(), input.to_string()));
                 history.push(("asst".into(), response));
             }
-            Ok(Outcome::BudgetExhausted { iters }) => {
-                eprintln!("\nasst> ✗ ran out of budget after {iters} iterations.");
+            Ok(Outcome::BudgetExhausted { iters, last_text, tools_called, usage, .. }) => {
+                eprintln!("\nasst> ✗ budget out after {iters} iter, {tools_called} tools, \
+                           {}/{} tok", usage.input_tokens, usage.output_tokens);
+                if let Some(t) = last_text {
+                    println!("\nasst (partial)> {t}");
+                    history.push(("user".into(), input.to_string()));
+                    history.push(("asst".into(), t));
+                }
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),
         }

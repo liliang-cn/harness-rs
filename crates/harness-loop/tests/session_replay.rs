@@ -93,7 +93,7 @@ async fn replay_reproduces_original_outcome() {
         .await
         .unwrap();
     let (orig_text, orig_iters) = match &original {
-        Outcome::Done { text, iters } => (text.clone(), *iters),
+        Outcome::Done { text, iters, .. } => (text.clone(), *iters),
         other => panic!("expected Done, got {other:?}"),
     };
 
@@ -109,7 +109,7 @@ async fn replay_reproduces_original_outcome() {
         .unwrap();
 
     match replayed {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             assert_eq!(text, orig_text, "replay diverged on final text");
             assert_eq!(iters, orig_iters, "replay diverged on iteration count");
         }

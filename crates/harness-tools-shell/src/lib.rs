@@ -58,9 +58,75 @@ fn check_safe_args(program: &str, args: &[String]) -> Result<(), String> {
             Some(s) => Err(format!("`git {s}` is not in the read-only subcommand list")),
             None => Err("git needs a subcommand".into()),
         },
+        // Language tool-chain inspectors: `--version`, `info`, `list`, etc.
+        // are universally safe; install/publish/run are NOT (use shell_exec).
+        "npm" | "pnpm" | "yarn" | "bun" => match args.first().map(String::as_str) {
+            Some("ls" | "list" | "view" | "info" | "config" | "outdated" | "audit"
+                 | "doctor" | "search" | "ping" | "whoami" | "--version" | "-v") => Ok(()),
+            Some("install" | "i" | "add" | "uninstall" | "remove" | "rm"
+                 | "publish" | "pack" | "run" | "exec" | "dlx" | "create"
+                 | "link" | "unlink" | "version" | "deprecate" | "owner"
+                 | "login" | "logout" | "init") =>
+                Err(format!("`{program} {}` mutates state; use shell_exec", args[0])),
+            Some(s) => Err(format!("`{program} {s}` not in shell_read allowlist")),
+            None    => Err(format!("`{program}` needs a subcommand")),
+        },
+        "python" | "python3" | "uv" | "pip" | "pip3" => match args.first().map(String::as_str) {
+            // Read-only enquiry forms only.
+            Some("--version" | "-V") => Ok(()),
+            // `pip list / show / check / config get` are read; install/uninstall/wheel are NOT.
+            Some("list" | "show" | "check" | "freeze" | "config" | "search" | "index"
+                 | "--help") if program.starts_with("pip") => {
+                if args[0] == "config"
+                    && args.iter().skip(1).any(|a| matches!(a.as_str(), "set" | "unset" | "edit")) {
+                    Err("`pip config set/unset/edit` mutates state".into())
+                } else { Ok(()) }
+            }
+            // Reject everything else for python/uv — `python -c` and `python script.py` execute arbitrary code.
+            Some(_s) => Err(format!(
+                "`{program}` runs arbitrary code via shell_read — use shell_exec or wrap in a Rust tool"
+            )),
+            None => Err(format!("`{program}` needs a subcommand")),
+        },
+        "node" | "deno" | "bun" if false => unreachable!(), // covered below for node/deno separately
+        "node" | "deno" => match args.first().map(String::as_str) {
+            Some("--version" | "-v") => Ok(()),
+            _ => Err(format!("`{program}` evaluates arbitrary code — use shell_exec")),
+        },
+        "go" => match args.first().map(String::as_str) {
+            Some("version" | "env" | "list" | "vet" | "doc" | "fmt" | "mod") => {
+                if args[0] == "mod"
+                    && args.iter().skip(1).any(|a| matches!(a.as_str(), "init" | "tidy" | "edit" | "download" | "vendor")) {
+                    Err("`go mod init/tidy/...` mutates state".into())
+                } else { Ok(()) }
+            }
+            Some("test" | "build" | "run" | "install" | "get" | "generate") =>
+                Err(format!("`go {}` builds/installs; use shell_exec", args[0])),
+            Some(s) => Err(format!("`go {s}` not in shell_read allowlist")),
+            None    => Err("go needs a subcommand".into()),
+        },
+        "make" => match args.first().map(String::as_str) {
+            Some("--version" | "-n" | "--dry-run") => Ok(()),
+            _ => Err("`make` runs arbitrary targets — use shell_exec".into()),
+        },
+        "docker" | "podman" | "kubectl" => match args.first().map(String::as_str) {
+            // Read-only container/k8s inspection.
+            Some("ps" | "images" | "version" | "info" | "history" | "inspect"
+                 | "logs" | "stats" | "top" | "port" | "diff" | "search") => Ok(()),
+            Some("get" | "describe" | "explain" | "config" | "version" | "api-resources"
+                 | "api-versions" | "cluster-info" | "top" | "events") if program == "kubectl" => {
+                if args[0] == "config"
+                    && args.iter().skip(1).any(|a| matches!(a.as_str(), "set" | "set-cluster" | "set-context" | "delete-context" | "use-context")) {
+                    Err("`kubectl config set/...` mutates state".into())
+                } else { Ok(()) }
+            }
+            Some(s) => Err(format!("`{program} {s}` not in shell_read allowlist")),
+            None    => Err(format!("`{program}` needs a subcommand")),
+        },
         // Pure read commands — no arg filter beyond not allowing -exec
         "ls" | "pwd" | "rustc" | "rustup" | "rg" | "fd" | "wc"
-        | "head" | "tail" | "cat" | "grep" => {
+        | "head" | "tail" | "cat" | "grep" | "tree" | "stat" | "file"
+        | "du" | "df" | "ps" | "uname" | "hostname" | "date" | "env" | "which" | "whereis" => {
             // Block xargs-style execution hand-offs.
             if args.iter().any(|a| a.contains("-exec") || a.contains("--exec")) {
                 Err(format!("`{program}` with -exec is not allowed via shell_read"))
@@ -85,7 +151,13 @@ fn check_safe_args(program: &str, args: &[String]) -> Result<(), String> {
 /// Programs that pass the program-name gate (the args are still validated per-program).
 const READ_PROGRAMS: &[&str] = &[
     "cargo", "git", "ls", "pwd", "rustc", "rustup", "rg", "fd",
-    "wc", "find", "head", "tail", "cat", "grep",
+    "wc", "find", "head", "tail", "cat", "grep", "tree", "stat", "file",
+    "du", "df", "ps", "uname", "hostname", "date", "env", "which", "whereis",
+    "npm", "pnpm", "yarn", "bun",
+    "python", "python3", "uv", "pip", "pip3",
+    "node", "deno",
+    "go", "make",
+    "docker", "podman", "kubectl",
 ];
 
 static SHELL_READ_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {

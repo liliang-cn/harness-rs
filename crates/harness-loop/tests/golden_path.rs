@@ -189,7 +189,7 @@ async fn golden_path_writes_correct_file_after_sensor_auto_fix() {
 
     // Outcome shape: text terminates the loop on iter 3.
     match outcome {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             assert_eq!(iters, 3, "expected 3 iterations (read, edit, finalize)");
             assert!(text.as_deref().unwrap_or("").contains("done"));
         }

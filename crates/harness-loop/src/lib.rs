@@ -26,13 +26,29 @@ use harness_core::{
 use harness_hooks::HookBus;
 use std::sync::Arc;
 
-/// Where a run finished.
+/// Where a run finished. Marked `#[non_exhaustive]` so future fields don't break
+/// downstream matches — always include `..` when destructuring.
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Model returned text with no tool calls.
-    Done { text: Option<String>, iters: u32 },
-    /// Policy budget exhausted.
-    BudgetExhausted { iters: u32 },
+    /// Model returned text with no tool calls (natural end).
+    #[non_exhaustive]
+    Done {
+        text:          Option<String>,
+        iters:         u32,
+        tools_called:  u32,
+        usage:         harness_core::Usage,
+    },
+    /// Policy budget exhausted before the model stopped requesting tools.
+    /// Carries everything we know so the caller can recover partial work
+    /// (saved notes, files written by tools, the last assistant text, etc.)
+    /// instead of seeing a single bare "budget out" string.
+    #[non_exhaustive]
+    BudgetExhausted {
+        iters:         u32,
+        last_text:     Option<String>,
+        tools_called:  u32,
+        usage:         harness_core::Usage,
+    },
 }
 
 /// The agent loop.
@@ -134,6 +150,11 @@ impl<M: Model> AgentLoop<M> {
             blocks: vec![Block::Text(ctx.task.description.clone())],
         });
 
+        // Running totals — surface to caller even on BudgetExhausted.
+        let mut tools_called: u32 = 0;
+        let mut total_usage = harness_core::Usage::default();
+        let mut last_text: Option<String> = None;
+
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
 
@@ -148,12 +169,22 @@ impl<M: Model> AgentLoop<M> {
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
             let out = self.model.complete(&ctx).await?;
             self.hooks.fire(&Event::PostModel { out: &out }, world);
+            // Accumulate usage even if the run later exhausts budget.
+            total_usage.input_tokens        += out.usage.input_tokens;
+            total_usage.output_tokens       += out.usage.output_tokens;
+            total_usage.cached_input_tokens += out.usage.cached_input_tokens;
+            if let Some(t) = &out.text { last_text = Some(t.clone()); }
             ctx.push_model_output(&out);
 
             if out.tool_calls.is_empty() {
                 self.hooks.fire(&Event::TaskCompleted, world);
                 self.hooks.fire(&Event::SessionEnd, world);
-                return Ok(Outcome::Done { text: out.text, iters: iter + 1 });
+                return Ok(Outcome::Done {
+                    text: out.text,
+                    iters: iter + 1,
+                    tools_called,
+                    usage: total_usage,
+                });
             }
 
             for call in &out.tool_calls {
@@ -188,6 +219,7 @@ impl<M: Model> AgentLoop<M> {
                         trace: None,
                     },
                 };
+                tools_called += 1;
                 self.hooks.fire(&Event::PostToolUse { action: &action, result: &result }, world);
 
                 ctx.history.push(Turn {
@@ -232,7 +264,12 @@ impl<M: Model> AgentLoop<M> {
             }
         }
         self.hooks.fire(&Event::SessionEnd, world);
-        Ok(Outcome::BudgetExhausted { iters: ctx.policy.max_iters })
+        Ok(Outcome::BudgetExhausted {
+            iters: ctx.policy.max_iters,
+            last_text,
+            tools_called,
+            usage: total_usage,
+        })
     }
 }
 

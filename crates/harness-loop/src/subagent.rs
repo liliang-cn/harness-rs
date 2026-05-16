@@ -87,13 +87,13 @@ impl<M: Model> Subagent<M> {
         let task = self.spec.task.clone();
         let outcome = self.loop_.run_with_max_iters(task, world, max).await?;
         let report = match outcome {
-            Outcome::Done { text, iters } => SubagentReport {
+            Outcome::Done { text, iters, .. } => SubagentReport {
                 name,
                 status: SubagentStatus::Done,
                 text,
                 iters,
             },
-            Outcome::BudgetExhausted { iters } => SubagentReport {
+            Outcome::BudgetExhausted { iters, .. } => SubagentReport {
                 name,
                 status: SubagentStatus::Blocked,
                 text: None,
