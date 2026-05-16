@@ -3,11 +3,26 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.3
+
+Re-publish of the 0.0.2 feature set so that every workspace crate ships
+consistent code. 0.0.2 went out in stages, and several crates landed
+on crates.io before the `PreAutoFix`/`PostAutoFix` events were added
+to `harness-rs-core`. Downstream consumers that bumped a single crate
+to 0.0.2 could hit `error[E0599]: no variant named PreAutoFix`. 0.0.3
+fixes that by re-publishing every crate at the same source revision.
+No new features — depend on 0.0.3 over 0.0.2 if you want any of the
+"0.0.2" CHANGELOG entries below to actually be present.
+
 ## 0.0.2
 
 The first version anyone outside this checkout should depend on. Adds a
 proper user-profile mechanism, daemon scheduler, retry/backoff in the model
 adapters, and closes the security holes from the self-audit.
+
+**Known issue:** published in stages; crates published before
+`PreAutoFix`/`PostAutoFix` were added to `harness-rs-core` are missing
+those events. Use 0.0.3 instead.
 
 ### Added
 
@@ -144,6 +159,7 @@ mechanism, daemon, retry, or any of the audit fixes above. Prefer 0.0.2.
   `mcp serve`.
 - 92 unit / integration tests passing.
 
-[Unreleased]: https://github.com/liliang-cn/harness-rs/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/liliang-cn/harness-rs/compare/v0.0.3...HEAD
+[0.0.3]:      https://github.com/liliang-cn/harness-rs/compare/v0.0.2...v0.0.3
 [0.0.2]:      https://github.com/liliang-cn/harness-rs/compare/v0.0.1...v0.0.2
 [0.0.1]:      https://github.com/liliang-cn/harness-rs/releases/tag/v0.0.1
