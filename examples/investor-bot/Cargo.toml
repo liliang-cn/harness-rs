@@ -24,6 +24,7 @@ serde           = { workspace = true }
 serde_json      = { workspace = true }
 clap            = { workspace = true }
 chrono          = { workspace = true }
+chrono-tz       = "0.10"
 uuid            = { version = "1", features = ["v4"] }
 reqwest         = { workspace = true }
 scraper         = "0.20"

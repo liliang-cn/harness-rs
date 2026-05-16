@@ -164,26 +164,32 @@ impl Model for OpenAiCompat {
 
         let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
         tracing::debug!(?req, "openai-compat request");
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.cfg.api_key)
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| ModelError::Transport(format!("send: {e}")))?;
-
-        let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| ModelError::Transport(format!("body: {e}")))?;
-        if !status.is_success() {
-            return Err(ModelError::Transport(format!(
-                "HTTP {status}: {}",
-                String::from_utf8_lossy(&bytes)
-            )));
-        }
+        let bytes = crate::retry::with_retry("openai-compat:complete", || async {
+            let resp = self
+                .client
+                .post(&url)
+                .bearer_auth(&self.cfg.api_key)
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
+            let status = resp.status();
+            let bytes = resp.bytes().await
+                .map_err(|e| crate::retry::Retryable::transient(format!("body: {e}")))?;
+            if !status.is_success() {
+                // 5xx + 429 → retryable, other 4xx → permanent
+                let body = String::from_utf8_lossy(&bytes).to_string();
+                let msg  = format!("HTTP {status}: {body}");
+                return Err(if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    crate::retry::Retryable::transient(msg)
+                } else {
+                    crate::retry::Retryable::permanent(msg)
+                });
+            }
+            Ok(bytes)
+        })
+        .await
+        .map_err(ModelError::Transport)?;
         let parsed: ChatResponse = serde_json::from_slice(&bytes).map_err(|e| {
             ModelError::Invalid(format!(
                 "parse: {e}; body: {}",
