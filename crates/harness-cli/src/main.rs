@@ -78,7 +78,7 @@ enum SkillsCmd {
     List {
         dir: PathBuf,
     },
-    /// Export every registered skill (filesystem + #[skill] macro) to a
+    /// Export every registered skill (filesystem + `#[skill]` macro) to a
     /// spec-compliant directory tree that Claude Code / Cursor / Codex can
     /// consume.
     Export {
