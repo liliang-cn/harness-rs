@@ -25,6 +25,11 @@ pub struct ModelOutput {
     pub tool_calls:  Vec<ToolCall>,
     pub usage:       Usage,
     pub stop_reason: StopReason,
+    /// Provider-specific reasoning trace (DeepSeek `reasoning_content`,
+    /// Anthropic `thinking` blocks). Pushed back to the API verbatim on
+    /// subsequent calls; required by providers that gate on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning:   Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -69,6 +69,7 @@ fn block_chars(b: &Block) -> usize {
         Block::ToolCall { call_id, name, args } => call_id.len() + name.len() + args.to_string().len(),
         Block::ToolResult { call_id, content } => call_id.len() + content.to_string().len(),
         Block::Feedback(signals) => signals.iter().map(|s| s.message.len() + s.agent_hint.as_ref().map_or(0, String::len)).sum(),
+        Block::Reasoning(s) => s.len(),
     }
 }
 
@@ -210,6 +211,7 @@ fn auto_compact(ctx: &mut Context) {
                 Block::FileRef { .. }     => "file_ref",
                 Block::Skill { .. }       => "skill",
                 Block::Feedback(_)        => "feedback",
+                Block::Reasoning(_)       => "reasoning",
             };
             *counts.entry(key).or_insert(0u32) += 1;
         }

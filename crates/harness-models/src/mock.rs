@@ -28,6 +28,7 @@ pub struct MockResponse {
     pub stop_reason: StopReason,
     pub input_tokens:  u32,
     pub output_tokens: u32,
+    pub reasoning:   Option<String>,
 }
 
 impl MockResponse {
@@ -39,6 +40,7 @@ impl MockResponse {
             stop_reason: StopReason::EndTurn,
             input_tokens:  0,
             output_tokens: 0,
+            reasoning: None,
         }
     }
 
@@ -52,6 +54,7 @@ impl MockResponse {
             stop_reason: StopReason::ToolUse,
             input_tokens:  0,
             output_tokens: 0,
+            reasoning: None,
         }
     }
 
@@ -72,6 +75,7 @@ impl MockResponse {
             stop_reason: StopReason::ToolUse,
             input_tokens:  0,
             output_tokens: 0,
+            reasoning: None,
         }
     }
 
@@ -195,6 +199,7 @@ impl Model for MockModel {
                 output_tokens:       resp.output_tokens,
                 cached_input_tokens: 0,
             },
+            reasoning: resp.reasoning.clone(),
         })
     }
 
@@ -235,6 +240,7 @@ fn snapshot_history(ctx: &Context) -> Vec<HistorySnapshot> {
                     Block::FileRef { path, .. } => ("file-ref", path.clone()),
                     Block::Skill { name, .. }   => ("skill", name.clone()),
                     Block::Feedback(s)          => ("feedback", format!("{} signal(s)", s.len())),
+                    Block::Reasoning(s)         => ("reasoning", s.clone()),
                 };
                 kinds.push(kind);
                 texts.push(text);
