@@ -17,12 +17,22 @@ use std::time::Duration;
 /// Carry the "is this worth retrying?" bit alongside the error message.
 #[derive(Debug)]
 pub struct Retryable {
-    pub message:   String,
+    pub message: String,
     pub transient: bool,
 }
 impl Retryable {
-    pub fn transient(msg: impl Into<String>) -> Self { Self { message: msg.into(), transient: true } }
-    pub fn permanent(msg: impl Into<String>) -> Self { Self { message: msg.into(), transient: false } }
+    pub fn transient(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            transient: true,
+        }
+    }
+    pub fn permanent(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            transient: false,
+        }
+    }
 }
 
 /// Run `f` up to 4 times (1 initial + 3 retries) on transient failures.
@@ -30,11 +40,11 @@ impl Retryable {
 /// `label` shows up in tracing for grep-ability.
 pub async fn with_retry<F, Fut, T>(label: &'static str, mut f: F) -> Result<T, String>
 where
-    F:   FnMut() -> Fut,
+    F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, Retryable>>,
 {
     let mut attempt = 0u32;
-    let mut delay   = Duration::from_secs(1);
+    let mut delay = Duration::from_secs(1);
     loop {
         attempt += 1;
         match f().await {
@@ -65,8 +75,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
     async fn permanent_does_not_retry() {
@@ -78,7 +88,8 @@ mod tests {
                 c.fetch_add(1, Ordering::SeqCst);
                 Err::<(), _>(Retryable::permanent("nope"))
             }
-        }).await;
+        })
+        .await;
         assert!(r.is_err());
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
@@ -94,10 +105,14 @@ mod tests {
             let c = c.clone();
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst) + 1;
-                if n < 3 { Err(Retryable::transient(format!("flap {n}"))) }
-                else { Ok(42) }
+                if n < 3 {
+                    Err(Retryable::transient(format!("flap {n}")))
+                } else {
+                    Ok(42)
+                }
             }
-        }).await;
+        })
+        .await;
         assert_eq!(r.unwrap(), 42);
         assert_eq!(count.load(Ordering::SeqCst), 3);
     }
@@ -112,7 +127,8 @@ mod tests {
                 c.fetch_add(1, Ordering::SeqCst);
                 Err(Retryable::transient("always"))
             }
-        }).await;
+        })
+        .await;
         assert!(r.is_err());
         assert_eq!(count.load(Ordering::SeqCst), 4); // 1 initial + 3 retries
     }

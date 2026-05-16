@@ -12,7 +12,7 @@ use harness_daemon::{Daemon, DaemonConfig};
 #[derive(Parser, Debug)]
 #[command(
     name = "harness-daemon",
-    about = "Scheduled-job runner for the harness-rs ecosystem.",
+    about = "Scheduled-job runner for the harness-rs ecosystem."
 )]
 struct Cli {
     /// Path to the TOML config (default: ~/.config/harness/daemon.toml).
@@ -54,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
 
     let src = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
-    let cfg: DaemonConfig = toml::from_str(&src)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
+    let cfg: DaemonConfig =
+        toml::from_str(&src).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
     let daemon = Daemon::from_config(cfg)?;
 
     if cli.dry_run {

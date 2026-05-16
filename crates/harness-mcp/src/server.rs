@@ -7,19 +7,19 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 pub struct McpServer {
-    tools:    HashMap<String, Arc<dyn Tool>>,
-    skills:   HashMap<String, Arc<dyn Skill>>,   // ← new: exposed as MCP resources
-    name:     String,
-    version:  String,
+    tools: HashMap<String, Arc<dyn Tool>>,
+    skills: HashMap<String, Arc<dyn Skill>>, // ← new: exposed as MCP resources
+    name: String,
+    version: String,
 }
 
 impl McpServer {
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
-            tools:    HashMap::new(),
-            skills:   HashMap::new(),
-            name:     name.into(),
-            version:  version.into(),
+            tools: HashMap::new(),
+            skills: HashMap::new(),
+            name: name.into(),
+            version: version.into(),
         }
     }
 
@@ -58,7 +58,9 @@ impl McpServer {
         let mut writer = stdout;
 
         while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             let resp = self.handle_line(&line, world).await;
             let json = serde_json::to_string(&resp)?;
             writer.write_all(json.as_bytes()).await?;
@@ -73,7 +75,11 @@ impl McpServer {
         let req: JsonRpcRequest = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => {
-                return error_response(serde_json::Value::Null, ERR_PARSE, format!("parse error: {e}"));
+                return error_response(
+                    serde_json::Value::Null,
+                    ERR_PARSE,
+                    format!("parse error: {e}"),
+                );
             }
         };
         if req.jsonrpc != "2.0" {
@@ -86,13 +92,13 @@ impl McpServer {
         let id = req.id.unwrap_or(serde_json::Value::Null);
 
         match req.method.as_str() {
-            "initialize"      => self.handle_initialize(id),
-            "ping"            => ok_response(id, serde_json::json!({})),
-            "tools/list"      => self.handle_tools_list(id),
-            "tools/call"      => self.handle_tools_call(id, req.params, world).await,
-            "resources/list"  => self.handle_resources_list(id),
-            "resources/read"  => self.handle_resources_read(id, req.params),
-            "prompts/list"    => self.handle_prompts_list(id),
+            "initialize" => self.handle_initialize(id),
+            "ping" => ok_response(id, serde_json::json!({})),
+            "tools/list" => self.handle_tools_list(id),
+            "tools/call" => self.handle_tools_call(id, req.params, world).await,
+            "resources/list" => self.handle_resources_list(id),
+            "resources/read" => self.handle_resources_read(id, req.params),
+            "prompts/list" => self.handle_prompts_list(id),
             other => error_response(
                 id,
                 ERR_METHOD_NOT_FOUND,
@@ -105,16 +111,25 @@ impl McpServer {
         let result = InitializeResult {
             protocol_version: "2025-06-18".into(),
             capabilities: Capabilities {
-                tools:     ToolsCapability { list_changed: false },
+                tools: ToolsCapability {
+                    list_changed: false,
+                },
                 // Advertise resources only when we actually have skills mounted —
                 // hosts that see an empty resource list still send list calls.
-                resources: if self.skills.is_empty() { None } else {
-                    Some(ResourcesCapability { list_changed: false, subscribe: false })
+                resources: if self.skills.is_empty() {
+                    None
+                } else {
+                    Some(ResourcesCapability {
+                        list_changed: false,
+                        subscribe: false,
+                    })
                 },
-                prompts:   Some(PromptsCapability { list_changed: false }),
+                prompts: Some(PromptsCapability {
+                    list_changed: false,
+                }),
             },
             server_info: ServerInfo {
-                name:    self.name.clone(),
+                name: self.name.clone(),
                 version: self.version.clone(),
             },
         };
@@ -128,34 +143,47 @@ impl McpServer {
             .map(|s| {
                 let m = s.manifest();
                 ResourceDescriptor {
-                    uri:         format!("harness://skill/{}", m.name),
-                    name:        m.name.clone(),
+                    uri: format!("harness://skill/{}", m.name),
+                    name: m.name.clone(),
                     description: Some(m.description.clone()),
-                    mime_type:   Some("text/markdown".into()),
+                    mime_type: Some("text/markdown".into()),
                 }
             })
             .collect();
         resources.sort_by(|a, b| a.name.cmp(&b.name));
-        ok_response(id, serde_json::to_value(ResourcesListResult { resources }).unwrap())
+        ok_response(
+            id,
+            serde_json::to_value(ResourcesListResult { resources }).unwrap(),
+        )
     }
 
-    fn handle_resources_read(&self, id: serde_json::Value, params: serde_json::Value) -> JsonRpcResponse {
+    fn handle_resources_read(
+        &self,
+        id: serde_json::Value,
+        params: serde_json::Value,
+    ) -> JsonRpcResponse {
         let p: ReadResourceParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return error_response(id, ERR_INVALID_PARAMS, e.to_string()),
         };
         let Some(name) = p.uri.strip_prefix("harness://skill/") else {
-            return error_response(id, ERR_INVALID_PARAMS,
-                format!("unsupported URI scheme: {} (expected harness://skill/<name>)", p.uri));
+            return error_response(
+                id,
+                ERR_INVALID_PARAMS,
+                format!(
+                    "unsupported URI scheme: {} (expected harness://skill/<name>)",
+                    p.uri
+                ),
+            );
         };
         let Some(skill) = self.skills.get(name) else {
             return error_response(id, ERR_METHOD_NOT_FOUND, format!("no skill named `{name}`"));
         };
         let result = ReadResourceResult {
             contents: vec![ResourceContent {
-                uri:       p.uri.clone(),
+                uri: p.uri.clone(),
                 mime_type: "text/markdown".into(),
-                text:      skill.body().into_owned(),
+                text: skill.body().into_owned(),
             }],
         };
         ok_response(id, serde_json::to_value(result).unwrap())
@@ -164,7 +192,10 @@ impl McpServer {
     fn handle_prompts_list(&self, id: serde_json::Value) -> JsonRpcResponse {
         // We don't ship pre-baked prompts yet; return an empty list so hosts
         // that probe this method get a clean answer instead of method-not-found.
-        ok_response(id, serde_json::to_value(PromptsListResult { prompts: vec![] }).unwrap())
+        ok_response(
+            id,
+            serde_json::to_value(PromptsListResult { prompts: vec![] }).unwrap(),
+        )
     }
 
     fn handle_tools_list(&self, id: serde_json::Value) -> JsonRpcResponse {
@@ -174,8 +205,8 @@ impl McpServer {
             .map(|t| {
                 let s = t.schema();
                 ToolDescriptor {
-                    name:         s.name.clone(),
-                    description:  s.description.clone(),
+                    name: s.name.clone(),
+                    description: s.description.clone(),
                     input_schema: s.input.clone(),
                 }
             })
@@ -195,12 +226,16 @@ impl McpServer {
             Err(e) => return error_response(id, ERR_INVALID_PARAMS, e.to_string()),
         };
         let Some(tool) = self.tools.get(&p.name).cloned() else {
-            return error_response(id, ERR_METHOD_NOT_FOUND, format!("unknown tool: {}", p.name));
+            return error_response(
+                id,
+                ERR_METHOD_NOT_FOUND,
+                format!("unknown tool: {}", p.name),
+            );
         };
         let action = Action {
-            tool:    p.name.clone(),
+            tool: p.name.clone(),
             call_id: format!("mcp_{}_{}", p.name, world.clock.now_ms()),
-            args:    p.arguments.clone(),
+            args: p.arguments.clone(),
         };
         match tool.invoke(action.args.clone(), world).await {
             Ok(r) => {
@@ -216,7 +251,9 @@ impl McpServer {
             }
             Err(e) => {
                 let result = CallToolResult {
-                    content: vec![ContentBlock::Text { text: e.to_string() }],
+                    content: vec![ContentBlock::Text {
+                        text: e.to_string(),
+                    }],
                     is_error: true,
                 };
                 ok_response(id, serde_json::to_value(result).unwrap())
@@ -226,7 +263,12 @@ impl McpServer {
 }
 
 fn ok_response(id: serde_json::Value, result: serde_json::Value) -> JsonRpcResponse {
-    JsonRpcResponse { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+    JsonRpcResponse {
+        jsonrpc: "2.0".into(),
+        id,
+        result: Some(result),
+        error: None,
+    }
 }
 
 fn error_response(id: serde_json::Value, code: i32, message: String) -> JsonRpcResponse {
@@ -234,7 +276,11 @@ fn error_response(id: serde_json::Value, code: i32, message: String) -> JsonRpcR
         jsonrpc: "2.0".into(),
         id,
         result: None,
-        error: Some(JsonRpcError { code, message, data: None }),
+        error: Some(JsonRpcError {
+            code,
+            message,
+            data: None,
+        }),
     }
 }
 
@@ -268,7 +314,8 @@ mod tests {
         let req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = s.handle_line(req, &mut world).await;
         let names: Vec<String> = resp.result.unwrap()["tools"]
-            .as_array().unwrap()
+            .as_array()
+            .unwrap()
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
@@ -282,17 +329,17 @@ mod tests {
             "harness-mcp-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&td).unwrap();
         std::fs::write(td.join("a.txt"), "hello").unwrap();
         let mut world = default_world(td.clone());
 
         let s = srv();
-        let req = format!(
-            r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"read_file","arguments":{{"path":"a.txt"}}}}}}"#
-        );
-        let resp = s.handle_line(&req, &mut world).await;
+        let req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a.txt"}}}"#;
+        let resp = s.handle_line(req, &mut world).await;
         assert!(resp.error.is_none(), "{:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["isError"], false);
@@ -332,26 +379,29 @@ mod tests {
     /// A tiny in-memory Skill impl for resource tests.
     struct DummySkill {
         manifest: harness_core::SkillManifest,
-        body:     &'static str,
+        body: &'static str,
     }
     impl harness_core::Skill for DummySkill {
-        fn manifest(&self) -> &harness_core::SkillManifest { &self.manifest }
-        fn body(&self) -> std::borrow::Cow<'_, str> { std::borrow::Cow::Borrowed(self.body) }
+        fn manifest(&self) -> &harness_core::SkillManifest {
+            &self.manifest
+        }
+        fn body(&self) -> std::borrow::Cow<'_, str> {
+            std::borrow::Cow::Borrowed(self.body)
+        }
     }
 
     fn srv_with_skill() -> McpServer {
-        McpServer::new("harness-mcp-test", "0.0.2")
-            .with_skill(Arc::new(DummySkill {
-                manifest: harness_core::SkillManifest {
-                    name:          "demo".into(),
-                    description:   "A tiny test skill.".into(),
-                    license:       None,
-                    compatibility: None,
-                    metadata:      Default::default(),
-                    allowed_tools: None,
-                },
-                body: "# Demo\n\nThis is the SKILL.md body.",
-            }))
+        McpServer::new("harness-mcp-test", "0.0.2").with_skill(Arc::new(DummySkill {
+            manifest: harness_core::SkillManifest {
+                name: "demo".into(),
+                description: "A tiny test skill.".into(),
+                license: None,
+                compatibility: None,
+                metadata: Default::default(),
+                allowed_tools: None,
+            },
+            body: "# Demo\n\nThis is the SKILL.md body.",
+        }))
     }
 
     #[tokio::test]
@@ -361,7 +411,10 @@ mod tests {
         let req = r#"{"jsonrpc":"2.0","id":6,"method":"resources/list"}"#;
         let resp = s.handle_line(req, &mut world).await;
         assert!(resp.error.is_none(), "{:?}", resp.error);
-        let resources = resp.result.unwrap()["resources"].as_array().unwrap().clone();
+        let resources = resp.result.unwrap()["resources"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0]["uri"], "harness://skill/demo");
         assert_eq!(resources[0]["mimeType"], "text/markdown");
@@ -374,7 +427,10 @@ mod tests {
         let req = r#"{"jsonrpc":"2.0","id":7,"method":"resources/read","params":{"uri":"harness://skill/demo"}}"#;
         let resp = s.handle_line(req, &mut world).await;
         assert!(resp.error.is_none(), "{:?}", resp.error);
-        let text = resp.result.unwrap()["contents"][0]["text"].as_str().unwrap().to_string();
+        let text = resp.result.unwrap()["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(text.contains("SKILL.md body"));
     }
 

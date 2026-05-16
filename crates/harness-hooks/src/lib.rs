@@ -20,7 +20,9 @@ pub struct HookBus {
 }
 
 impl HookBus {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Pull in every `#[hook]`-registered hook.
     pub fn with_macro_hooks(mut self) -> Self {
@@ -39,8 +41,12 @@ impl HookBus {
         self.hooks.push(h);
     }
 
-    pub fn len(&self) -> usize { self.hooks.len() }
-    pub fn is_empty(&self) -> bool { self.hooks.is_empty() }
+    pub fn len(&self) -> usize {
+        self.hooks.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
 
     /// Fire `ev` through all matching hooks in registration order.
     ///
@@ -59,12 +65,19 @@ impl HookBus {
                 HookOutcome::Inject(s) => injects.push(s),
                 HookOutcome::Mutate(_) => {
                     // Mutation semantics are event-specific and not yet honoured by the runtime.
-                    tracing::debug!(hook = h.name(), event = ev.name(), "hook mutation ignored (not yet wired)");
+                    tracing::debug!(
+                        hook = h.name(),
+                        event = ev.name(),
+                        "hook mutation ignored (not yet wired)"
+                    );
                 }
                 HookOutcome::Allow => {}
                 // HookOutcome is `#[non_exhaustive]`; treat any future variant as Allow.
                 _ => {
-                    tracing::warn!(hook = h.name(), "unrecognised HookOutcome variant — treating as Allow");
+                    tracing::warn!(
+                        hook = h.name(),
+                        "unrecognised HookOutcome variant — treating as Allow"
+                    );
                 }
             }
         }
@@ -83,17 +96,27 @@ mod tests {
 
     struct AlwaysDeny;
     impl Hook for AlwaysDeny {
-        fn name(&self) -> &str { "always-deny" }
-        fn matches(&self, _: &Event<'_>) -> bool { true }
+        fn name(&self) -> &str {
+            "always-deny"
+        }
+        fn matches(&self, _: &Event<'_>) -> bool {
+            true
+        }
         fn fire(&self, _: &Event<'_>, _: &mut World) -> HookOutcome {
-            HookOutcome::Deny { reason: "nope".into() }
+            HookOutcome::Deny {
+                reason: "nope".into(),
+            }
         }
     }
 
     struct Counter(std::sync::atomic::AtomicU32);
     impl Hook for Counter {
-        fn name(&self) -> &str { "counter" }
-        fn matches(&self, _: &Event<'_>) -> bool { true }
+        fn name(&self) -> &str {
+            "counter"
+        }
+        fn matches(&self, _: &Event<'_>) -> bool {
+            true
+        }
         fn fire(&self, _: &Event<'_>, _: &mut World) -> HookOutcome {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             HookOutcome::Allow
@@ -101,33 +124,46 @@ mod tests {
     }
 
     fn mock_world() -> World {
-        use harness_core::{RepoView, Clock, ProcessRunner, ProcessOutput, KvStore};
+        use harness_core::{Clock, KvStore, ProcessOutput, ProcessRunner, RepoView};
         use std::path::Path;
 
         struct NoopClock;
         impl Clock for NoopClock {
-            fn now_ms(&self) -> i64 { 0 }
+            fn now_ms(&self) -> i64 {
+                0
+            }
         }
         struct NoopRunner;
         #[async_trait::async_trait]
         impl ProcessRunner for NoopRunner {
-            async fn exec(&self, _: &str, _: &[&str], _: Option<&Path>) -> std::io::Result<ProcessOutput> {
-                Ok(ProcessOutput { status: 0, stdout: String::new(), stderr: String::new() })
+            async fn exec(
+                &self,
+                _: &str,
+                _: &[&str],
+                _: Option<&Path>,
+            ) -> std::io::Result<ProcessOutput> {
+                Ok(ProcessOutput {
+                    status: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
             }
         }
         struct NoopKv;
         #[async_trait::async_trait]
         impl KvStore for NoopKv {
-            async fn get(&self, _: &str) -> Option<Vec<u8>> { None }
+            async fn get(&self, _: &str) -> Option<Vec<u8>> {
+                None
+            }
             async fn set(&self, _: &str, _: Vec<u8>) {}
             async fn delete(&self, _: &str) {}
         }
 
         World {
-            repo:    RepoView { root: ".".into() },
-            runner:  Arc::new(NoopRunner),
-            clock:   Arc::new(NoopClock),
-            kv:      Arc::new(NoopKv),
+            repo: RepoView { root: ".".into() },
+            runner: Arc::new(NoopRunner),
+            clock: Arc::new(NoopClock),
+            kv: Arc::new(NoopKv),
             profile: harness_core::UserProfile::default(),
         }
     }

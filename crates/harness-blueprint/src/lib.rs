@@ -24,7 +24,7 @@ pub type NodeId = String;
 pub struct NodeOutput {
     pub transition: Transition,
     #[serde(default)]
-    pub data:       serde_json::Value,
+    pub data: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,15 +51,11 @@ pub enum Node {
 }
 
 type BoxedDetermFn = Box<
-    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
-        + Send
-        + Sync,
+    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>> + Send + Sync,
 >;
 
 type BoxedAgentFn = Box<
-    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>>
-        + Send
-        + Sync,
+    dyn for<'a> Fn(&'a mut World) -> BoxFuture<'a, Result<NodeOutput, HarnessError>> + Send + Sync,
 >;
 
 impl Node {
@@ -113,19 +109,21 @@ struct EdgeDef {
 /// Per-node failure policy.
 #[derive(Debug, Clone, Default)]
 struct FailurePolicy {
-    fallback:  Option<NodeId>,
+    fallback: Option<NodeId>,
     retry_cap: u32,
 }
 
 pub struct Blueprint {
-    nodes:    HashMap<NodeId, Node>,
-    edges:    HashMap<NodeId, Vec<EdgeDef>>,
-    failure:  HashMap<NodeId, FailurePolicy>,
-    start:    Option<NodeId>,
+    nodes: HashMap<NodeId, Node>,
+    edges: HashMap<NodeId, Vec<EdgeDef>>,
+    failure: HashMap<NodeId, FailurePolicy>,
+    start: Option<NodeId>,
 }
 
 impl Default for Blueprint {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Blueprint {
@@ -156,7 +154,7 @@ impl Blueprint {
     /// Default ("next") edge from `from` → `to`.
     pub fn edge(mut self, from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
         self.edges.entry(from.into()).or_default().push(EdgeDef {
-            name:   None,
+            name: None,
             target: to.into(),
         });
         self
@@ -170,7 +168,7 @@ impl Blueprint {
         to: impl Into<NodeId>,
     ) -> Self {
         self.edges.entry(from.into()).or_default().push(EdgeDef {
-            name:   Some(name.into()),
+            name: Some(name.into()),
             target: to.into(),
         });
         self
@@ -185,7 +183,10 @@ impl Blueprint {
     ) -> Self {
         self.failure.insert(
             from.into(),
-            FailurePolicy { fallback: Some(fallback.into()), retry_cap },
+            FailurePolicy {
+                fallback: Some(fallback.into()),
+                retry_cap,
+            },
         );
         self
     }
@@ -206,7 +207,7 @@ impl Blueprint {
             })?;
             let result = match node {
                 Node::Deterministic(f) => f(world).await,
-                Node::Agent(f)         => f(world).await,
+                Node::Agent(f) => f(world).await,
             };
             visited.push(current.clone());
             let out = match result {
@@ -229,8 +230,13 @@ impl Blueprint {
                 }
             };
             match out.transition {
-                Transition::Done           => return Ok(BlueprintOutcome { visited, last: out.data }),
-                Transition::Abort(reason)  => return Err(HarnessError::Policy(reason)),
+                Transition::Done => {
+                    return Ok(BlueprintOutcome {
+                        visited,
+                        last: out.data,
+                    });
+                }
+                Transition::Abort(reason) => return Err(HarnessError::Policy(reason)),
                 Transition::Edge(name) => {
                     let next = self
                         .edges
@@ -252,7 +258,12 @@ impl Blueprint {
                         .map(|e| e.target.clone());
                     match next {
                         Some(t) => current = t,
-                        None    => return Ok(BlueprintOutcome { visited, last: out.data }),
+                        None => {
+                            return Ok(BlueprintOutcome {
+                                visited,
+                                last: out.data,
+                            });
+                        }
                     }
                 }
             }
@@ -263,7 +274,7 @@ impl Blueprint {
 #[derive(Debug, Clone)]
 pub struct BlueprintOutcome {
     pub visited: Vec<NodeId>,
-    pub last:    serde_json::Value,
+    pub last: serde_json::Value,
 }
 
 #[cfg(test)]
@@ -271,20 +282,46 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn mk_world() -> World { harness_context::default_world(".") }
+    fn mk_world() -> World {
+        harness_context::default_world(".")
+    }
 
     #[tokio::test]
     async fn linear_chain_runs_in_order() {
         let bp = Blueprint::new()
-            .add("a", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Next, data: json!({"step":"a"}) })
-            })))
-            .add("b", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Next, data: json!({"step":"b"}) })
-            })))
-            .add("c", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Done, data: json!({"step":"c"}) })
-            })))
+            .add(
+                "a",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Next,
+                            data: json!({"step":"a"}),
+                        })
+                    })
+                }),
+            )
+            .add(
+                "b",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Next,
+                            data: json!({"step":"b"}),
+                        })
+                    })
+                }),
+            )
+            .add(
+                "c",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Done,
+                            data: json!({"step":"c"}),
+                        })
+                    })
+                }),
+            )
             .edge("a", "b")
             .edge("b", "c");
         let mut w = mk_world();
@@ -295,49 +332,87 @@ mod tests {
 
     #[tokio::test]
     async fn branch_on_failure_recovers() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts2 = attempts.clone();
         let bp = Blueprint::new()
-            .add("flaky", Node::deterministic(move |_w| {
-                let attempts = attempts2.clone();
-                Box::pin(async move {
-                    let n = attempts.fetch_add(1, Ordering::SeqCst);
-                    if n < 1 {
-                        Err(HarnessError::Other("transient".into()))
-                    } else {
-                        Ok(NodeOutput { transition: Transition::Done, data: json!({}) })
-                    }
-                })
-            }))
-            .add("fallback", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Done, data: json!({"recovered": true}) })
-            })))
+            .add(
+                "flaky",
+                Node::deterministic(move |_w| {
+                    let attempts = attempts2.clone();
+                    Box::pin(async move {
+                        let n = attempts.fetch_add(1, Ordering::SeqCst);
+                        if n < 1 {
+                            Err(HarnessError::Other("transient".into()))
+                        } else {
+                            Ok(NodeOutput {
+                                transition: Transition::Done,
+                                data: json!({}),
+                            })
+                        }
+                    })
+                }),
+            )
+            .add(
+                "fallback",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Done,
+                            data: json!({"recovered": true}),
+                        })
+                    })
+                }),
+            )
             .branch_on_failure("flaky", "fallback", 2);
         let mut w = mk_world();
         let out = bp.run(&mut w).await.unwrap();
         // First attempt failed, second succeeded — we should have visited "flaky" twice.
-        assert_eq!(out.visited.iter().filter(|n| n.as_str() == "flaky").count(), 2);
+        assert_eq!(
+            out.visited.iter().filter(|n| n.as_str() == "flaky").count(),
+            2
+        );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn named_edges_route_via_transition() {
         let bp = Blueprint::new()
-            .add("router", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput {
-                    transition: Transition::Edge("left".into()),
-                    data: json!({}),
-                })
-            })))
-            .add("left",  Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Done, data: json!({"branch":"left"}) })
-            })))
-            .add("right", Node::deterministic(|_w| Box::pin(async move {
-                Ok(NodeOutput { transition: Transition::Done, data: json!({"branch":"right"}) })
-            })))
-            .edge_named("router", "left",  "left")
+            .add(
+                "router",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Edge("left".into()),
+                            data: json!({}),
+                        })
+                    })
+                }),
+            )
+            .add(
+                "left",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Done,
+                            data: json!({"branch":"left"}),
+                        })
+                    })
+                }),
+            )
+            .add(
+                "right",
+                Node::deterministic(|_w| {
+                    Box::pin(async move {
+                        Ok(NodeOutput {
+                            transition: Transition::Done,
+                            data: json!({"branch":"right"}),
+                        })
+                    })
+                }),
+            )
+            .edge_named("router", "left", "left")
             .edge_named("router", "right", "right");
         let mut w = mk_world();
         let out = bp.run(&mut w).await.unwrap();

@@ -16,15 +16,15 @@ pub enum Severity {
 /// A feedback signal from a sensor — **optimised for LLM consumption**.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
-    pub severity:   Severity,
-    pub origin:     String,
+    pub severity: Severity,
+    pub origin: String,
     /// Human-readable description of the problem.
-    pub message:    String,
+    pub message: String,
     /// Direct correction instruction for the model (required if `severity == Block`).
     pub agent_hint: Option<String>,
     /// Computational fix that bypasses the model — applied in `auto_fix` channel.
-    pub auto_fix:   Option<FixPatch>,
-    pub location:   Option<CodeSpan>,
+    pub auto_fix: Option<FixPatch>,
+    pub location: Option<CodeSpan>,
 }
 
 impl Signal {
@@ -35,10 +35,10 @@ impl Signal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeSpan {
-    pub path:     PathBuf,
-    pub line:     u32,
-    pub column:   u32,
-    pub length:   u32,
+    pub path: PathBuf,
+    pub line: u32,
+    pub column: u32,
+    pub length: u32,
 }
 
 /// A direct patch a sensor can apply without going through the model.
@@ -46,11 +46,15 @@ pub struct CodeSpan {
 #[non_exhaustive]
 pub enum FixPatch {
     /// Replace the entire file content.
-    ReplaceFile  { path: PathBuf, content: String },
+    ReplaceFile { path: PathBuf, content: String },
     /// Apply a unified diff.
-    UnifiedDiff  { diff: String },
+    UnifiedDiff { diff: String },
     /// Run a deterministic shell command (e.g. `cargo fmt`).
-    RunCommand   { program: String, args: Vec<String>, cwd: Option<PathBuf> },
+    RunCommand {
+        program: String,
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
+    },
 }
 
 /// A bundle of signals, with helpers for the agent loop.

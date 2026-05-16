@@ -45,8 +45,12 @@ impl SkillRegistry {
         self.by_name.get(name).cloned()
     }
 
-    pub fn len(&self) -> usize { self.by_name.len() }
-    pub fn is_empty(&self) -> bool { self.by_name.is_empty() }
+    pub fn len(&self) -> usize {
+        self.by_name.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Arc<dyn Skill>)> {
         self.by_name.iter().map(|(k, v)| (k.as_str(), v))
     }
@@ -76,9 +80,15 @@ mod tests {
 
     struct Dummy(SkillManifest);
     impl Skill for Dummy {
-        fn manifest(&self) -> &SkillManifest { &self.0 }
-        fn body(&self) -> Cow<'_, str> { Cow::Borrowed("") }
-        fn resources(&self) -> &[Resource] { &[] }
+        fn manifest(&self) -> &SkillManifest {
+            &self.0
+        }
+        fn body(&self) -> Cow<'_, str> {
+            Cow::Borrowed("")
+        }
+        fn resources(&self) -> &[Resource] {
+            &[]
+        }
     }
 
     fn dummy(name: &str, desc: &str) -> Arc<dyn Skill> {

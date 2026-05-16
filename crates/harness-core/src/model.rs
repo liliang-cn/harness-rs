@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 /// sent to the provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
-    pub handle:          String,
-    pub provider:        String,
-    pub model:           String,
-    pub context_window:  u32,
-    pub input_cost_usd_per_million_tokens:  Option<f64>,
+    pub handle: String,
+    pub provider: String,
+    pub model: String,
+    pub context_window: u32,
+    pub input_cost_usd_per_million_tokens: Option<f64>,
     pub output_cost_usd_per_million_tokens: Option<f64>,
     pub supports_tool_use: bool,
     pub supports_streaming: bool,
@@ -21,27 +21,27 @@ pub struct ModelInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelOutput {
-    pub text:        Option<String>,
-    pub tool_calls:  Vec<ToolCall>,
-    pub usage:       Usage,
+    pub text: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Usage,
     pub stop_reason: StopReason,
     /// Provider-specific reasoning trace (DeepSeek `reasoning_content`,
     /// Anthropic `thinking` blocks). Pushed back to the API verbatim on
     /// subsequent calls; required by providers that gate on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning:   Option<String>,
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
-    pub id:    String,
-    pub name:  String,
-    pub args:  serde_json::Value,
+    pub id: String,
+    pub name: String,
+    pub args: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
-    pub input_tokens:  u32,
+    pub input_tokens: u32,
     pub output_tokens: u32,
     pub cached_input_tokens: u32,
 }
@@ -63,8 +63,8 @@ pub enum StopReason {
 pub enum ModelDelta {
     Text(String),
     ToolCallStart { id: String, name: String },
-    ToolCallArgs  { id: String, partial_json: String },
-    ToolCallEnd   { id: String },
+    ToolCallArgs { id: String, partial_json: String },
+    ToolCallEnd { id: String },
     Usage(Usage),
     Stop(StopReason),
 }
@@ -77,7 +77,8 @@ pub trait Model: Send + Sync + 'static {
     async fn stream(
         &self,
         ctx: &Context,
-    ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+    ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError>
+    {
         let out = self.complete(ctx).await?;
         let deltas: Vec<Result<ModelDelta, ModelError>> = out
             .text

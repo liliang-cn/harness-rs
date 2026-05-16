@@ -34,21 +34,31 @@ use std::sync::Arc;
 /// A skill loaded from disk: manifest, full body, and resource index.
 #[derive(Debug, Clone)]
 pub struct FileSkill {
-    manifest:  SkillManifest,
-    body:      String,
+    manifest: SkillManifest,
+    body: String,
     resources: Vec<Resource>,
 }
 
 impl FileSkill {
     pub fn new(manifest: SkillManifest, body: String, resources: Vec<Resource>) -> Self {
-        Self { manifest, body, resources }
+        Self {
+            manifest,
+            body,
+            resources,
+        }
     }
 }
 
 impl Skill for FileSkill {
-    fn manifest(&self) -> &SkillManifest { &self.manifest }
-    fn body(&self) -> Cow<'_, str> { Cow::Borrowed(&self.body) }
-    fn resources(&self) -> &[Resource] { &self.resources }
+    fn manifest(&self) -> &SkillManifest {
+        &self.manifest
+    }
+    fn body(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.body)
+    }
+    fn resources(&self) -> &[Resource] {
+        &self.resources
+    }
 }
 
 /// Load a single skill from `<path>/SKILL.md`, returning an opaque trait object.

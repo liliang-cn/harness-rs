@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 /// agent's `guides` section. No-op when the profile is empty.
 pub struct ProfileGuide;
 
-static PROFILE_GUIDE_ID:    OnceLock<GuideId>    = OnceLock::new();
+static PROFILE_GUIDE_ID: OnceLock<GuideId> = OnceLock::new();
 static PROFILE_GUIDE_SCOPE: OnceLock<GuideScope> = OnceLock::new();
 
 #[async_trait]
@@ -58,8 +58,8 @@ mod tests {
     #[test]
     fn populated_profile_renders_line() {
         let p = UserProfile {
-            name:   Some("李亮".into()),
-            tz:     Some("Asia/Shanghai".into()),
+            name: Some("李亮".into()),
+            tz: Some("Asia/Shanghai".into()),
             locale: Some("zh-CN".into()),
             ..Default::default()
         };

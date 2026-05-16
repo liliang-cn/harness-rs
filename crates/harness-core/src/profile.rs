@@ -47,7 +47,7 @@ impl UserProfile {
         }
         parts.push(match &self.tz {
             Some(z) => format!("tz={z}"),
-            None    => "tz=(system clock)".into(),
+            None => "tz=(system clock)".into(),
         });
         if let Some(l) = &self.locale {
             parts.push(format!("locale={l}"));
@@ -57,7 +57,10 @@ impl UserProfile {
 
     /// Read an `extra` key as a typed value.
     pub fn extra<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        self.extra.get(key).cloned().and_then(|v| serde_json::from_value(v).ok())
+        self.extra
+            .get(key)
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
     }
 
     /// Set an `extra` key, replacing any existing value.

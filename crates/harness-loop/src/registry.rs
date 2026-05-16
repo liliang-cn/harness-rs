@@ -10,7 +10,9 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn insert(&mut self, t: Arc<dyn Tool>) {
         self.tools.insert(t.name().to_string(), t);
@@ -28,11 +30,17 @@ impl ToolRegistry {
         let tool = self
             .tools
             .get(&action.tool)
-            .ok_or_else(|| ToolError::NotFound { name: action.tool.clone() })?
+            .ok_or_else(|| ToolError::NotFound {
+                name: action.tool.clone(),
+            })?
             .clone();
         tool.invoke(action.args.clone(), world).await
     }
 
-    pub fn len(&self) -> usize { self.tools.len() }
-    pub fn is_empty(&self) -> bool { self.tools.is_empty() }
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
 }

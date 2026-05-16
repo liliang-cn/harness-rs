@@ -20,7 +20,9 @@ impl GuideScope {
     pub fn matches(&self, task: &crate::Task) -> bool {
         match self {
             GuideScope::Always => true,
-            GuideScope::TaskMatches(patterns) => patterns.iter().any(|p| task.description.contains(p)),
+            GuideScope::TaskMatches(patterns) => {
+                patterns.iter().any(|p| task.description.contains(p))
+            }
             GuideScope::FilesMatch { .. } => true,
         }
     }

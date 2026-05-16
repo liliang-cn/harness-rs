@@ -10,9 +10,9 @@
 #[doc(hidden)]
 pub mod __export {
     pub use async_trait::async_trait;
+    pub use futures;
     pub use inventory;
     pub use serde_json;
-    pub use futures;
 }
 
 pub mod compactor;

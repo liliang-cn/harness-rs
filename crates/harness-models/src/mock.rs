@@ -23,12 +23,12 @@ use std::sync::Mutex;
 /// One scripted response the mock will return when `complete()` is called.
 #[derive(Debug, Clone)]
 pub struct MockResponse {
-    pub text:        Option<String>,
-    pub tool_calls:  Vec<ToolCall>,
+    pub text: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
     pub stop_reason: StopReason,
-    pub input_tokens:  u32,
+    pub input_tokens: u32,
     pub output_tokens: u32,
-    pub reasoning:   Option<String>,
+    pub reasoning: Option<String>,
 }
 
 impl MockResponse {
@@ -38,7 +38,7 @@ impl MockResponse {
             text: Some(text.into()),
             tool_calls: Vec::new(),
             stop_reason: StopReason::EndTurn,
-            input_tokens:  0,
+            input_tokens: 0,
             output_tokens: 0,
             reasoning: None,
         }
@@ -52,7 +52,7 @@ impl MockResponse {
             text: None,
             tool_calls: vec![ToolCall { id, name, args }],
             stop_reason: StopReason::ToolUse,
-            input_tokens:  0,
+            input_tokens: 0,
             output_tokens: 0,
             reasoning: None,
         }
@@ -73,14 +73,14 @@ impl MockResponse {
             text: None,
             tool_calls,
             stop_reason: StopReason::ToolUse,
-            input_tokens:  0,
+            input_tokens: 0,
             output_tokens: 0,
             reasoning: None,
         }
     }
 
     pub fn with_usage(mut self, input: u32, output: u32) -> Self {
-        self.input_tokens  = input;
+        self.input_tokens = input;
         self.output_tokens = output;
         self
     }
@@ -102,7 +102,7 @@ fn short_hash(name: &str, args: &Value) -> String {
 /// A scriptable, assertable model that runs entirely in-process.
 pub struct MockModel {
     inner: Mutex<MockInner>,
-    name:  String,
+    name: String,
 }
 
 struct MockInner {
@@ -113,20 +113,22 @@ struct MockInner {
 /// What the framework actually sent the model on a given `complete()` call.
 #[derive(Debug, Clone)]
 pub struct RecordedCall {
-    pub tools_available:  Vec<String>,
-    pub history_summary:  Vec<HistorySnapshot>,
+    pub tools_available: Vec<String>,
+    pub history_summary: Vec<HistorySnapshot>,
     pub task_description: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct HistorySnapshot {
-    pub role:    String,
-    pub kinds:   Vec<&'static str>, // "text" | "tool-call" | "tool-result" | …
-    pub texts:   Vec<String>,
+    pub role: String,
+    pub kinds: Vec<&'static str>, // "text" | "tool-call" | "tool-result" | …
+    pub texts: Vec<String>,
 }
 
 impl Default for MockModel {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockModel {
@@ -178,8 +180,7 @@ impl MockModel {
 impl Model for MockModel {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
         let snapshot = snapshot_history(ctx);
-        let tools_available: Vec<String> =
-            ctx.tools.iter().map(|t| t.name.clone()).collect();
+        let tools_available: Vec<String> = ctx.tools.iter().map(|t| t.name.clone()).collect();
 
         let mut guard = self.inner.lock().unwrap();
         guard.calls.push(RecordedCall {
@@ -187,16 +188,19 @@ impl Model for MockModel {
             history_summary: snapshot,
             task_description: ctx.task.description.clone(),
         });
-        let resp = guard.queue.pop_front().unwrap_or_else(|| MockResponse::text(""));
+        let resp = guard
+            .queue
+            .pop_front()
+            .unwrap_or_else(|| MockResponse::text(""));
         drop(guard);
 
         Ok(ModelOutput {
-            text:       resp.text,
+            text: resp.text,
             tool_calls: resp.tool_calls,
             stop_reason: resp.stop_reason,
             usage: Usage {
-                input_tokens:        resp.input_tokens,
-                output_tokens:       resp.output_tokens,
+                input_tokens: resp.input_tokens,
+                output_tokens: resp.output_tokens,
                 cached_input_tokens: 0,
             },
             reasoning: resp.reasoning.clone(),
@@ -205,14 +209,14 @@ impl Model for MockModel {
 
     fn info(&self) -> ModelInfo {
         ModelInfo {
-            handle:                                  self.name.clone(),
-            provider:                                "mock".into(),
-            model:                                   "mock-1".into(),
-            context_window:                          200_000,
-            input_cost_usd_per_million_tokens:       Some(0.0),
-            output_cost_usd_per_million_tokens:      Some(0.0),
-            supports_tool_use:                       true,
-            supports_streaming:                      false,
+            handle: self.name.clone(),
+            provider: "mock".into(),
+            model: "mock-1".into(),
+            context_window: 200_000,
+            input_cost_usd_per_million_tokens: Some(0.0),
+            output_cost_usd_per_million_tokens: Some(0.0),
+            supports_tool_use: true,
+            supports_streaming: false,
         }
     }
 }
@@ -223,26 +227,26 @@ fn snapshot_history(ctx: &Context) -> Vec<HistorySnapshot> {
         .iter()
         .map(|t| {
             let role = match t.role {
-                TurnRole::User      => "user",
+                TurnRole::User => "user",
                 TurnRole::Assistant => "assistant",
-                TurnRole::Tool      => "tool",
-                TurnRole::System    => "system",
-                _                   => "unknown",
+                TurnRole::Tool => "tool",
+                TurnRole::System => "system",
+                _ => "unknown",
             };
             let mut kinds = Vec::new();
             let mut texts = Vec::new();
             for b in &t.blocks {
                 let (kind, text) = match b {
-                    Block::Text(s)       => ("text", s.clone()),
+                    Block::Text(s) => ("text", s.clone()),
                     Block::ToolCall { name, .. } => ("tool-call", name.clone()),
                     Block::ToolResult { call_id, content } => {
                         ("tool-result", format!("{call_id}: {content}"))
                     }
                     Block::FileRef { path, .. } => ("file-ref", path.clone()),
-                    Block::Skill { name, .. }   => ("skill", name.clone()),
-                    Block::Feedback(s)          => ("feedback", format!("{} signal(s)", s.len())),
-                    Block::Reasoning(s)         => ("reasoning", s.clone()),
-                    _                           => ("unknown", String::new()),
+                    Block::Skill { name, .. } => ("skill", name.clone()),
+                    Block::Feedback(s) => ("feedback", format!("{} signal(s)", s.len())),
+                    Block::Reasoning(s) => ("reasoning", s.clone()),
+                    _ => ("unknown", String::new()),
                 };
                 kinds.push(kind);
                 texts.push(text);
@@ -264,13 +268,17 @@ mod tests {
 
     fn ctx() -> Context {
         Context {
-            system:   vec![],
-            guides:   vec![],
-            history:  vec![],
-            task:     Task { description: "t".into(), source: None, deadline: None },
-            policy:   Default::default(),
+            system: vec![],
+            guides: vec![],
+            history: vec![],
+            task: Task {
+                description: "t".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Default::default(),
             metadata: BTreeMap::new(),
-            tools:    vec![],
+            tools: vec![],
         }
     }
 
@@ -280,11 +288,17 @@ mod tests {
             .script(MockResponse::text("first"))
             .script(MockResponse::tool_call("foo", serde_json::json!({})))
             .script(MockResponse::text("third"));
-        assert_eq!(m.complete(&ctx()).await.unwrap().text.as_deref(), Some("first"));
+        assert_eq!(
+            m.complete(&ctx()).await.unwrap().text.as_deref(),
+            Some("first")
+        );
         let r2 = m.complete(&ctx()).await.unwrap();
         assert_eq!(r2.tool_calls.len(), 1);
         assert_eq!(r2.tool_calls[0].name, "foo");
-        assert_eq!(m.complete(&ctx()).await.unwrap().text.as_deref(), Some("third"));
+        assert_eq!(
+            m.complete(&ctx()).await.unwrap().text.as_deref(),
+            Some("third")
+        );
         assert!(m.script_exhausted());
         assert_eq!(m.call_count(), 3);
     }
@@ -302,7 +316,9 @@ mod tests {
         let m = MockModel::new().script(MockResponse::text("ok"));
         let mut c = ctx();
         c.tools = vec![harness_core::ToolSchema {
-            name: "x".into(), description: "y".into(), input: serde_json::json!({}),
+            name: "x".into(),
+            description: "y".into(),
+            input: serde_json::json!({}),
         }];
         let _ = m.complete(&c).await;
         let calls = m.calls();

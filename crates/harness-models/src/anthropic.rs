@@ -17,10 +17,10 @@ use serde_json::Value as JsonValue;
 use std::time::Duration;
 
 pub struct AnthropicNative {
-    cfg:            LlmConfig,
-    client:         reqwest::Client,
+    cfg: LlmConfig,
+    client: reqwest::Client,
     context_window: u32,
-    api_version:    String,
+    api_version: String,
 }
 
 impl AnthropicNative {
@@ -33,7 +33,7 @@ impl AnthropicNative {
             cfg,
             client,
             context_window: 200_000,
-            api_version:    "2023-06-01".into(),
+            api_version: "2023-06-01".into(),
         }
     }
 
@@ -63,7 +63,9 @@ impl AnthropicNative {
         self
     }
 
-    pub fn config(&self) -> &LlmConfig { &self.cfg }
+    pub fn config(&self) -> &LlmConfig {
+        &self.cfg
+    }
 }
 
 // ----------------------------------------------------------------
@@ -72,27 +74,36 @@ impl AnthropicNative {
 
 #[derive(Debug, Serialize)]
 struct AnthropicRequest<'a> {
-    model:      &'a str,
+    model: &'a str,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system:     Option<String>,
-    messages:   Vec<AnthropicMessage>,
+    system: Option<String>,
+    messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools:      Vec<AnthropicTool>,
+    tools: Vec<AnthropicTool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AnthropicMessage {
-    role:    String, // "user" | "assistant"
+    role: String, // "user" | "assistant"
     content: Vec<AnthropicBlock>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: JsonValue },
-    ToolResult { tool_use_id: String, content: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: JsonValue,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
     /// Extended thinking block. Required to be echoed back verbatim to the API
     /// (with signature) on subsequent calls during a thinking conversation.
     Thinking {
@@ -108,24 +119,24 @@ enum AnthropicBlock {
 
 #[derive(Debug, Serialize)]
 struct AnthropicTool {
-    name:         String,
-    description:  String,
+    name: String,
+    description: String,
     input_schema: JsonValue,
 }
 
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
-    content:      Vec<AnthropicBlock>,
+    content: Vec<AnthropicBlock>,
     #[serde(default)]
-    stop_reason:  Option<String>,
+    stop_reason: Option<String>,
     #[serde(default)]
-    usage:        AnthropicUsage,
+    usage: AnthropicUsage,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct AnthropicUsage {
     #[serde(default)]
-    input_tokens:  u32,
+    input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
     #[serde(default)]
@@ -144,14 +155,14 @@ impl Model for AnthropicNative {
             .tools
             .iter()
             .map(|t| AnthropicTool {
-                name:         t.name.clone(),
-                description:  t.description.clone(),
+                name: t.name.clone(),
+                description: t.description.clone(),
                 input_schema: t.input.clone(),
             })
             .collect();
 
         let req = AnthropicRequest {
-            model:      &self.cfg.model,
+            model: &self.cfg.model,
             max_tokens: ctx.policy.max_output_tokens.max(1024),
             system,
             messages,
@@ -170,23 +181,32 @@ impl Model for AnthropicNative {
                 .await
                 .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
             let status = resp.status();
-            let bytes = resp.bytes().await
+            let bytes = resp
+                .bytes()
+                .await
                 .map_err(|e| crate::retry::Retryable::transient(format!("body: {e}")))?;
             if !status.is_success() {
                 let body = String::from_utf8_lossy(&bytes).to_string();
-                let msg  = format!("HTTP {status}: {body}");
-                return Err(if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    crate::retry::Retryable::transient(msg)
-                } else {
-                    crate::retry::Retryable::permanent(msg)
-                });
+                let msg = format!("HTTP {status}: {body}");
+                return Err(
+                    if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        crate::retry::Retryable::transient(msg)
+                    } else {
+                        crate::retry::Retryable::permanent(msg)
+                    },
+                );
             }
             Ok(bytes)
         })
         .await
         .map_err(ModelError::Transport)?;
-        let parsed: AnthropicResponse = serde_json::from_slice(&bytes)
-            .map_err(|e| ModelError::Invalid(format!("parse: {e}; body: {}", String::from_utf8_lossy(&bytes))))?;
+        let parsed: AnthropicResponse = serde_json::from_slice(&bytes).map_err(|e| {
+            ModelError::Invalid(format!(
+                "parse: {e}; body: {}",
+                String::from_utf8_lossy(&bytes)
+            ))
+        })?;
 
         let mut text = String::new();
         let mut tool_calls = Vec::new();
@@ -195,9 +215,16 @@ impl Model for AnthropicNative {
             match b {
                 AnthropicBlock::Text { text: t } => text.push_str(&t),
                 AnthropicBlock::ToolUse { id, name, input } => {
-                    tool_calls.push(ToolCall { id, name, args: input });
+                    tool_calls.push(ToolCall {
+                        id,
+                        name,
+                        args: input,
+                    });
                 }
-                AnthropicBlock::Thinking { thinking, signature } => {
+                AnthropicBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
                     // Round-trip via Block::Reasoning. Signature is required by
                     // Anthropic when echoing back — pack it as JSON.
                     let packed = serde_json::json!({
@@ -205,7 +232,9 @@ impl Model for AnthropicNative {
                         "thinking": thinking,
                         "signature": signature,
                     });
-                    if !reasoning.is_empty() { reasoning.push('\n'); }
+                    if !reasoning.is_empty() {
+                        reasoning.push('\n');
+                    }
                     reasoning.push_str(&packed.to_string());
                 }
                 AnthropicBlock::RedactedThinking { data } => {
@@ -213,7 +242,9 @@ impl Model for AnthropicNative {
                         "kind": "redacted_thinking",
                         "data": data,
                     });
-                    if !reasoning.is_empty() { reasoning.push('\n'); }
+                    if !reasoning.is_empty() {
+                        reasoning.push('\n');
+                    }
                     reasoning.push_str(&packed.to_string());
                 }
                 AnthropicBlock::ToolResult { .. } => {} // shouldn't appear in assistant response
@@ -221,11 +252,11 @@ impl Model for AnthropicNative {
         }
 
         let stop_reason = match parsed.stop_reason.as_deref() {
-            Some("end_turn")       => StopReason::EndTurn,
-            Some("tool_use")       => StopReason::ToolUse,
-            Some("max_tokens")     => StopReason::MaxTokens,
-            Some("stop_sequence")  => StopReason::StopSequence,
-            _                      => {
+            Some("end_turn") => StopReason::EndTurn,
+            Some("tool_use") => StopReason::ToolUse,
+            Some("max_tokens") => StopReason::MaxTokens,
+            Some("stop_sequence") => StopReason::StopSequence,
+            _ => {
                 if !tool_calls.is_empty() {
                     StopReason::ToolUse
                 } else {
@@ -238,25 +269,29 @@ impl Model for AnthropicNative {
             text: if text.is_empty() { None } else { Some(text) },
             tool_calls,
             usage: Usage {
-                input_tokens:        parsed.usage.input_tokens,
-                output_tokens:       parsed.usage.output_tokens,
+                input_tokens: parsed.usage.input_tokens,
+                output_tokens: parsed.usage.output_tokens,
                 cached_input_tokens: parsed.usage.cache_read_input_tokens,
             },
             stop_reason,
-            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
+            reasoning: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning)
+            },
         })
     }
 
     fn info(&self) -> ModelInfo {
         ModelInfo {
-            handle:                                  self.cfg.name.clone(),
-            provider:                                "anthropic".into(),
-            model:                                   self.cfg.model.clone(),
-            context_window:                          self.context_window,
-            input_cost_usd_per_million_tokens:       None,
-            output_cost_usd_per_million_tokens:      None,
-            supports_tool_use:                       true,
-            supports_streaming:                      false, // not wired yet
+            handle: self.cfg.name.clone(),
+            provider: "anthropic".into(),
+            model: self.cfg.model.clone(),
+            context_window: self.context_window,
+            input_cost_usd_per_million_tokens: None,
+            output_cost_usd_per_million_tokens: None,
+            supports_tool_use: true,
+            supports_streaming: false, // not wired yet
         }
     }
 }
@@ -284,19 +319,25 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
             TurnRole::Assistant => "assistant",
             TurnRole::Tool => "user", // Anthropic models tool results as user-role with tool_result blocks
             TurnRole::System => continue, // already consumed above
-            _ => "user", // forward-compat: unknown roles fall back to user
+            _ => "user",              // forward-compat: unknown roles fall back to user
         };
 
         let mut blocks = Vec::new();
         for b in &turn.blocks {
             match b {
                 Block::Text(s) => {
-                    if !s.is_empty() { blocks.push(AnthropicBlock::Text { text: s.clone() }); }
+                    if !s.is_empty() {
+                        blocks.push(AnthropicBlock::Text { text: s.clone() });
+                    }
                 }
-                Block::ToolCall { call_id, name, args } => {
+                Block::ToolCall {
+                    call_id,
+                    name,
+                    args,
+                } => {
                     blocks.push(AnthropicBlock::ToolUse {
-                        id:    call_id.clone(),
-                        name:  name.clone(),
+                        id: call_id.clone(),
+                        name: name.clone(),
                         input: args.clone(),
                     });
                 }
@@ -307,12 +348,14 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                     };
                     blocks.push(AnthropicBlock::ToolResult {
                         tool_use_id: call_id.clone(),
-                        content:     s,
+                        content: s,
                     });
                 }
                 Block::FileRef { path, excerpt, .. } => {
                     let mut s = format!("[file:{path}]\n");
-                    if let Some(e) = excerpt { s.push_str(e); }
+                    if let Some(e) = excerpt {
+                        s.push_str(e);
+                    }
                     blocks.push(AnthropicBlock::Text { text: s });
                 }
                 Block::Skill { name, body } => {
@@ -338,7 +381,9 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                     // Restore the exact wire shape so Anthropic accepts the echo.
                     for line in raw.lines() {
                         let line = line.trim();
-                        if line.is_empty() { continue; }
+                        if line.is_empty() {
+                            continue;
+                        }
                         let Ok(v) = serde_json::from_str::<JsonValue>(line) else {
                             continue;
                         };
@@ -368,21 +413,28 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                 _ => {} // forward-compat: unknown Block variants silently skipped
             }
         }
-        if blocks.is_empty() { continue; }
+        if blocks.is_empty() {
+            continue;
+        }
         // Anthropic requires alternation; merge consecutive same-role messages.
         if let Some(last) = out.last_mut()
             && last.role == role
         {
             last.content.extend(blocks);
         } else {
-            out.push(AnthropicMessage { role: role.into(), content: blocks });
+            out.push(AnthropicMessage {
+                role: role.into(),
+                content: blocks,
+            });
         }
     }
 
     if out.is_empty() {
         out.push(AnthropicMessage {
             role: "user".into(),
-            content: vec![AnthropicBlock::Text { text: ctx.task.description.clone() }],
+            content: vec![AnthropicBlock::Text {
+                text: ctx.task.description.clone(),
+            }],
         });
     }
 
@@ -400,7 +452,11 @@ mod tests {
             system: vec![Block::Text("be helpful".into())],
             guides: vec![Block::Text("be terse".into())],
             history: vec![],
-            task: Task { description: "do the thing".into(), source: None, deadline: None },
+            task: Task {
+                description: "do the thing".into(),
+                source: None,
+                deadline: None,
+            },
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: vec![],
@@ -448,7 +504,10 @@ mod tests {
         assert_eq!(msgs[1].role, "assistant");
         assert!(matches!(msgs[1].content[0], AnthropicBlock::ToolUse { .. }));
         assert_eq!(msgs[2].role, "user");
-        assert!(matches!(msgs[2].content[0], AnthropicBlock::ToolResult { .. }));
+        assert!(matches!(
+            msgs[2].content[0],
+            AnthropicBlock::ToolResult { .. }
+        ));
     }
 
     #[test]
@@ -467,10 +526,7 @@ mod tests {
         .to_string();
         ctx.history.push(Turn {
             role: TurnRole::Assistant,
-            blocks: vec![
-                Block::Reasoning(packed),
-                Block::Text("therefore Y".into()),
-            ],
+            blocks: vec![Block::Reasoning(packed), Block::Text("therefore Y".into())],
         });
         let (_system, msgs) = build_messages(&ctx);
         let assistant = msgs.iter().find(|m| m.role == "assistant").unwrap();
@@ -481,10 +537,15 @@ mod tests {
                     if thinking == "I should consider X" && s == "sig123"
             )
         });
-        assert!(has_thinking, "thinking block missing in echo: {:#?}", assistant.content);
-        let has_text = assistant.content.iter().any(|b| {
-            matches!(b, AnthropicBlock::Text { text } if text.contains("therefore Y"))
-        });
+        assert!(
+            has_thinking,
+            "thinking block missing in echo: {:#?}",
+            assistant.content
+        );
+        let has_text = assistant
+            .content
+            .iter()
+            .any(|b| matches!(b, AnthropicBlock::Text { text } if text.contains("therefore Y")));
         assert!(has_text);
     }
 

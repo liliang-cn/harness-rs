@@ -43,8 +43,8 @@ impl ContextExt for Context {
             role: TurnRole::Assistant,
             blocks: vec![Block::ToolCall {
                 call_id: call_id.into(),
-                name:    tool.into(),
-                args:    args.clone(),
+                name: tool.into(),
+                args: args.clone(),
             }],
         });
     }
@@ -76,10 +76,12 @@ impl ContextExt for Context {
 pub fn default_world(repo_root: impl Into<std::path::PathBuf>) -> World {
     use std::sync::Arc;
     World {
-        repo:    harness_core::RepoView { root: repo_root.into() },
-        runner:  Arc::new(TokioRunner),
-        clock:   Arc::new(SystemClock),
-        kv:      Arc::new(InMemoryKv::new()),
+        repo: harness_core::RepoView {
+            root: repo_root.into(),
+        },
+        runner: Arc::new(TokioRunner),
+        clock: Arc::new(SystemClock),
+        kv: Arc::new(InMemoryKv::new()),
         profile: harness_core::UserProfile::default(),
     }
 }

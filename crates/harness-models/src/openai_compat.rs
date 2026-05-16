@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub struct OpenAiCompat {
-    cfg:            LlmConfig,
-    client:         reqwest::Client,
+    cfg: LlmConfig,
+    client: reqwest::Client,
     context_window: u32,
 }
 
@@ -22,7 +22,11 @@ impl OpenAiCompat {
             .timeout(Duration::from_secs(120))
             .build()
             .expect("reqwest client builds");
-        Self { cfg, client, context_window: 128_000 }
+        Self {
+            cfg,
+            client,
+            context_window: 128_000,
+        }
     }
 
     /// Convenience: 3-arg construction without writing out an `LlmConfig`.
@@ -33,11 +37,16 @@ impl OpenAiCompat {
     /// ```
     pub fn with_key(
         base_url: impl Into<String>,
-        model:    impl Into<String>,
-        api_key:  impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
     ) -> Self {
         let model = model.into();
-        Self::new(LlmConfig::new(format!("openai-compat:{model}"), base_url, api_key, model))
+        Self::new(LlmConfig::new(
+            format!("openai-compat:{model}"),
+            base_url,
+            api_key,
+            model,
+        ))
     }
 
     pub fn with_context_window(mut self, window: u32) -> Self {
@@ -45,7 +54,9 @@ impl OpenAiCompat {
         self
     }
 
-    pub fn config(&self) -> &LlmConfig { &self.cfg }
+    pub fn config(&self) -> &LlmConfig {
+        &self.cfg
+    }
 }
 
 // ----------------------------------------------------------------
@@ -54,13 +65,13 @@ impl OpenAiCompat {
 
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
-    model:    &'a str,
+    model: &'a str,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools:    Vec<ToolDecl>,
-    stream:   bool,
+    tools: Vec<ToolDecl>,
+    stream: bool,
 }
 
 /// `ChatMessage` is intentionally **lenient** — providers add fields
@@ -69,7 +80,7 @@ struct ChatRequest<'a> {
 /// back; anything else we don't recognise is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatMessage {
-    role:    String,
+    role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -82,17 +93,19 @@ struct ChatMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WireToolCall {
-    id:    String,
+    id: String,
     #[serde(rename = "type", default = "default_function_type")]
-    kind:  String,
+    kind: String,
     function: WireToolFunction,
 }
 
-fn default_function_type() -> String { "function".into() }
+fn default_function_type() -> String {
+    "function".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WireToolFunction {
-    name:      String,
+    name: String,
     /// OpenAI sends arguments as a JSON-encoded string (not an object).
     arguments: String,
 }
@@ -100,27 +113,27 @@ struct WireToolFunction {
 #[derive(Debug, Serialize)]
 struct ToolDecl {
     #[serde(rename = "type")]
-    kind:     &'static str,
+    kind: &'static str,
     function: ToolDeclFunction,
 }
 
 #[derive(Debug, Serialize)]
 struct ToolDeclFunction {
-    name:        String,
+    name: String,
     description: String,
-    parameters:  serde_json::Value,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
     #[serde(default)]
-    usage:   ChatUsage,
+    usage: ChatUsage,
 }
 
 #[derive(Debug, Deserialize)]
 struct Choice {
-    message:       ChatMessage,
+    message: ChatMessage,
     #[serde(default)]
     finish_reason: Option<String>,
 }
@@ -128,7 +141,7 @@ struct Choice {
 #[derive(Debug, Default, Deserialize)]
 struct ChatUsage {
     #[serde(default)]
-    prompt_tokens:     u32,
+    prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
 }
@@ -147,22 +160,25 @@ impl Model for OpenAiCompat {
             .map(|t| ToolDecl {
                 kind: "function",
                 function: ToolDeclFunction {
-                    name:        t.name.clone(),
+                    name: t.name.clone(),
                     description: t.description.clone(),
-                    parameters:  t.input.clone(),
+                    parameters: t.input.clone(),
                 },
             })
             .collect();
 
         let req = ChatRequest {
-            model:      &self.cfg.model,
+            model: &self.cfg.model,
             messages,
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
-            stream:     false,
+            stream: false,
         };
 
-        let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
         tracing::debug!(?req, "openai-compat request");
         let bytes = crate::retry::with_retry("openai-compat:complete", || async {
             let resp = self
@@ -174,17 +190,22 @@ impl Model for OpenAiCompat {
                 .await
                 .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
             let status = resp.status();
-            let bytes = resp.bytes().await
+            let bytes = resp
+                .bytes()
+                .await
                 .map_err(|e| crate::retry::Retryable::transient(format!("body: {e}")))?;
             if !status.is_success() {
                 // 5xx + 429 → retryable, other 4xx → permanent
                 let body = String::from_utf8_lossy(&bytes).to_string();
-                let msg  = format!("HTTP {status}: {body}");
-                return Err(if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    crate::retry::Retryable::transient(msg)
-                } else {
-                    crate::retry::Retryable::permanent(msg)
-                });
+                let msg = format!("HTTP {status}: {body}");
+                return Err(
+                    if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        crate::retry::Retryable::transient(msg)
+                    } else {
+                        crate::retry::Retryable::permanent(msg)
+                    },
+                );
             }
             Ok(bytes)
         })
@@ -208,11 +229,13 @@ impl Model for OpenAiCompat {
             .tool_calls
             .into_iter()
             .map(|w| {
-                let args: serde_json::Value =
-                    serde_json::from_str(&w.function.arguments).unwrap_or_else(|_| {
-                        serde_json::Value::String(w.function.arguments.clone())
-                    });
-                ToolCall { id: w.id, name: w.function.name, args }
+                let args: serde_json::Value = serde_json::from_str(&w.function.arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(w.function.arguments.clone()));
+                ToolCall {
+                    id: w.id,
+                    name: w.function.name,
+                    args,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -220,20 +243,20 @@ impl Model for OpenAiCompat {
             StopReason::ToolUse
         } else {
             match first.finish_reason.as_deref() {
-                Some("stop")           => StopReason::EndTurn,
-                Some("length")         => StopReason::MaxTokens,
-                Some("tool_calls")     => StopReason::ToolUse,
+                Some("stop") => StopReason::EndTurn,
+                Some("length") => StopReason::MaxTokens,
+                Some("tool_calls") => StopReason::ToolUse,
                 Some("content_filter") => StopReason::Other,
-                _                      => StopReason::EndTurn,
+                _ => StopReason::EndTurn,
             }
         };
 
         Ok(ModelOutput {
-            text:       first.message.content,
+            text: first.message.content,
             tool_calls,
             usage: Usage {
-                input_tokens:        parsed.usage.prompt_tokens,
-                output_tokens:       parsed.usage.completion_tokens,
+                input_tokens: parsed.usage.prompt_tokens,
+                output_tokens: parsed.usage.completion_tokens,
                 cached_input_tokens: 0,
             },
             stop_reason,
@@ -243,14 +266,14 @@ impl Model for OpenAiCompat {
 
     fn info(&self) -> ModelInfo {
         ModelInfo {
-            handle:                                  self.cfg.name.clone(),
-            provider:                                provider_from_base_url(&self.cfg.base_url),
-            model:                                   self.cfg.model.clone(),
-            context_window:                          self.context_window,
-            input_cost_usd_per_million_tokens:       None,
-            output_cost_usd_per_million_tokens:      None,
-            supports_tool_use:                       true,
-            supports_streaming:                      true,
+            handle: self.cfg.name.clone(),
+            provider: provider_from_base_url(&self.cfg.base_url),
+            model: self.cfg.model.clone(),
+            context_window: self.context_window,
+            input_cost_usd_per_million_tokens: None,
+            output_cost_usd_per_million_tokens: None,
+            supports_tool_use: true,
+            supports_streaming: true,
         }
     }
 
@@ -265,20 +288,23 @@ impl Model for OpenAiCompat {
             .map(|t| ToolDecl {
                 kind: "function",
                 function: ToolDeclFunction {
-                    name:        t.name.clone(),
+                    name: t.name.clone(),
                     description: t.description.clone(),
-                    parameters:  t.input.clone(),
+                    parameters: t.input.clone(),
                 },
             })
             .collect();
         let req = ChatRequest {
-            model:      &self.cfg.model,
+            model: &self.cfg.model,
             messages,
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
-            stream:     true,
+            stream: true,
         };
-        let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
         let resp = self
             .client
             .post(&url)
@@ -325,7 +351,9 @@ where
     };
 
     unfold(init, |mut state| async move {
-        if state.done { return None; }
+        if state.done {
+            return None;
+        }
 
         loop {
             // Try to find a complete event in the buffer first.
@@ -338,7 +366,9 @@ where
                         state.done = true;
                         return Some((Ok(ModelDelta::Stop(StopReason::EndTurn)), state));
                     }
-                    if payload.is_empty() { continue; }
+                    if payload.is_empty() {
+                        continue;
+                    }
                     let v: serde_json::Value = match serde_json::from_str(payload) {
                         Ok(v) => v,
                         Err(_) => continue,
@@ -362,10 +392,7 @@ where
                     state.done = true;
                     return Some((Err(ModelError::Transport(format!("stream: {e}"))), state));
                 }
-                None => {
-                    state.done = true;
-                    return None;
-                }
+                None => return None,
             }
         }
     })
@@ -399,8 +426,11 @@ fn decode_delta(
                 return Some(ModelDelta::ToolCallStart {
                     id: id.clone(),
                     name: tc
-                        .get("function").and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 });
             }
             if let Some(Value::String(args)) = tc.get("function").and_then(|f| f.get("arguments")) {
@@ -415,8 +445,11 @@ fn decode_delta(
     // Usage (final chunk on some providers)
     if let Some(Value::Object(u)) = v.get("usage") {
         let usage = Usage {
-            input_tokens:        u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-            output_tokens:       u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            input_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32,
             cached_input_tokens: 0,
         };
         return Some(ModelDelta::Usage(usage));
@@ -424,11 +457,11 @@ fn decode_delta(
     // Finish reason
     if let Some(Value::String(reason)) = first.get("finish_reason") {
         let r = match reason.as_str() {
-            "stop"           => StopReason::EndTurn,
-            "length"         => StopReason::MaxTokens,
-            "tool_calls"     => StopReason::ToolUse,
+            "stop" => StopReason::EndTurn,
+            "length" => StopReason::MaxTokens,
+            "tool_calls" => StopReason::ToolUse,
             "content_filter" => StopReason::Other,
-            _                => StopReason::EndTurn,
+            _ => StopReason::EndTurn,
         };
         return Some(ModelDelta::Stop(r));
     }
@@ -437,7 +470,7 @@ fn decode_delta(
 
 #[derive(Default)]
 struct ToolCallAccumPriv {
-    id:   Option<String>,
+    id: Option<String>,
     args: String,
 }
 
@@ -480,7 +513,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
     let has_user = out.iter().any(|m| m.role == "user");
     if !has_user {
         out.push(ChatMessage {
-            role:    "user".into(),
+            role: "user".into(),
             content: Some(ctx.task.description.clone()),
             tool_calls: Vec::new(),
             tool_call_id: None,
@@ -492,11 +525,11 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
 
 fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
     let role = match turn.role {
-        TurnRole::User      => "user",
+        TurnRole::User => "user",
         TurnRole::Assistant => "assistant",
-        TurnRole::Tool      => "tool",
-        TurnRole::System    => "system",
-        _                   => "user",
+        TurnRole::Tool => "tool",
+        TurnRole::System => "system",
+        _ => "user",
     };
 
     // Tool results become individual `tool` messages keyed by call_id.
@@ -508,7 +541,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     other => other.to_string(),
                 };
                 out.push(ChatMessage {
-                    role:    "tool".into(),
+                    role: "tool".into(),
                     content: Some(s),
                     tool_calls: Vec::new(),
                     tool_call_id: Some(call_id.clone()),
@@ -524,7 +557,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     ));
                 }
                 out.push(ChatMessage {
-                    role:    "user".into(),
+                    role: "user".into(),
                     content: Some(s),
                     tool_calls: Vec::new(),
                     tool_call_id: None,
@@ -541,10 +574,17 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
     let mut reasoning: Option<String> = None;
     for b in &turn.blocks {
         match b {
-            Block::Text(s) => { text.push_str(s); text.push('\n'); }
-            Block::ToolCall { call_id, name, args } => {
+            Block::Text(s) => {
+                text.push_str(s);
+                text.push('\n');
+            }
+            Block::ToolCall {
+                call_id,
+                name,
+                args,
+            } => {
                 tool_calls.push(WireToolCall {
-                    id:   call_id.clone(),
+                    id: call_id.clone(),
                     kind: "function".into(),
                     function: WireToolFunction {
                         name: name.clone(),
@@ -555,7 +595,11 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
             Block::Reasoning(r) => {
                 // Echo back what the model said it was thinking. DeepSeek
                 // requires this; OpenAI ignores unknown fields.
-                reasoning = Some(reasoning.map(|prev| format!("{prev}\n{r}")).unwrap_or_else(|| r.clone()));
+                reasoning = Some(
+                    reasoning
+                        .map(|prev| format!("{prev}\n{r}"))
+                        .unwrap_or_else(|| r.clone()),
+                );
             }
             Block::ToolResult { .. } | Block::Feedback(_) => {
                 // shouldn't appear in assistant/user turns; ignore
@@ -564,8 +608,12 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         }
     }
     out.push(ChatMessage {
-        role:    role.into(),
-        content: if text.trim().is_empty() { None } else { Some(text) },
+        role: role.into(),
+        content: if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        },
         tool_calls,
         tool_call_id: None,
         reasoning_content: reasoning,
@@ -574,7 +622,10 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
 
 fn push_block_text(buf: &mut String, b: &Block) {
     match b {
-        Block::Text(s) => { buf.push_str(s); buf.push('\n'); }
+        Block::Text(s) => {
+            buf.push_str(s);
+            buf.push('\n');
+        }
         Block::Skill { name, body } => {
             buf.push_str(&format!("\n[skill:{name}]\n{body}\n"));
         }
@@ -607,19 +658,29 @@ mod tests {
 
         let chunks = vec![
             br#"data: {"choices":[{"delta":{"content":"Hello"}}]}
-"#.to_vec().into(),
+"#
+            .to_vec()
+            .into(),
             br#"data: {"choices":[{"delta":{"content":" world"}}]}
-"#.to_vec().into(),
+"#
+            .to_vec()
+            .into(),
             br#"data: {"choices":[{"finish_reason":"stop"}]}
-"#.to_vec().into(),
+"#
+            .to_vec()
+            .into(),
             br#"data: [DONE]
-"#.to_vec().into(),
+"#
+            .to_vec()
+            .into(),
         ];
         // Convert Vec<Bytes> into a Stream<Result<Bytes, reqwest::Error>>.
         // We synthesise an Ok-only stream — the parser doesn't care about the
         // error type as long as it never has to construct one.
         let stream = futures::stream::iter(
-            chunks.into_iter().map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+            chunks
+                .into_iter()
+                .map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
         );
 
         let mut deltas = Vec::new();
@@ -629,7 +690,13 @@ mod tests {
         }
         let texts: Vec<String> = deltas
             .iter()
-            .filter_map(|d| if let ModelDelta::Text(s) = d { Some(s.clone()) } else { None })
+            .filter_map(|d| {
+                if let ModelDelta::Text(s) = d {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert_eq!(texts, vec!["Hello".to_string(), " world".to_string()]);
         let has_stop = deltas.iter().any(|d| matches!(d, ModelDelta::Stop(_)));
@@ -650,15 +717,23 @@ mod tests {
 "#.to_vec().into(),
         ];
         let stream = futures::stream::iter(
-            chunks.into_iter().map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+            chunks
+                .into_iter()
+                .map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
         );
         let mut deltas = Vec::new();
         let mut s = std::pin::pin!(parse_sse_stream(stream));
         while let Some(d) = s.next().await {
             deltas.push(d.unwrap());
         }
-        let starts: usize = deltas.iter().filter(|d| matches!(d, ModelDelta::ToolCallStart { .. })).count();
-        let args_count: usize = deltas.iter().filter(|d| matches!(d, ModelDelta::ToolCallArgs { .. })).count();
+        let starts: usize = deltas
+            .iter()
+            .filter(|d| matches!(d, ModelDelta::ToolCallStart { .. }))
+            .count();
+        let args_count: usize = deltas
+            .iter()
+            .filter(|d| matches!(d, ModelDelta::ToolCallArgs { .. }))
+            .count();
         assert_eq!(starts, 1);
         assert_eq!(args_count, 2);
     }
@@ -666,18 +741,28 @@ mod tests {
     #[test]
     fn build_messages_emits_system_and_user() {
         let ctx = Context {
-            system:   vec![Block::Text("you are a helpful agent".into())],
-            guides:   vec![Block::Text("always be concise".into())],
-            history:  vec![],
-            task:     Task { description: "say hi".into(), source: None, deadline: None },
-            policy:   Policy::default(),
+            system: vec![Block::Text("you are a helpful agent".into())],
+            guides: vec![Block::Text("always be concise".into())],
+            history: vec![],
+            task: Task {
+                description: "say hi".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
             metadata: BTreeMap::new(),
-            tools:    Vec::new(),
+            tools: Vec::new(),
         };
         let msgs = build_messages(&ctx);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "system");
-        assert!(msgs[0].content.as_deref().unwrap().contains("helpful agent"));
+        assert!(
+            msgs[0]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("helpful agent")
+        );
         assert!(msgs[0].content.as_deref().unwrap().contains("be concise"));
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[1].content.as_deref(), Some("say hi"));

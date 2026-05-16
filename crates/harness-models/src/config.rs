@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     /// User-chosen logical handle. Surfaces in logs, metrics, and selectors.
-    pub name:     String,
+    pub name: String,
     /// API root (e.g. `https://api.deepseek.com`). No trailing slash required.
     pub base_url: String,
     /// Bearer token. Read from env in user code; never hard-code.
-    pub api_key:  String,
+    pub api_key: String,
     /// Wire-protocol model id (e.g. `deepseek-v4-pro`, `gpt-5.1`, `claude-opus-4-7`).
-    pub model:    String,
+    pub model: String,
 }
 
 impl LlmConfig {
@@ -29,10 +29,10 @@ impl LlmConfig {
         model: impl Into<String>,
     ) -> Self {
         Self {
-            name:     name.into(),
+            name: name.into(),
             base_url: base_url.into(),
-            api_key:  api_key.into(),
-            model:    model.into(),
+            api_key: api_key.into(),
+            model: model.into(),
         }
     }
 }

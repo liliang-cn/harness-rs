@@ -20,11 +20,17 @@ pub struct DefaultCompactor {
 }
 
 impl Default for DefaultCompactor {
-    fn default() -> Self { Self { tokens_per_char: 0.30 } }
+    fn default() -> Self {
+        Self {
+            tokens_per_char: 0.30,
+        }
+    }
 }
 
 impl DefaultCompactor {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn estimate_tokens(&self, ctx: &Context) -> u32 {
         let mut chars: usize = 0;
@@ -45,7 +51,7 @@ impl DefaultCompactor {
 impl Compactor for DefaultCompactor {
     fn budget(&self, ctx: &Context) -> Budget {
         Budget {
-            used:   self.estimate_tokens(ctx),
+            used: self.estimate_tokens(ctx),
             window: ctx.policy.max_input_tokens,
         }
     }
@@ -53,11 +59,11 @@ impl Compactor for DefaultCompactor {
     async fn compact(&self, stage: CompactionStage, ctx: &mut Context) -> Result<(), CompactError> {
         tracing::debug!(?stage, "compaction stage running");
         match stage {
-            CompactionStage::BudgetReduce    => budget_reduce(ctx),
-            CompactionStage::Snip            => snip_file_reads(ctx),
-            CompactionStage::Microcompact    => microcompact_old(ctx),
+            CompactionStage::BudgetReduce => budget_reduce(ctx),
+            CompactionStage::Snip => snip_file_reads(ctx),
+            CompactionStage::Microcompact => microcompact_old(ctx),
             CompactionStage::ContextCollapse => context_collapse(ctx),
-            CompactionStage::AutoCompact     => auto_compact(ctx),
+            CompactionStage::AutoCompact => auto_compact(ctx),
             // Forward-compat: ignore stages this version doesn't recognise.
             _ => tracing::warn!(?stage, "unknown compaction stage — ignoring"),
         }
@@ -102,20 +108,30 @@ impl ModelBackedCompactor {
 #[async_trait]
 impl Compactor for ModelBackedCompactor {
     fn budget(&self, ctx: &Context) -> Budget {
-        DefaultCompactor { tokens_per_char: self.tokens_per_char }.budget(ctx)
+        DefaultCompactor {
+            tokens_per_char: self.tokens_per_char,
+        }
+        .budget(ctx)
     }
 
     async fn compact(&self, stage: CompactionStage, ctx: &mut Context) -> Result<(), CompactError> {
         match stage {
-            CompactionStage::BudgetReduce    => { budget_reduce(ctx);     Ok(()) }
-            CompactionStage::Snip            => { snip_file_reads(ctx);   Ok(()) }
-            CompactionStage::ContextCollapse => { context_collapse(ctx);  Ok(()) }
-            CompactionStage::Microcompact    => {
+            CompactionStage::BudgetReduce => {
+                budget_reduce(ctx);
+                Ok(())
+            }
+            CompactionStage::Snip => {
+                snip_file_reads(ctx);
+                Ok(())
+            }
+            CompactionStage::ContextCollapse => {
+                context_collapse(ctx);
+                Ok(())
+            }
+            CompactionStage::Microcompact => {
                 self.model_summarise(ctx, "microcompact-summary").await
             }
-            CompactionStage::AutoCompact     => {
-                self.model_summarise(ctx, "auto-compact-summary").await
-            }
+            CompactionStage::AutoCompact => self.model_summarise(ctx, "auto-compact-summary").await,
             _ => Ok(()),
         }
     }
@@ -125,13 +141,17 @@ impl ModelBackedCompactor {
     /// Ask the model to produce a tight summary of the older history; replace
     /// `0..split` with the resulting [`Block::Text`] in a synthetic system turn.
     async fn model_summarise(&self, ctx: &mut Context, tag: &str) -> Result<(), CompactError> {
-        if ctx.history.len() <= self.keep_recent { return Ok(()); }
+        if ctx.history.len() <= self.keep_recent {
+            return Ok(());
+        }
         let split = ctx.history.len() - self.keep_recent;
         let mut dump = String::new();
         for turn in ctx.history.iter().take(split) {
             dump.push_str(&format_turn_for_summary(turn));
         }
-        if dump.trim().is_empty() { return Ok(()); }
+        if dump.trim().is_empty() {
+            return Ok(());
+        }
 
         let prompt = format!(
             "You are compacting an in-progress agent conversation for downstream replay. \
@@ -158,9 +178,14 @@ impl ModelBackedCompactor {
             blocks: vec![Block::Text(summary_ctx.task.description.clone())],
         });
 
-        let out = self.model.complete(&summary_ctx).await.map_err(|e| {
-            CompactError::Failed { stage: tag.into(), reason: format!("model: {e}") }
-        })?;
+        let out = self
+            .model
+            .complete(&summary_ctx)
+            .await
+            .map_err(|e| CompactError::Failed {
+                stage: tag.into(),
+                reason: format!("model: {e}"),
+            })?;
 
         let summary = out.text.unwrap_or_else(|| "(empty summary)".into());
         let mut new_history = vec![Turn {
@@ -175,16 +200,19 @@ impl ModelBackedCompactor {
 
 fn format_turn_for_summary(turn: &Turn) -> String {
     let role = match turn.role {
-        TurnRole::User      => "user",
+        TurnRole::User => "user",
         TurnRole::Assistant => "assistant",
-        TurnRole::Tool      => "tool",
-        TurnRole::System    => "system",
-        _                   => "unknown",
+        TurnRole::Tool => "tool",
+        TurnRole::System => "system",
+        _ => "unknown",
     };
     let mut s = format!("[{role}]\n");
     for b in &turn.blocks {
         match b {
-            Block::Text(t) => { s.push_str(t); s.push('\n'); }
+            Block::Text(t) => {
+                s.push_str(t);
+                s.push('\n');
+            }
             Block::ToolCall { name, args, .. } => {
                 s.push_str(&format!("(tool-call {name} {args})\n"));
             }
@@ -205,12 +233,23 @@ fn format_turn_for_summary(turn: &Turn) -> String {
 
 fn block_chars(b: &Block) -> usize {
     match b {
-        Block::Text(s)                  => s.len(),
-        Block::FileRef { path, hash: _, excerpt } => path.len() + excerpt.as_ref().map_or(0, String::len),
-        Block::Skill { name, body }     => name.len() + body.len(),
-        Block::ToolCall { call_id, name, args } => call_id.len() + name.len() + args.to_string().len(),
+        Block::Text(s) => s.len(),
+        Block::FileRef {
+            path,
+            hash: _,
+            excerpt,
+        } => path.len() + excerpt.as_ref().map_or(0, String::len),
+        Block::Skill { name, body } => name.len() + body.len(),
+        Block::ToolCall {
+            call_id,
+            name,
+            args,
+        } => call_id.len() + name.len() + args.to_string().len(),
         Block::ToolResult { call_id, content } => call_id.len() + content.to_string().len(),
-        Block::Feedback(signals) => signals.iter().map(|s| s.message.len() + s.agent_hint.as_ref().map_or(0, String::len)).sum(),
+        Block::Feedback(signals) => signals
+            .iter()
+            .map(|s| s.message.len() + s.agent_hint.as_ref().map_or(0, String::len))
+            .sum(),
         Block::Reasoning(s) => s.len(),
         _ => 0,
     }
@@ -222,7 +261,9 @@ fn block_chars(b: &Block) -> usize {
 /// Conservative — only collapses big tool results, leaves text alone.
 fn budget_reduce(ctx: &mut Context) {
     let keep_recent = 8;
-    if ctx.history.len() <= keep_recent { return; }
+    if ctx.history.len() <= keep_recent {
+        return;
+    }
     let split = ctx.history.len() - keep_recent;
     for turn in ctx.history.iter_mut().take(split) {
         for b in turn.blocks.iter_mut() {
@@ -230,9 +271,7 @@ fn budget_reduce(ctx: &mut Context) {
                 && content.to_string().len() > 800
             {
                 let preview = content.to_string().chars().take(200).collect::<String>();
-                *b = Block::Text(format!(
-                    "[tool-result:{call_id} (trimmed)] {preview}…"
-                ));
+                *b = Block::Text(format!("[tool-result:{call_id} (trimmed)] {preview}…"));
             }
         }
     }
@@ -243,16 +282,22 @@ fn budget_reduce(ctx: &mut Context) {
 /// Replace old `Block::FileRef { excerpt }` with hash-only references.
 fn snip_file_reads(ctx: &mut Context) {
     let keep_recent = 4;
-    if ctx.history.len() <= keep_recent { return; }
+    if ctx.history.len() <= keep_recent {
+        return;
+    }
     let split = ctx.history.len() - keep_recent;
     for turn in ctx.history.iter_mut().take(split) {
         for b in turn.blocks.iter_mut() {
-            if let Block::FileRef { path, hash, excerpt } = b
+            if let Block::FileRef {
+                path,
+                hash,
+                excerpt,
+            } = b
                 && excerpt.is_some()
             {
                 *b = Block::FileRef {
-                    path:   path.clone(),
-                    hash:   hash.clone(),
+                    path: path.clone(),
+                    hash: hash.clone(),
                     excerpt: None,
                 };
             }
@@ -267,7 +312,9 @@ fn snip_file_reads(ctx: &mut Context) {
 /// `[microcompact-summary]`. Real provider-backed implementations should
 /// replace this with a cheap-model summarisation call.
 fn microcompact_old(ctx: &mut Context) {
-    if ctx.history.len() < 12 { return; }
+    if ctx.history.len() < 12 {
+        return;
+    }
     let keep_recent = 6;
     let split = ctx.history.len() - keep_recent;
 
@@ -275,11 +322,11 @@ fn microcompact_old(ctx: &mut Context) {
     let mut summary = String::from("[microcompact-summary]\n");
     for turn in ctx.history.iter().take(split) {
         let role = match turn.role {
-            TurnRole::User      => "user",
+            TurnRole::User => "user",
             TurnRole::Assistant => "assistant",
-            TurnRole::Tool      => "tool",
-            TurnRole::System    => "system",
-            _                   => "unknown",
+            TurnRole::Tool => "tool",
+            TurnRole::System => "system",
+            _ => "unknown",
         };
         summary.push_str(&format!("- {role}: "));
         for b in &turn.blocks {
@@ -289,7 +336,9 @@ fn microcompact_old(ctx: &mut Context) {
                     summary.push(' ');
                 }
                 Block::ToolCall { name, .. } => summary.push_str(&format!("(call:{name}) ")),
-                Block::ToolResult { call_id, .. } => summary.push_str(&format!("(result:{call_id}) ")),
+                Block::ToolResult { call_id, .. } => {
+                    summary.push_str(&format!("(result:{call_id}) "))
+                }
                 Block::FileRef { path, .. } => summary.push_str(&format!("(file:{path}) ")),
                 _ => {}
             }
@@ -298,7 +347,7 @@ fn microcompact_old(ctx: &mut Context) {
     }
 
     let mut new_history = vec![Turn {
-        role:   TurnRole::System,
+        role: TurnRole::System,
         blocks: vec![Block::Text(summary)],
     }];
     new_history.extend(ctx.history.drain(split..));
@@ -318,7 +367,9 @@ fn context_collapse(ctx: &mut Context) {
             }
         }
     }
-    if files.is_empty() { return; }
+    if files.is_empty() {
+        return;
+    }
 
     let mut inv = String::from("[file-inventory]\n");
     for f in &files {
@@ -331,10 +382,13 @@ fn context_collapse(ctx: &mut Context) {
     }
 
     // Insert inventory as the first system turn.
-    ctx.history.insert(0, Turn {
-        role:   TurnRole::System,
-        blocks: vec![Block::Text(inv)],
-    });
+    ctx.history.insert(
+        0,
+        Turn {
+            role: TurnRole::System,
+            blocks: vec![Block::Text(inv)],
+        },
+    );
 }
 
 // ---------- Stage 5: AutoCompact ----------
@@ -342,21 +396,24 @@ fn context_collapse(ctx: &mut Context) {
 /// Last resort: rewrite the whole history into a single condensed summary block.
 fn auto_compact(ctx: &mut Context) {
     let keep_recent = 2;
-    if ctx.history.len() <= keep_recent { return; }
+    if ctx.history.len() <= keep_recent {
+        return;
+    }
     let split = ctx.history.len() - keep_recent;
-    let mut combined = String::from("[auto-compact-summary]\nCondensed history of earlier turns:\n");
+    let mut combined =
+        String::from("[auto-compact-summary]\nCondensed history of earlier turns:\n");
     let mut counts = std::collections::BTreeMap::new();
     for turn in ctx.history.iter().take(split) {
         for b in &turn.blocks {
             let key = match b {
-                Block::Text(_)            => "text",
-                Block::ToolCall { .. }    => "tool_call",
-                Block::ToolResult { .. }  => "tool_result",
-                Block::FileRef { .. }     => "file_ref",
-                Block::Skill { .. }       => "skill",
-                Block::Feedback(_)        => "feedback",
-                Block::Reasoning(_)       => "reasoning",
-                _                         => "unknown",
+                Block::Text(_) => "text",
+                Block::ToolCall { .. } => "tool_call",
+                Block::ToolResult { .. } => "tool_result",
+                Block::FileRef { .. } => "file_ref",
+                Block::Skill { .. } => "skill",
+                Block::Feedback(_) => "feedback",
+                Block::Reasoning(_) => "reasoning",
+                _ => "unknown",
             };
             *counts.entry(key).or_insert(0u32) += 1;
         }
@@ -366,7 +423,7 @@ fn auto_compact(ctx: &mut Context) {
     }
 
     let mut new_history = vec![Turn {
-        role:   TurnRole::System,
+        role: TurnRole::System,
         blocks: vec![Block::Text(combined)],
     }];
     new_history.extend(ctx.history.drain(split..));
@@ -381,17 +438,25 @@ mod tests {
 
     fn mk_ctx(turns: usize) -> Context {
         let mut ctx = Context {
-            system:   vec![],
-            guides:   vec![],
-            history:  Vec::new(),
-            task:     Task { description: "t".into(), source: None, deadline: None },
-            policy:   Policy::default(),
+            system: vec![],
+            guides: vec![],
+            history: Vec::new(),
+            task: Task {
+                description: "t".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
             metadata: BTreeMap::new(),
-            tools:    Vec::new(),
+            tools: Vec::new(),
         };
         for i in 0..turns {
             ctx.history.push(Turn {
-                role: if i % 2 == 0 { TurnRole::User } else { TurnRole::Assistant },
+                role: if i % 2 == 0 {
+                    TurnRole::User
+                } else {
+                    TurnRole::Assistant
+                },
                 blocks: vec![Block::Text(format!("turn {i}: {}", "x".repeat(50)))],
             });
         }
@@ -407,7 +472,9 @@ mod tests {
             call_id: "c1".into(),
             content: serde_json::Value::String("y".repeat(2000)),
         });
-        c.compact(CompactionStage::BudgetReduce, &mut ctx).await.unwrap();
+        c.compact(CompactionStage::BudgetReduce, &mut ctx)
+            .await
+            .unwrap();
         // First turn's big tool result should be trimmed.
         let has_trim = ctx.history[0]
             .blocks
@@ -420,7 +487,9 @@ mod tests {
     async fn microcompact_collapses_old_turns() {
         let c = DefaultCompactor::new();
         let mut ctx = mk_ctx(20);
-        c.compact(CompactionStage::Microcompact, &mut ctx).await.unwrap();
+        c.compact(CompactionStage::Microcompact, &mut ctx)
+            .await
+            .unwrap();
         // First turn should be the synthetic system summary.
         assert!(matches!(ctx.history[0].role, TurnRole::System));
         let first_text = match &ctx.history[0].blocks[0] {
@@ -440,7 +509,9 @@ mod tests {
 
         let mut ctx = mk_ctx(20);
         let original_len = ctx.history.len();
-        c.compact(CompactionStage::Microcompact, &mut ctx).await.unwrap();
+        c.compact(CompactionStage::Microcompact, &mut ctx)
+            .await
+            .unwrap();
         // First turn now the summary, total shrinks to keep_recent (6) + 1 summary = 7
         assert_eq!(ctx.history.len(), c.keep_recent + 1);
         assert!(original_len > ctx.history.len());
@@ -458,18 +529,30 @@ mod tests {
         let mock = Arc::new(MockModel::new().script(MockResponse::text("never called")));
         let c = ModelBackedCompactor::new(mock.clone() as Arc<dyn Model>);
         let mut ctx = mk_ctx(4); // < keep_recent
-        c.compact(CompactionStage::Microcompact, &mut ctx).await.unwrap();
+        c.compact(CompactionStage::Microcompact, &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(ctx.history.len(), 4);
-        assert_eq!(mock.call_count(), 0, "model must not be called when history is short");
+        assert_eq!(
+            mock.call_count(),
+            0,
+            "model must not be called when history is short"
+        );
     }
 
     #[tokio::test]
     async fn budget_required_stages_escalates() {
         // 95% triggers ALL five stages.
-        let b = Budget { used: 95, window: 100 };
+        let b = Budget {
+            used: 95,
+            window: 100,
+        };
         assert_eq!(b.required_stages().len(), 4);
         // 99% triggers all 5
-        let b = Budget { used: 99, window: 100 };
+        let b = Budget {
+            used: 99,
+            window: 100,
+        };
         assert_eq!(b.required_stages().len(), 5);
     }
 }

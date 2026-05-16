@@ -11,12 +11,12 @@
 
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use clap::Parser;
-use harness::prelude::*;
 use harness::ToolError;
+use harness::prelude::*;
 use harness_context::with_profile;
+use harness_core::Model;
 use harness_core::UserProfile;
 use harness_loop::ProfileGuide;
-use harness_core::Model;
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::{OpenAiCompat, providers::DEEPSEEK};
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,9 @@ struct Event {
 
 fn store_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".harness-assistant").join("events.json")
+    PathBuf::from(home)
+        .join(".harness-assistant")
+        .join("events.json")
 }
 
 fn load_events() -> Vec<Event> {
@@ -67,22 +69,26 @@ fn save_events(events: &[Event]) -> Result<(), ToolError> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Todo {
-    id:    String,
+    id: String,
     title: String,
     #[serde(default)]
-    due:   Option<DateTime<Utc>>,
+    due: Option<DateTime<Utc>>,
     #[serde(default = "default_priority")]
     priority: String, // "low" | "med" | "high"
     #[serde(default)]
-    done:  bool,
+    done: bool,
     #[serde(default)]
     notes: Option<String>,
 }
-fn default_priority() -> String { "med".into() }
+fn default_priority() -> String {
+    "med".into()
+}
 
 fn tasks_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".harness-assistant").join("tasks.json")
+    PathBuf::from(home)
+        .join(".harness-assistant")
+        .join("tasks.json")
 }
 
 fn load_tasks() -> Vec<Todo> {
@@ -124,7 +130,7 @@ fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
 #[harness::tool(
     name = "current_time",
     risk = "read-only",
-    schema = r#"{"type": "object", "properties": {}}"#,
+    schema = r#"{"type": "object", "properties": {}}"#
 )]
 async fn current_time(_args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let now_utc = Utc::now();
@@ -179,7 +185,7 @@ async fn current_time(_args: Value, w: &mut World) -> Result<ToolResult, ToolErr
             "from": {"type": "string", "description": "ISO 8601 / RFC3339 start. Default: now."},
             "to":   {"type": "string", "description": "ISO 8601 / RFC3339 end. Default: now + 7 days."}
         }
-    }"#,
+    }"#
 )]
 async fn list_events(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
     let now = Utc::now();
@@ -225,29 +231,33 @@ async fn list_events(args: Value, _w: &mut World) -> Result<ToolResult, ToolErro
             "notes":            {"type": "string"}
         },
         "required": ["title", "start"]
-    }"#,
+    }"#
 )]
 async fn add_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "title required".into() })?
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "title required".into(),
+        })?
         .to_string();
-    let start_s = args
-        .get("start")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "start required".into() })?;
-    let start = parse_iso(start_s).ok_or_else(|| {
-        ToolError::InvalidArgs { name: "assistant".into(), reason: format!("could not parse start `{start_s}` — use RFC3339") }
+    let start_s =
+        args.get("start")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs {
+                name: "assistant".into(),
+                reason: "start required".into(),
+            })?;
+    let start = parse_iso(start_s).ok_or_else(|| ToolError::InvalidArgs {
+        name: "assistant".into(),
+        reason: format!("could not parse start `{start_s}` — use RFC3339"),
     })?;
     let duration_minutes = args
         .get("duration_minutes")
         .and_then(|v| v.as_u64())
         .unwrap_or(60) as u32;
-    let notes = args
-        .get("notes")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let notes = args.get("notes").and_then(|v| v.as_str()).map(String::from);
 
     let mut events = load_events();
     let event = Event {
@@ -277,13 +287,16 @@ async fn add_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError>
             "id": {"type": "string", "description": "Event id from list_events / add_event."}
         },
         "required": ["id"]
-    }"#,
+    }"#
 )]
 async fn cancel_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "id required".into() })?;
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "id required".into(),
+        })?;
     let mut events = load_events();
     let before = events.len();
     events.retain(|e| e.id != id);
@@ -313,13 +326,16 @@ async fn cancel_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolErr
             "query": {"type": "string", "description": "Substring to match in event titles."}
         },
         "required": ["query"]
-    }"#,
+    }"#
 )]
 async fn find_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
     let q = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "query required".into() })?
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "query required".into(),
+        })?
         .to_lowercase();
     let mut hits: Vec<Event> = load_events()
         .into_iter()
@@ -345,25 +361,46 @@ async fn find_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
             "duration_minutes": {"type": "integer", "minimum": 1}
         },
         "required": ["id", "new_start"]
-    }"#,
+    }"#
 )]
 async fn move_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-    let id = args.get("id").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "id required".into() })?;
-    let new_start_s = args.get("new_start").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "new_start required".into() })?;
-    let new_start = parse_iso(new_start_s)
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: format!("could not parse `{new_start_s}`") })?;
-    let new_dur = args.get("duration_minutes").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "id required".into(),
+        })?;
+    let new_start_s = args
+        .get("new_start")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "new_start required".into(),
+        })?;
+    let new_start = parse_iso(new_start_s).ok_or_else(|| ToolError::InvalidArgs {
+        name: "assistant".into(),
+        reason: format!("could not parse `{new_start_s}`"),
+    })?;
+    let new_dur = args
+        .get("duration_minutes")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
 
     let mut events = load_events();
     let found = events.iter_mut().find(|e| e.id == id);
     let Some(e) = found else {
-        return Ok(ToolResult { ok: false, content: json!({"error": format!("no event with id `{id}`")}), trace: None });
+        return Ok(ToolResult {
+            ok: false,
+            content: json!({"error": format!("no event with id `{id}`")}),
+            trace: None,
+        });
     };
     let old_start = e.start;
     e.start = new_start;
-    if let Some(d) = new_dur { e.duration_minutes = d; }
+    if let Some(d) = new_dur {
+        e.duration_minutes = d;
+    }
     let snapshot = e.clone();
     save_events(&events)?;
     Ok(ToolResult {
@@ -388,24 +425,41 @@ async fn move_event(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
             "notes":    {"type": "string"}
         },
         "required": ["title"]
-    }"#,
+    }"#
 )]
 async fn add_task(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-    let title = args.get("title").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "title required".into() })?
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "title required".into(),
+        })?
         .to_string();
     let due = args.get("due").and_then(|v| v.as_str()).and_then(parse_iso);
-    let priority = args.get("priority").and_then(|v| v.as_str()).unwrap_or("med").to_string();
+    let priority = args
+        .get("priority")
+        .and_then(|v| v.as_str())
+        .unwrap_or("med")
+        .to_string();
     let notes = args.get("notes").and_then(|v| v.as_str()).map(String::from);
 
     let mut tasks = load_tasks();
     let todo = Todo {
         id: Uuid::new_v4().to_string()[..8].to_string(),
-        title, due, priority, done: false, notes,
+        title,
+        due,
+        priority,
+        done: false,
+        notes,
     };
     tasks.push(todo.clone());
     save_tasks(&tasks)?;
-    Ok(ToolResult { ok: true, content: json!({"added": todo}), trace: None })
+    Ok(ToolResult {
+        ok: true,
+        content: json!({"added": todo}),
+        trace: None,
+    })
 }
 
 /// List todos. By default: open (not done), sorted high-priority + earliest-due first.
@@ -418,20 +472,41 @@ async fn add_task(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> 
             "include_done": {"type": "boolean", "default": false},
             "only_priority": {"type": "string", "enum": ["low", "med", "high"]}
         }
-    }"#,
+    }"#
 )]
 async fn list_tasks(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-    let include_done = args.get("include_done").and_then(|v| v.as_bool()).unwrap_or(false);
-    let only_pri = args.get("only_priority").and_then(|v| v.as_str()).map(String::from);
+    let include_done = args
+        .get("include_done")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let only_pri = args
+        .get("only_priority")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
-    let pri_order = |p: &str| match p { "high" => 0, "med" => 1, "low" => 2, _ => 3 };
+    let pri_order = |p: &str| match p {
+        "high" => 0,
+        "med" => 1,
+        "low" => 2,
+        _ => 3,
+    };
     let mut tasks: Vec<Todo> = load_tasks()
         .into_iter()
-        .filter(|t| (include_done || !t.done)
-                 && only_pri.as_deref().map_or(true, |op| t.priority == op))
+        .filter(|t| {
+            (include_done || !t.done) && only_pri.as_deref().is_none_or(|op| t.priority == op)
+        })
         .collect();
-    tasks.sort_by_key(|t| (pri_order(&t.priority), t.due.unwrap_or_else(|| Utc::now() + Duration::days(3650))));
-    Ok(ToolResult { ok: true, content: json!({"count": tasks.len(), "tasks": tasks}), trace: None })
+    tasks.sort_by_key(|t| {
+        (
+            pri_order(&t.priority),
+            t.due.unwrap_or_else(|| Utc::now() + Duration::days(3650)),
+        )
+    });
+    Ok(ToolResult {
+        ok: true,
+        content: json!({"count": tasks.len(), "tasks": tasks}),
+        trace: None,
+    })
 }
 
 /// Mark a todo done.
@@ -442,23 +517,40 @@ async fn list_tasks(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
         "type": "object",
         "properties": {"id": {"type": "string"}},
         "required": ["id"]
-    }"#,
+    }"#
 )]
 async fn complete_task(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-    let id = args.get("id").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "assistant".into(), reason: "id required".into() })?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "assistant".into(),
+            reason: "id required".into(),
+        })?;
     let mut tasks = load_tasks();
     let found = tasks.iter_mut().find(|t| t.id == id);
     let Some(t) = found else {
-        return Ok(ToolResult { ok: false, content: json!({"error": format!("no task with id `{id}`")}), trace: None });
+        return Ok(ToolResult {
+            ok: false,
+            content: json!({"error": format!("no task with id `{id}`")}),
+            trace: None,
+        });
     };
     if t.done {
-        return Ok(ToolResult { ok: true, content: json!({"already_done": &t.title}), trace: None });
+        return Ok(ToolResult {
+            ok: true,
+            content: json!({"already_done": &t.title}),
+            trace: None,
+        });
     }
     t.done = true;
     let snapshot = t.clone();
     save_tasks(&tasks)?;
-    Ok(ToolResult { ok: true, content: json!({"completed": snapshot}), trace: None })
+    Ok(ToolResult {
+        ok: true,
+        content: json!({"completed": snapshot}),
+        trace: None,
+    })
 }
 
 // =================================================================
@@ -469,8 +561,14 @@ fn collect_tools() -> Vec<Arc<dyn Tool>> {
     use harness_core::iter_macro_tools;
     let want = [
         "current_time",
-        "list_events", "add_event", "cancel_event", "find_event", "move_event",
-        "add_task",    "list_tasks", "complete_task",
+        "list_events",
+        "add_event",
+        "cancel_event",
+        "find_event",
+        "move_event",
+        "add_task",
+        "list_tasks",
+        "complete_task",
     ];
     iter_macro_tools()
         .filter(|t| want.contains(&t.name()))
@@ -482,7 +580,10 @@ fn collect_tools() -> Vec<Arc<dyn Tool>> {
 // =================================================================
 
 #[derive(Parser, Debug)]
-#[command(name = "assistant", about = "Your personal scheduling assistant, powered by harness-rs.")]
+#[command(
+    name = "assistant",
+    about = "Your personal scheduling assistant, powered by harness-rs."
+)]
 struct Cli {
     /// What to ask the assistant. Passed as a single string.
     #[arg(default_values_t = vec!["What's on my calendar today?".to_string()])]
@@ -527,9 +628,18 @@ struct Cli {
 /// Here we pick: CLI flags first, env vars second, nothing else.
 fn build_profile(cli: &Cli) -> UserProfile {
     UserProfile {
-        name:   cli.name.clone().or_else(|| std::env::var("HARNESS_USER_NAME").ok()),
-        tz:     cli.tz.clone().or_else(|| std::env::var("HARNESS_USER_TZ").ok()),
-        locale: cli.locale.clone().or_else(|| std::env::var("HARNESS_USER_LOCALE").ok()),
+        name: cli
+            .name
+            .clone()
+            .or_else(|| std::env::var("HARNESS_USER_NAME").ok()),
+        tz: cli
+            .tz
+            .clone()
+            .or_else(|| std::env::var("HARNESS_USER_TZ").ok()),
+        locale: cli
+            .locale
+            .clone()
+            .or_else(|| std::env::var("HARNESS_USER_LOCALE").ok()),
         ..Default::default()
     }
 }
@@ -590,8 +700,8 @@ fn build_task_description(user_request: &str, history: &[(String, String)]) -> S
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let api_key = std::env::var("DEEPSEEK_API_KEY")
-        .map_err(|_| anyhow::anyhow!("set DEEPSEEK_API_KEY"))?;
+    let api_key =
+        std::env::var("DEEPSEEK_API_KEY").map_err(|_| anyhow::anyhow!("set DEEPSEEK_API_KEY"))?;
 
     let model_id = match cli.tier.as_str() {
         "flash" => "deepseek-v4-flash",
@@ -606,7 +716,11 @@ async fn main() -> anyhow::Result<()> {
 
     println!(
         "→ assistant\n  model:     {} ({}/{})\n  tools:     {} registered\n  store:     {}",
-        info.handle, info.provider, info.model, tools.len(), store_path().display(),
+        info.handle,
+        info.provider,
+        info.model,
+        tools.len(),
+        store_path().display(),
     );
     if profile.name.is_some() || profile.tz.is_some() {
         println!("  profile:   {}", profile.summary_line());
@@ -624,7 +738,15 @@ async fn main() -> anyhow::Result<()> {
         } else {
             cli.task.join(" ")
         };
-        run_once(model_id, api_key, tools, profile, cli.max_iters, user_request).await
+        run_once(
+            model_id,
+            api_key,
+            tools,
+            profile,
+            cli.max_iters,
+            user_request,
+        )
+        .await
     }
 }
 
@@ -638,16 +760,24 @@ async fn run_once(
 ) -> anyhow::Result<()> {
     let model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key);
     let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
-    for t in tools { loop_ = loop_.with_tool(t); }
+    for t in tools {
+        loop_ = loop_.with_tool(t);
+    }
     let mut world = with_profile(".", profile);
     let task = Task {
         description: build_task_description(&user_request, &[]),
-        source: None, deadline: None,
+        source: None,
+        deadline: None,
     };
-    match loop_.run_with_max_iters(task, &mut world, max_iters).await? {
+    match loop_
+        .run_with_max_iters(task, &mut world, max_iters)
+        .await?
+    {
         Outcome::Done { text, iters, .. } => {
             println!("✓ done after {iters} iteration(s)\n");
-            if let Some(t) = text { println!("{t}"); }
+            if let Some(t) = text {
+                println!("{t}");
+            }
         }
         Outcome::BudgetExhausted { iters, .. } => {
             eprintln!("✗ budget exhausted after {iters} iteration(s)");
@@ -682,7 +812,9 @@ async fn run_repl(
             break;
         };
         let input = line.trim();
-        if input.is_empty() { continue; }
+        if input.is_empty() {
+            continue;
+        }
         if EXIT_WORDS.contains(&input.to_lowercase().as_str()) {
             println!("bye.");
             break;
@@ -697,12 +829,15 @@ async fn run_repl(
 
         let model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key.clone());
         let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
-        for t in tools.iter().cloned() { loop_ = loop_.with_tool(t); }
+        for t in tools.iter().cloned() {
+            loop_ = loop_.with_tool(t);
+        }
         let mut world = with_profile(".", profile.clone());
 
         let task = Task {
             description: build_task_description(input, history_for_call),
-            source: None, deadline: None,
+            source: None,
+            deadline: None,
         };
 
         match loop_.run_with_max_iters(task, &mut world, max_iters).await {

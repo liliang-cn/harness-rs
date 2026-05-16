@@ -33,10 +33,10 @@ pub enum Outcome {
     /// Model returned text with no tool calls (natural end).
     #[non_exhaustive]
     Done {
-        text:          Option<String>,
-        iters:         u32,
-        tools_called:  u32,
-        usage:         harness_core::Usage,
+        text: Option<String>,
+        iters: u32,
+        tools_called: u32,
+        usage: harness_core::Usage,
     },
     /// Policy budget exhausted before the model stopped requesting tools.
     /// Carries everything we know so the caller can recover partial work
@@ -44,31 +44,31 @@ pub enum Outcome {
     /// instead of seeing a single bare "budget out" string.
     #[non_exhaustive]
     BudgetExhausted {
-        iters:         u32,
-        last_text:     Option<String>,
-        tools_called:  u32,
-        usage:         harness_core::Usage,
+        iters: u32,
+        last_text: Option<String>,
+        tools_called: u32,
+        usage: harness_core::Usage,
     },
 }
 
 /// The agent loop.
 pub struct AgentLoop<M: Model> {
-    pub model:      M,
-    pub tools:      ToolRegistry,
-    pub guides:     Vec<Arc<dyn Guide>>,
-    pub sensors:    Vec<Arc<dyn Sensor>>,
-    pub hooks:      HookBus,
-    pub compactor:  Arc<dyn Compactor>,
+    pub model: M,
+    pub tools: ToolRegistry,
+    pub guides: Vec<Arc<dyn Guide>>,
+    pub sensors: Vec<Arc<dyn Sensor>>,
+    pub hooks: HookBus,
+    pub compactor: Arc<dyn Compactor>,
 }
 
 impl<M: Model> AgentLoop<M> {
     pub fn new(model: M) -> Self {
         Self {
             model,
-            tools:     ToolRegistry::new(),
-            guides:    Vec::new(),
-            sensors:   Vec::new(),
-            hooks:     HookBus::new(),
+            tools: ToolRegistry::new(),
+            guides: Vec::new(),
+            sensors: Vec::new(),
+            hooks: HookBus::new(),
             compactor: Arc::new(DefaultCompactor::new()),
         }
     }
@@ -115,7 +115,8 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         max_iters: u32,
     ) -> Result<Outcome, HarnessError> {
-        self.run_with_seed_history(task, Vec::new(), world, max_iters).await
+        self.run_with_seed_history(task, Vec::new(), world, max_iters)
+            .await
     }
 
     /// Like `run_with_max_iters` but seeds `ctx.history` with `seed` **before**
@@ -135,7 +136,12 @@ impl<M: Model> AgentLoop<M> {
         ctx.tools = self.tools.schemas();
         ctx.history = seed;
 
-        self.hooks.fire(&Event::SessionStart { source: SessionSource::Startup }, world);
+        self.hooks.fire(
+            &Event::SessionStart {
+                source: SessionSource::Startup,
+            },
+            world,
+        );
 
         for g in &self.guides {
             if g.scope().matches(&ctx.task) {
@@ -146,7 +152,7 @@ impl<M: Model> AgentLoop<M> {
         }
 
         ctx.history.push(Turn {
-            role:   TurnRole::User,
+            role: TurnRole::User,
             blocks: vec![Block::Text(ctx.task.description.clone())],
         });
 
@@ -170,10 +176,12 @@ impl<M: Model> AgentLoop<M> {
             let out = self.model.complete(&ctx).await?;
             self.hooks.fire(&Event::PostModel { out: &out }, world);
             // Accumulate usage even if the run later exhausts budget.
-            total_usage.input_tokens        += out.usage.input_tokens;
-            total_usage.output_tokens       += out.usage.output_tokens;
+            total_usage.input_tokens += out.usage.input_tokens;
+            total_usage.output_tokens += out.usage.output_tokens;
             total_usage.cached_input_tokens += out.usage.cached_input_tokens;
-            if let Some(t) = &out.text { last_text = Some(t.clone()); }
+            if let Some(t) = &out.text {
+                last_text = Some(t.clone());
+            }
             ctx.push_model_output(&out);
 
             if out.tool_calls.is_empty() {
@@ -189,14 +197,15 @@ impl<M: Model> AgentLoop<M> {
 
             for call in &out.tool_calls {
                 let action = Action {
-                    tool:    call.name.clone(),
+                    tool: call.name.clone(),
                     call_id: call.id.clone(),
-                    args:    call.args.clone(),
+                    args: call.args.clone(),
                 };
 
                 // PreToolUse hook can deny destructive actions
-                if let HookOutcome::Deny { reason } =
-                    self.hooks.fire(&Event::PreToolUse { action: &action }, world)
+                if let HookOutcome::Deny { reason } = self
+                    .hooks
+                    .fire(&Event::PreToolUse { action: &action }, world)
                 {
                     ctx.history.push(Turn {
                         role: TurnRole::Tool,
@@ -220,10 +229,16 @@ impl<M: Model> AgentLoop<M> {
                     },
                 };
                 tools_called += 1;
-                self.hooks.fire(&Event::PostToolUse { action: &action, result: &result }, world);
+                self.hooks.fire(
+                    &Event::PostToolUse {
+                        action: &action,
+                        result: &result,
+                    },
+                    world,
+                );
 
                 ctx.history.push(Turn {
-                    role:   TurnRole::Tool,
+                    role: TurnRole::Tool,
                     blocks: vec![Block::ToolResult {
                         call_id: action.call_id.clone(),
                         content: result.content.clone(),
@@ -233,13 +248,21 @@ impl<M: Model> AgentLoop<M> {
                 // run self-correct sensors
                 let mut all_signals = Vec::new();
                 for s in &self.sensors {
-                    if s.stage() != Stage::SelfCorrect { continue; }
+                    if s.stage() != Stage::SelfCorrect {
+                        continue;
+                    }
                     self.hooks.fire(&Event::PreSensor { sensor: s.id() }, world);
                     let sigs = s.observe(&action, world).await.unwrap_or_else(|e| {
                         tracing::warn!(?e, "sensor failed");
                         Vec::new()
                     });
-                    self.hooks.fire(&Event::PostSensor { sensor: s.id(), signals: &sigs }, world);
+                    self.hooks.fire(
+                        &Event::PostSensor {
+                            sensor: s.id(),
+                            signals: &sigs,
+                        },
+                        world,
+                    );
                     all_signals.extend(sigs);
                 }
                 if !all_signals.is_empty() {
@@ -269,18 +292,26 @@ impl<M: Model> AgentLoop<M> {
                     // Emit PostAutoFix for each approved patch with the application result.
                     for (i, p) in approved.iter().enumerate() {
                         self.hooks.fire(
-                            &Event::PostAutoFix { patch: p, applied: i < applied.len() },
+                            &Event::PostAutoFix {
+                                patch: p,
+                                applied: i < applied.len(),
+                            },
                             world,
                         );
                     }
                     if !applied.is_empty() {
                         ctx.push_feedback(vec![harness_core::Signal {
-                            severity:   harness_core::Severity::Hint,
-                            origin:     "auto-fix".into(),
-                            message:    format!("applied {} auto-fix patch(es): {applied:?}", applied.len()),
-                            agent_hint: Some("re-check the affected files before continuing".into()),
-                            auto_fix:   None,
-                            location:   None,
+                            severity: harness_core::Severity::Hint,
+                            origin: "auto-fix".into(),
+                            message: format!(
+                                "applied {} auto-fix patch(es): {applied:?}",
+                                applied.len()
+                            ),
+                            agent_hint: Some(
+                                "re-check the affected files before continuing".into(),
+                            ),
+                            auto_fix: None,
+                            location: None,
                         }]);
                     }
                     if remaining.has_blocking() {
@@ -335,10 +366,7 @@ static PATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// Apply auto-fix patches; return short descriptions of those that succeeded.
 ///
 /// Made `pub` (was `pub(crate)`) so integration tests can call it directly.
-pub async fn apply_patches(
-    patches: &[harness_core::FixPatch],
-    world: &mut World,
-) -> Vec<String> {
+pub async fn apply_patches(patches: &[harness_core::FixPatch], world: &mut World) -> Vec<String> {
     use harness_core::FixPatch;
     let mut applied = Vec::new();
     for p in patches {

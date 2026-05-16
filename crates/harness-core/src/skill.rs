@@ -15,17 +15,21 @@ use std::path::PathBuf;
 /// All fields except `name` and `description` are optional, mirroring the spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillManifest {
-    pub name:        String,
+    pub name: String,
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub license:       Option<String>,
+    pub license: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
     /// Free-form key-value map. Framework extensions live under `metadata.harness.*`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata:      BTreeMap<String, serde_json::Value>,
+    pub metadata: BTreeMap<String, serde_json::Value>,
     /// Space-separated tool patterns (e.g. "Bash(git:*) Read"). Experimental in the spec.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "allowed-tools")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "allowed-tools"
+    )]
     pub allowed_tools: Option<String>,
 }
 
@@ -42,12 +46,12 @@ impl SkillManifest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HarnessExt {
     #[serde(default)]
-    pub kind:           Option<crate::Execution>,
+    pub kind: Option<crate::Execution>,
     #[serde(default)]
-    pub risk:           Option<crate::ToolRisk>,
+    pub risk: Option<crate::ToolRisk>,
     /// Rust function path; only meaningful for `#[skill]` macro-generated skills.
     #[serde(default)]
-    pub entrypoint:     Option<String>,
+    pub entrypoint: Option<String>,
     #[serde(default)]
     pub schema_version: Option<String>,
 }
@@ -55,8 +59,8 @@ pub struct HarnessExt {
 /// A non-`SKILL.md` resource bundled with the skill (`scripts/*`, `references/*`, `assets/*`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
-    pub kind:   ResourceKind,
-    pub path:   PathBuf,
+    pub kind: ResourceKind,
+    pub path: PathBuf,
     /// 1-line description used in progressive disclosure.
     pub summary: Option<String>,
 }
@@ -73,19 +77,23 @@ pub enum ResourceKind {
 /// Optional in-process handler attached to a skill (only `#[skill]`-generated skills carry one).
 pub type SkillHandler = std::sync::Arc<
     dyn for<'a> Fn(
-        &'a mut Context,
-        &'a mut World,
-    ) -> futures::future::BoxFuture<'a, Result<(), SkillError>>
-    + Send
-    + Sync,
+            &'a mut Context,
+            &'a mut World,
+        ) -> futures::future::BoxFuture<'a, Result<(), SkillError>>
+        + Send
+        + Sync,
 >;
 
 pub trait Skill: Send + Sync + 'static {
     fn manifest(&self) -> &SkillManifest;
     /// The full Markdown body, loaded on demand (progressive disclosure tier 2).
     fn body(&self) -> Cow<'_, str>;
-    fn resources(&self) -> &[Resource] { &[] }
-    fn handler(&self) -> Option<SkillHandler> { None }
+    fn resources(&self) -> &[Resource] {
+        &[]
+    }
+    fn handler(&self) -> Option<SkillHandler> {
+        None
+    }
 }
 
 /// `inventory` slot for compile-time skill registration via `#[skill]`.

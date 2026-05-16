@@ -32,24 +32,38 @@ impl CompactionStage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
-    pub used:   u32,
+    pub used: u32,
     pub window: u32,
 }
 
 impl Budget {
     pub fn ratio(&self) -> f32 {
-        if self.window == 0 { 0.0 } else { self.used as f32 / self.window as f32 }
+        if self.window == 0 {
+            0.0
+        } else {
+            self.used as f32 / self.window as f32
+        }
     }
 
     /// Which stages must run, given current usage. Returns lowest → highest.
     pub fn required_stages(&self) -> Vec<CompactionStage> {
         let r = self.ratio();
         let mut out = Vec::new();
-        if r > 0.60 { out.push(CompactionStage::BudgetReduce); }
-        if r > 0.70 { out.push(CompactionStage::Snip); }
-        if r > 0.80 { out.push(CompactionStage::Microcompact); }
-        if r > 0.90 { out.push(CompactionStage::ContextCollapse); }
-        if r > 0.95 { out.push(CompactionStage::AutoCompact); }
+        if r > 0.60 {
+            out.push(CompactionStage::BudgetReduce);
+        }
+        if r > 0.70 {
+            out.push(CompactionStage::Snip);
+        }
+        if r > 0.80 {
+            out.push(CompactionStage::Microcompact);
+        }
+        if r > 0.90 {
+            out.push(CompactionStage::ContextCollapse);
+        }
+        if r > 0.95 {
+            out.push(CompactionStage::AutoCompact);
+        }
         out
     }
 }

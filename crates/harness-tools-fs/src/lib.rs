@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 struct ReadArgs {
-    path:   String,
+    path: String,
     #[serde(default)]
     offset: Option<usize>,
     #[serde(default)]
-    limit:  Option<usize>,
+    limit: Option<usize>,
 }
 
 pub struct ReadFile;
@@ -41,17 +41,25 @@ static READ_FILE_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
 
 #[async_trait]
 impl Tool for ReadFile {
-    fn name(&self) -> &str { "read_file" }
-    fn schema(&self) -> &ToolSchema { &READ_FILE_SCHEMA }
-    fn risk(&self) -> ToolRisk { ToolRisk::ReadOnly }
+    fn name(&self) -> &str {
+        "read_file"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &READ_FILE_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
 
     async fn invoke(
         &self,
         args: serde_json::Value,
         world: &mut World,
     ) -> Result<ToolResult, ToolError> {
-        let a: ReadArgs = serde_json::from_value(args)
-            .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
+        let a: ReadArgs = serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e.to_string(),
+        })?;
         let abs = resolve(&world.repo.root, &a.path)?;
         verify_no_symlink_escape(&world.repo.root, &abs)?;
         let content = tokio::fs::read_to_string(&abs)
@@ -59,10 +67,15 @@ impl Tool for ReadFile {
             .map_err(|e| ToolError::Exec(format!("{}: {e}", abs.display())))?;
 
         let offset = a.offset.unwrap_or(0);
-        let limit  = a.limit.unwrap_or(2000);
-        let lines:  Vec<&str> = content.lines().collect();
-        let total   = lines.len();
-        let take    = lines.iter().skip(offset).take(limit).copied().collect::<Vec<&str>>();
+        let limit = a.limit.unwrap_or(2000);
+        let lines: Vec<&str> = content.lines().collect();
+        let total = lines.len();
+        let take = lines
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .copied()
+            .collect::<Vec<&str>>();
         let returned = take.len();
         let truncated = offset + returned < total;
         let snippet = take.join("\n");
@@ -87,7 +100,7 @@ impl Tool for ReadFile {
 
 #[derive(Deserialize)]
 struct WriteArgs {
-    path:    String,
+    path: String,
     content: String,
 }
 
@@ -107,17 +120,25 @@ static WRITE_FILE_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
 
 #[async_trait]
 impl Tool for WriteFile {
-    fn name(&self) -> &str { "write_file" }
-    fn schema(&self) -> &ToolSchema { &WRITE_FILE_SCHEMA }
-    fn risk(&self) -> ToolRisk { ToolRisk::Destructive }
+    fn name(&self) -> &str {
+        "write_file"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &WRITE_FILE_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::Destructive
+    }
 
     async fn invoke(
         &self,
         args: serde_json::Value,
         world: &mut World,
     ) -> Result<ToolResult, ToolError> {
-        let a: WriteArgs = serde_json::from_value(args)
-            .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
+        let a: WriteArgs = serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e.to_string(),
+        })?;
         let abs = resolve(&world.repo.root, &a.path)?;
         if let Some(parent) = abs.parent() {
             tokio::fs::create_dir_all(parent)
@@ -164,9 +185,15 @@ static LIST_DIR_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
 
 #[async_trait]
 impl Tool for ListDir {
-    fn name(&self) -> &str { "list_dir" }
-    fn schema(&self) -> &ToolSchema { &LIST_DIR_SCHEMA }
-    fn risk(&self) -> ToolRisk { ToolRisk::ReadOnly }
+    fn name(&self) -> &str {
+        "list_dir"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &LIST_DIR_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
 
     async fn invoke(
         &self,
@@ -191,9 +218,9 @@ impl Tool for ListDir {
             .map_err(|e| ToolError::Exec(e.to_string()))?
         {
             let ft = e.file_type().await.ok();
-            let kind = if ft.map_or(false, |f| f.is_dir()) {
+            let kind = if ft.is_some_and(|f| f.is_dir()) {
                 "dir"
-            } else if ft.map_or(false, |f| f.is_file()) {
+            } else if ft.is_some_and(|f| f.is_file()) {
                 "file"
             } else {
                 "other"
@@ -204,7 +231,10 @@ impl Tool for ListDir {
             }));
         }
         entries.sort_by(|a, b| {
-            a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
         });
         Ok(ToolResult {
             ok: true,
@@ -218,9 +248,9 @@ impl Tool for ListDir {
 
 #[derive(Deserialize)]
 struct EditArgs {
-    path:        String,
-    old_string:  String,
-    new_string:  String,
+    path: String,
+    old_string: String,
+    new_string: String,
     #[serde(default)]
     replace_all: bool,
 }
@@ -245,17 +275,25 @@ static EDIT_FILE_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
 
 #[async_trait]
 impl Tool for EditFile {
-    fn name(&self) -> &str { "edit_file" }
-    fn schema(&self) -> &ToolSchema { &EDIT_FILE_SCHEMA }
-    fn risk(&self) -> ToolRisk { ToolRisk::Destructive }
+    fn name(&self) -> &str {
+        "edit_file"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &EDIT_FILE_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::Destructive
+    }
 
     async fn invoke(
         &self,
         args: serde_json::Value,
         world: &mut World,
     ) -> Result<ToolResult, ToolError> {
-        let a: EditArgs = serde_json::from_value(args)
-            .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
+        let a: EditArgs = serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e.to_string(),
+        })?;
         let abs = resolve(&world.repo.root, &a.path)?;
         verify_no_symlink_escape(&world.repo.root, &abs)?;
         let content = tokio::fs::read_to_string(&abs)
@@ -321,7 +359,9 @@ fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
-            std::path::Component::ParentDir => { out.pop(); }
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
             std::path::Component::CurDir => {}
             other => out.push(other.as_os_str()),
         }
@@ -364,10 +404,10 @@ mod tests {
     fn tmp_world() -> (tempdir::TestDir, World) {
         let td = tempdir::TestDir::new();
         let w = World {
-            repo:    RepoView { root: td.0.clone() },
-            runner:  Arc::new(NoopRunner),
-            clock:   Arc::new(NoopClock),
-            kv:      Arc::new(NoopKv),
+            repo: RepoView { root: td.0.clone() },
+            runner: Arc::new(NoopRunner),
+            clock: Arc::new(NoopClock),
+            kv: Arc::new(NoopKv),
             profile: harness_core::UserProfile::default(),
         };
         (td, w)
@@ -386,8 +426,7 @@ mod tests {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos();
-                let p = std::env::temp_dir()
-                    .join(format!("harness-tools-fs-{pid}-{nanos}-{n}"));
+                let p = std::env::temp_dir().join(format!("harness-tools-fs-{pid}-{nanos}-{n}"));
                 std::fs::create_dir_all(&p).unwrap();
                 TestDir(p)
             }
@@ -417,12 +456,16 @@ mod tests {
     }
     struct NoopClock;
     impl harness_core::Clock for NoopClock {
-        fn now_ms(&self) -> i64 { 0 }
+        fn now_ms(&self) -> i64 {
+            0
+        }
     }
     struct NoopKv;
     #[async_trait]
     impl harness_core::KvStore for NoopKv {
-        async fn get(&self, _: &str) -> Option<Vec<u8>> { None }
+        async fn get(&self, _: &str) -> Option<Vec<u8>> {
+            None
+        }
         async fn set(&self, _: &str, _: Vec<u8>) {}
         async fn delete(&self, _: &str) {}
     }
@@ -431,7 +474,10 @@ mod tests {
     async fn write_then_read() {
         let (_td, mut w) = tmp_world();
         let _ = WriteFile
-            .invoke(json!({"path": "hello.txt", "content": "hi\nthere\n"}), &mut w)
+            .invoke(
+                json!({"path": "hello.txt", "content": "hi\nthere\n"}),
+                &mut w,
+            )
             .await
             .unwrap();
         let out = ReadFile
@@ -449,14 +495,20 @@ mod tests {
         let err = ReadFile
             .invoke(json!({"path": "../../../etc/passwd"}), &mut w)
             .await;
-        assert!(matches!(err, Err(ToolError::Permission(_)) | Err(ToolError::Exec(_))));
+        assert!(matches!(
+            err,
+            Err(ToolError::Permission(_)) | Err(ToolError::Exec(_))
+        ));
     }
 
     #[tokio::test]
     async fn edit_replaces_unique_substring() {
         let (_td, mut w) = tmp_world();
         WriteFile
-            .invoke(json!({"path": "x.txt", "content": "alpha beta gamma"}), &mut w)
+            .invoke(
+                json!({"path": "x.txt", "content": "alpha beta gamma"}),
+                &mut w,
+            )
             .await
             .unwrap();
         EditFile
@@ -476,7 +528,10 @@ mod tests {
     #[tokio::test]
     async fn read_signals_truncation_when_file_exceeds_limit() {
         let (_td, mut w) = tmp_world();
-        let many_lines: String = (0..50).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let many_lines: String = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         WriteFile
             .invoke(json!({"path": "big.txt", "content": many_lines}), &mut w)
             .await

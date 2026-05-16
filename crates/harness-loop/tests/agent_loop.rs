@@ -46,7 +46,11 @@ impl Drop for TestDir {
 }
 
 fn task(desc: &str) -> Task {
-    Task { description: desc.into(), source: None, deadline: None }
+    Task {
+        description: desc.into(),
+        source: None,
+        deadline: None,
+    }
 }
 
 // ============================================================
@@ -112,7 +116,10 @@ async fn tool_result_visible_to_model_next_iter() {
 
     let model = Arc::new(
         MockModel::new()
-            .script(MockResponse::tool_call("read_file", json!({"path": "data.txt"})))
+            .script(MockResponse::tool_call(
+                "read_file",
+                json!({"path": "data.txt"}),
+            ))
             .script(MockResponse::text("done")),
     );
     let model_ref = model.clone();
@@ -127,7 +134,9 @@ async fn tool_result_visible_to_model_next_iter() {
         ) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
             self.0.complete(ctx).await
         }
-        fn info(&self) -> harness_core::ModelInfo { self.0.info() }
+        fn info(&self) -> harness_core::ModelInfo {
+            self.0.info()
+        }
     }
 
     AgentLoop::new(Shared(model_ref.clone()))
@@ -169,13 +178,17 @@ async fn pre_tool_use_deny_blocks_dispatch() {
         denials: Arc<AtomicU32>,
     }
     impl harness_core::Hook for DenyReadFile {
-        fn name(&self) -> &str { "deny-read-file" }
+        fn name(&self) -> &str {
+            "deny-read-file"
+        }
         fn matches(&self, ev: &Event<'_>) -> bool {
             matches!(ev, Event::PreToolUse { action } if action.tool == "read_file")
         }
         fn fire(&self, _ev: &Event<'_>, _w: &mut World) -> HookOutcome {
             self.denials.fetch_add(1, Ordering::SeqCst);
-            HookOutcome::Deny { reason: "no secrets".into() }
+            HookOutcome::Deny {
+                reason: "no secrets".into(),
+            }
         }
     }
 
@@ -189,7 +202,9 @@ async fn pre_tool_use_deny_blocks_dispatch() {
 
     AgentLoop::new(model)
         .with_tool(Arc::new(ReadFile))
-        .with_hook(Arc::new(DenyReadFile { denials: denials.clone() }))
+        .with_hook(Arc::new(DenyReadFile {
+            denials: denials.clone(),
+        }))
         .run_with_max_iters(task("try to read"), &mut world, 5)
         .await
         .unwrap();
@@ -211,21 +226,27 @@ async fn sensor_signals_feed_back_to_model() {
     }
     #[async_trait::async_trait]
     impl harness_core::Sensor for AlwaysComplain {
-        fn id(&self)    -> &SensorId  { &self.id }
-        fn kind(&self)  -> Execution  { Execution::Computational }
-        fn stage(&self) -> Stage      { Stage::SelfCorrect }
+        fn id(&self) -> &SensorId {
+            &self.id
+        }
+        fn kind(&self) -> Execution {
+            Execution::Computational
+        }
+        fn stage(&self) -> Stage {
+            Stage::SelfCorrect
+        }
         async fn observe(
             &self,
             _: &Action,
             _: &World,
         ) -> Result<Vec<Signal>, harness_core::SensorError> {
             Ok(vec![Signal {
-                severity:   Severity::Block,
-                origin:     "always-complain".into(),
-                message:    "this is bad".into(),
+                severity: Severity::Block,
+                origin: "always-complain".into(),
+                message: "this is bad".into(),
                 agent_hint: Some("undo it".into()),
-                auto_fix:   None,
-                location:   None,
+                auto_fix: None,
+                location: None,
             }])
         }
     }
@@ -243,15 +264,22 @@ async fn sensor_signals_feed_back_to_model() {
     struct Shared(Arc<MockModel>);
     #[async_trait::async_trait]
     impl harness_core::Model for Shared {
-        async fn complete(&self, ctx: &Context) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
+        async fn complete(
+            &self,
+            ctx: &Context,
+        ) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
             self.0.complete(ctx).await
         }
-        fn info(&self) -> harness_core::ModelInfo { self.0.info() }
+        fn info(&self) -> harness_core::ModelInfo {
+            self.0.info()
+        }
     }
 
     AgentLoop::new(Shared(model.clone()))
         .with_tool(Arc::new(WriteFile))
-        .with_sensor(Arc::new(AlwaysComplain { id: "always-complain".into() }))
+        .with_sensor(Arc::new(AlwaysComplain {
+            id: "always-complain".into(),
+        }))
         .run_with_max_iters(task("write bad file"), &mut world, 5)
         .await
         .unwrap();
@@ -283,9 +311,15 @@ async fn guide_applies_before_first_model_call() {
     }
     #[async_trait::async_trait]
     impl harness_core::Guide for InjectGuide {
-        fn id(&self) -> &GuideId { &self.id }
-        fn kind(&self) -> Execution { Execution::Inferential }
-        fn scope(&self) -> &GuideScope { &self.scope }
+        fn id(&self) -> &GuideId {
+            &self.id
+        }
+        fn kind(&self) -> Execution {
+            Execution::Inferential
+        }
+        fn scope(&self) -> &GuideScope {
+            &self.scope
+        }
         async fn apply(
             &self,
             ctx: &mut Context,
@@ -301,16 +335,24 @@ async fn guide_applies_before_first_model_call() {
     struct Shared(Arc<MockModel>);
     #[async_trait::async_trait]
     impl harness_core::Model for Shared {
-        async fn complete(&self, ctx: &Context) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
+        async fn complete(
+            &self,
+            ctx: &Context,
+        ) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
             // We can verify directly here that guide content is on `ctx`.
             let injected = ctx
                 .guides
                 .iter()
                 .any(|b| matches!(b, Block::Text(t) if t == "INJECTED-BY-GUIDE"));
-            assert!(injected, "guide content missing from ctx.guides at model.complete()");
+            assert!(
+                injected,
+                "guide content missing from ctx.guides at model.complete()"
+            );
             self.0.complete(ctx).await
         }
-        fn info(&self) -> harness_core::ModelInfo { self.0.info() }
+        fn info(&self) -> harness_core::ModelInfo {
+            self.0.info()
+        }
     }
 
     AgentLoop::new(Shared(model.clone()))
@@ -367,23 +409,27 @@ async fn auto_fix_replace_file_writes_to_disk() {
                 once_cell::sync::Lazy::new(|| "patcher".into());
             &ID
         }
-        fn kind(&self)  -> Execution  { Execution::Computational }
-        fn stage(&self) -> Stage      { Stage::SelfCorrect }
+        fn kind(&self) -> Execution {
+            Execution::Computational
+        }
+        fn stage(&self) -> Stage {
+            Stage::SelfCorrect
+        }
         async fn observe(
             &self,
             _a: &Action,
             _w: &World,
         ) -> Result<Vec<Signal>, harness_core::SensorError> {
             Ok(vec![Signal {
-                severity:   Severity::Hint,
-                origin:     "patcher".into(),
-                message:    "applying fix".into(),
+                severity: Severity::Hint,
+                origin: "patcher".into(),
+                message: "applying fix".into(),
                 agent_hint: None,
-                auto_fix:   Some(harness_core::FixPatch::ReplaceFile {
-                    path:    "target.txt".into(),
+                auto_fix: Some(harness_core::FixPatch::ReplaceFile {
+                    path: "target.txt".into(),
                     content: "NEW CONTENT\n".into(),
                 }),
-                location:   None,
+                location: None,
             }])
         }
     }
@@ -423,7 +469,10 @@ async fn compaction_runs_at_top_of_iter_when_over_budget() {
     impl harness_core::Compactor for RecordingCompactor {
         fn budget(&self, _ctx: &Context) -> harness_core::Budget {
             // Always report 99% to force every stage to fire.
-            harness_core::Budget { used: 99, window: 100 }
+            harness_core::Budget {
+                used: 99,
+                window: 100,
+            }
         }
         async fn compact(
             &self,
@@ -435,7 +484,9 @@ async fn compaction_runs_at_top_of_iter_when_over_budget() {
         }
     }
 
-    let recorder = Arc::new(RecordingCompactor { triggered: Mutex::new(Vec::new()) });
+    let recorder = Arc::new(RecordingCompactor {
+        triggered: Mutex::new(Vec::new()),
+    });
     let model = MockModel::new().script(MockResponse::text("done"));
 
     AgentLoop::new(model)
@@ -449,7 +500,13 @@ async fn compaction_runs_at_top_of_iter_when_over_budget() {
     use harness_core::CompactionStage::*;
     assert_eq!(
         stages,
-        vec![BudgetReduce, Snip, Microcompact, ContextCollapse, AutoCompact]
+        vec![
+            BudgetReduce,
+            Snip,
+            Microcompact,
+            ContextCollapse,
+            AutoCompact
+        ]
     );
 }
 
@@ -470,8 +527,12 @@ async fn skill_registry_catalogue_is_readable_at_session_start() {
 
     struct DummySkill(SkillManifest);
     impl Skill for DummySkill {
-        fn manifest(&self) -> &SkillManifest { &self.0 }
-        fn body(&self) -> Cow<'_, str> { Cow::Borrowed("body") }
+        fn manifest(&self) -> &SkillManifest {
+            &self.0
+        }
+        fn body(&self) -> Cow<'_, str> {
+            Cow::Borrowed("body")
+        }
     }
 
     let mut reg = SkillRegistry::new();

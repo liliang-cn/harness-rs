@@ -22,18 +22,18 @@ pub enum ToolRisk {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSchema {
-    pub name:        String,
+    pub name: String,
     pub description: String,
     /// JSON Schema for the tool input.
-    pub input:       serde_json::Value,
+    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub ok:       bool,
-    pub content:  serde_json::Value,
+    pub ok: bool,
+    pub content: serde_json::Value,
     /// Output sized for `tracing` / replay logs but not necessarily for the model.
-    pub trace:    Option<String>,
+    pub trace: Option<String>,
 }
 
 #[async_trait]

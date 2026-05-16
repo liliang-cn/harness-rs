@@ -10,7 +10,12 @@ use harness_tools_shell::ShellRead;
 use std::sync::Arc;
 
 pub fn tools() -> Vec<Arc<dyn Tool>> {
-    vec![Arc::new(ListDir), Arc::new(ReadFile), Arc::new(WriteFile), Arc::new(ShellRead)]
+    vec![
+        Arc::new(ListDir),
+        Arc::new(ReadFile),
+        Arc::new(WriteFile),
+        Arc::new(ShellRead),
+    ]
 }
 
 pub fn sensors() -> Vec<Arc<dyn Sensor>> {
