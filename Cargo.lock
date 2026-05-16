@@ -404,6 +404,9 @@ dependencies = [
  "async-trait",
  "harness-context",
  "harness-core",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

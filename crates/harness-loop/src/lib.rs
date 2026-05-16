@@ -12,9 +12,10 @@ pub mod registry;
 
 pub use registry::*;
 
+use harness_compactor::DefaultCompactor;
 use harness_core::{
-    Action, Block, Context, Event, Guide, HarnessError, HookOutcome, Model, Sensor, SessionSource,
-    SignalSet, Stage, Task, ToolResult, Turn, TurnRole, World,
+    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model, Sensor,
+    SessionSource, SignalSet, Stage, Task, ToolResult, Turn, TurnRole, World,
 };
 use harness_hooks::HookBus;
 use std::sync::Arc;
@@ -30,22 +31,29 @@ pub enum Outcome {
 
 /// The agent loop.
 pub struct AgentLoop<M: Model> {
-    pub model:   M,
-    pub tools:   ToolRegistry,
-    pub guides:  Vec<Arc<dyn Guide>>,
-    pub sensors: Vec<Arc<dyn Sensor>>,
-    pub hooks:   HookBus,
+    pub model:      M,
+    pub tools:      ToolRegistry,
+    pub guides:     Vec<Arc<dyn Guide>>,
+    pub sensors:    Vec<Arc<dyn Sensor>>,
+    pub hooks:      HookBus,
+    pub compactor:  Arc<dyn Compactor>,
 }
 
 impl<M: Model> AgentLoop<M> {
     pub fn new(model: M) -> Self {
         Self {
             model,
-            tools:   ToolRegistry::new(),
-            guides:  Vec::new(),
-            sensors: Vec::new(),
-            hooks:   HookBus::new(),
+            tools:     ToolRegistry::new(),
+            guides:    Vec::new(),
+            sensors:   Vec::new(),
+            hooks:     HookBus::new(),
+            compactor: Arc::new(DefaultCompactor::new()),
         }
+    }
+
+    pub fn with_compactor(mut self, c: Arc<dyn Compactor>) -> Self {
+        self.compactor = c;
+        self
     }
 
     pub fn with_tool(mut self, t: Arc<dyn harness_core::Tool>) -> Self {
@@ -106,6 +114,15 @@ impl<M: Model> AgentLoop<M> {
 
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
+
+            // Compaction: run every stage required by current budget.
+            let stages = self.compactor.budget(&ctx).required_stages();
+            for stage in stages {
+                self.hooks.fire(&Event::PreCompact { stage }, world);
+                self.compactor.compact(stage, &mut ctx).await?;
+                self.hooks.fire(&Event::PostCompact { stage }, world);
+            }
+
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
             let out = self.model.complete(&ctx).await?;
             self.hooks.fire(&Event::PostModel { out: &out }, world);
