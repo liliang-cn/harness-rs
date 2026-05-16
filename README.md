@@ -31,16 +31,18 @@ architectural rationale.
 ```rust
 use harness::prelude::*;
 use harness_loop::AgentLoop;
-use harness_models::{OpenAiCompat, providers};
+use harness_models::{OpenAiCompat, providers::DEEPSEEK};
 use harness_tools_fs::{ListDir, ReadFile};
 use harness_context::default_world;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), harness::HarnessError> {
-    let model = OpenAiCompat::new(providers::deepseek_flash(
+    let model = OpenAiCompat::with_key(
+        DEEPSEEK,
+        "deepseek-chat",
         std::env::var("DEEPSEEK_API_KEY").unwrap(),
-    ));
+    );
     let mut world = default_world(".");
     let outcome = AgentLoop::new(model)
         .with_tool(Arc::new(ReadFile))
@@ -132,7 +134,7 @@ $ harness new my-agent
 
 ```
 $ cargo test --workspace
-... 70+ tests passing
+... 123 tests passing
 ```
 
 Three layers of verification:
@@ -150,19 +152,26 @@ Three layers of verification:
 
 ## Examples
 
-- `examples/deepseek-hello` — smoke-test the `Model` trait against DeepSeek
-- `examples/crate-keeper` — read-only audit of any Rust workspace; produces a
-  `HARNESS_NOTES.md` summary
+See [`examples/README.md`](examples/README.md) for full descriptions. In order
+of increasing surface area:
+
+- `examples/deepseek-hello` — smallest possible Hello-world against DeepSeek.
+- `examples/crate-keeper` — `MockModel` smoke test; no network.
+- `examples/personal-assistant` — scheduling agent with `UserProfile`,
+  REPL, brief mode.
+- `examples/investor-bot` — autonomous web research with multi-engine search
+  fallback + retry.
 
 ## Status
 
-Per **DESIGN.md §15**:
-
-- **v0.0.1 MVP** — ✅ complete
-- **v0.1** — ✅ complete + production-hardened (security, validation parity,
-  `#[non_exhaustive]` on stable enums, full Anthropic round-trip incl. thinking)
-- **v0.2+** — VmSandbox / ContainerSandbox / MCP server / OpenTelemetry /
-  session replay — deferred
+- **v0.0.1** — ✅ initial publish (15 of 18 crates).
+- **v0.0.2** — ✅ shipped. `UserProfile` + `ProfileGuide`, optional
+  `harness-rs-daemon` scheduler, retry/backoff in model adapters, MCP server
+  with resources + prompts, session record/replay, multi-engine search,
+  `#[non_exhaustive]` sweep, security gates on `FixPatch::RunCommand` +
+  `shell_read`. See [CHANGELOG](CHANGELOG.md).
+- **v0.1+** — `ContainerSandbox` / `VmSandbox` / first-class blueprint
+  `Node::Agent` are on the road.
 
 ## License
 

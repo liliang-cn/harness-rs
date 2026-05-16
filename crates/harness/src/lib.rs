@@ -42,16 +42,13 @@
 //!     "deepseek-chat",
 //!     std::env::var("DEEPSEEK_API_KEY")?,
 //! );
-//! let mut loop_ = AgentLoop::builder()
-//!     .model(Arc::new(model))
-//!     .tool(Arc::new(add()))
-//!     .build();
+//! let loop_ = AgentLoop::new(model).with_tool(Arc::new(add()));
 //! let mut world = default_world(std::env::current_dir()?);
 //! let outcome = loop_
 //!     .run(
-//!         Task::new("What is 2 + 3?"),
+//!         Task { description: "What is 2 + 3?".into(),
+//!                source: None, deadline: None },
 //!         &mut world,
-//!         Policy::default(),
 //!     )
 //!     .await?;
 //! println!("{outcome:?}");
