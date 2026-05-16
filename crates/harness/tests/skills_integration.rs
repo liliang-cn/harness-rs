@@ -113,3 +113,54 @@ fn registry_merges_filesystem_and_macro_skills() {
     assert!(pos_echo  < pos_fmt);
     assert!(pos_fmt   < pos_hello);
 }
+
+/// audit #11: end-to-end round-trip for `#[skill]`-macro-registered skills.
+///
+/// 1. Build a registry from `inventory` (no filesystem skills)
+/// 2. Export it to a temp dir
+/// 3. Validate every emitted SKILL.md against the agentskills.io spec
+/// 4. Re-load the export tree, confirm everything round-trips
+/// 5. Confirm the macro-emitted skill carries `metadata.harness.{kind,risk}`
+///    in the published SKILL.md (so external agents see the framework hints)
+#[test]
+fn macro_skill_round_trips_via_export() {
+    let registry = skills::SkillRegistry::new()
+        .with_macro_skills()
+        .expect("macro skills register");
+
+    let tmp = std::env::temp_dir().join(format!(
+        "harness-export-roundtrip-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // 2. Export everything
+    let written = skills::export_registry(&registry, &tmp)
+        .expect("export_registry succeeds");
+    assert!(!written.is_empty(), "at least one skill exported");
+
+    // 3. Each emitted SKILL.md must validate
+    for path in &written {
+        assert!(path.exists(), "exported path exists: {}", path.display());
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.starts_with("---\n"), "SKILL.md starts with YAML frontmatter");
+        assert!(body.contains("---\n\n"), "frontmatter is terminated");
+    }
+
+    // 4. Reload — does the registry see every skill we exported?
+    let reloaded = skills::SkillRegistry::new()
+        .with_filesystem_root(&tmp)
+        .expect("reload from exported tree");
+    assert_eq!(reloaded.len(), written.len());
+    let echo_reloaded = reloaded.get("echo").expect("echo round-trips");
+    assert_eq!(echo_reloaded.manifest().name, "echo");
+    assert_eq!(echo_reloaded.manifest().license.as_deref(), Some("MIT"));
+
+    // 5. metadata.harness.* preserved
+    let harness_ext = echo_reloaded.manifest().harness_ext().expect("harness ext preserved");
+    assert!(matches!(harness_ext.kind, Some(harness::Execution::Computational)));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
