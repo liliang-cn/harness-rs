@@ -165,11 +165,81 @@ async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
         .ok_or_else(|| ToolError::InvalidArgs { name: "investor".into(), reason: "query required".into() })?;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8).min(20) as usize;
 
+    // Audit #12: search was DDG-only with no fallback. A single HTML layout
+    // change (or a 429 from DDG) broke the entire tool. Now try DDG first,
+    // fall through to Bing if it returns nothing or errors. Each engine gets
+    // one retry on transient network failure.
+    let mut tried: Vec<String> = Vec::new();
+    let mut errs:  Vec<String> = Vec::new();
+
+    for engine in [SearchEngine::DuckDuckGo, SearchEngine::Bing] {
+        tried.push(engine.name().into());
+        match search_with_retry(engine, query, limit).await {
+            Ok(hits) if !hits.is_empty() => {
+                return Ok(ToolResult {
+                    ok: true,
+                    content: json!({
+                        "query":   query,
+                        "count":   hits.len(),
+                        "engine":  engine.name(),
+                        "results": hits,
+                    }),
+                    trace: None,
+                });
+            }
+            Ok(_)  => errs.push(format!("{}: 0 results", engine.name())),
+            Err(e) => errs.push(format!("{}: {e}", engine.name())),
+        }
+    }
+
+    Ok(ToolResult {
+        ok: false,
+        content: json!({
+            "query":   query,
+            "count":   0,
+            "engines_tried": tried,
+            "errors":  errs,
+            "results": serde_json::Value::Array(vec![]),
+            "hint":    "All search engines returned empty or errored — try a more specific query, or web_fetch a known URL directly.",
+        }),
+        trace: None,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SearchEngine { DuckDuckGo, Bing }
+impl SearchEngine {
+    fn name(&self) -> &'static str {
+        match self { Self::DuckDuckGo => "duckduckgo", Self::Bing => "bing" }
+    }
+}
+
+async fn search_with_retry(engine: SearchEngine, query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
+    let mut last_err = String::new();
+    for attempt in 1..=2 {
+        match search_once(engine, query, limit).await {
+            Ok(hits) => return Ok(hits),
+            Err(e) => {
+                last_err = e;
+                if attempt < 2 { tokio::time::sleep(std::time::Duration::from_millis(800)).await; }
+            }
+        }
+    }
+    Err(last_err)
+}
+
+async fn search_once(engine: SearchEngine, query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
+    match engine {
+        SearchEngine::DuckDuckGo => search_duckduckgo(query, limit).await,
+        SearchEngine::Bing       => search_bing(query, limit).await,
+    }
+}
+
+async fn search_duckduckgo(query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
     let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
-    let body = http_client()
-        .get(&url)
-        .send().await.map_err(|e| ToolError::Exec(format!("search: {e}")))?
-        .text().await.map_err(|e| ToolError::Exec(format!("search body: {e}")))?;
+    let body = http_client().get(&url).send().await
+        .map_err(|e| format!("send: {e}"))?
+        .text().await.map_err(|e| format!("body: {e}"))?;
 
     let doc = Html::parse_document(&body);
     let result_sel = Selector::parse("div.result, div.web-result").unwrap();
@@ -180,7 +250,7 @@ async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
     for (i, node) in doc.select(&result_sel).take(limit).enumerate() {
         let (title, url) = node.select(&title_sel).next()
             .map(|a| {
-                let t = a.text().collect::<String>().trim().to_string();
+                let t   = a.text().collect::<String>().trim().to_string();
                 let raw = a.value().attr("href").unwrap_or("").to_string();
                 (t, unwrap_duckduckgo_redirect(&raw))
             })
@@ -192,12 +262,37 @@ async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
             hits.push(SearchHit { rank: i as u32 + 1, title, url, snippet });
         }
     }
+    Ok(hits)
+}
 
-    Ok(ToolResult {
-        ok: true,
-        content: json!({"query": query, "count": hits.len(), "results": hits}),
-        trace: None,
-    })
+async fn search_bing(query: &str, limit: usize) -> Result<Vec<SearchHit>, String> {
+    let url = format!("https://www.bing.com/search?q={}", urlencoding::encode(query));
+    let body = http_client().get(&url).send().await
+        .map_err(|e| format!("send: {e}"))?
+        .text().await.map_err(|e| format!("body: {e}"))?;
+
+    let doc = Html::parse_document(&body);
+    let result_sel = Selector::parse("li.b_algo").unwrap();
+    let title_sel  = Selector::parse("h2 a").unwrap();
+    let snip_sel   = Selector::parse(".b_caption p, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4")
+        .unwrap();
+
+    let mut hits = Vec::with_capacity(limit);
+    for (i, node) in doc.select(&result_sel).take(limit).enumerate() {
+        let (title, url) = node.select(&title_sel).next()
+            .map(|a| (
+                a.text().collect::<String>().trim().to_string(),
+                a.value().attr("href").unwrap_or("").to_string(),
+            ))
+            .unwrap_or_default();
+        let snippet = node.select(&snip_sel).next()
+            .map(|s| s.text().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        if !title.is_empty() && url.starts_with("http") {
+            hits.push(SearchHit { rank: i as u32 + 1, title, url, snippet });
+        }
+    }
+    Ok(hits)
 }
 
 /// DuckDuckGo's `/l/?uddg=ENCODED&kh=...` redirect → unwrap to the target URL.
@@ -241,16 +336,32 @@ async fn web_fetch(args: Value, _w: &mut World) -> Result<ToolResult, ToolError>
         return Err(ToolError::InvalidArgs { name: "investor".into(), reason: format!("not http(s): {url}") });
     }
 
-    let resp = http_client()
-        .get(url)
-        .header("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5")
-        .send().await.map_err(|e| ToolError::Exec(format!("fetch: {e}")))?;
-    let status = resp.status();
-    let ct = resp.headers().get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let body = resp.text().await.map_err(|e| ToolError::Exec(format!("body: {e}")))?;
+    // Audit #12: one retry on transient network error. Doesn't help if the
+    // server keeps returning 4xx/5xx — those are caller's problem.
+    let (status, ct, body) = {
+        let mut last_err = String::new();
+        let mut got: Option<(reqwest::StatusCode, String, String)> = None;
+        for attempt in 1..=2 {
+            match http_client()
+                .get(url)
+                .header("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5")
+                .send().await
+            {
+                Ok(resp) => {
+                    let s = resp.status();
+                    let c = resp.headers().get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                    match resp.text().await {
+                        Ok(b) => { got = Some((s, c, b)); break; }
+                        Err(e) => last_err = format!("body: {e}"),
+                    }
+                }
+                Err(e) => last_err = format!("send: {e}"),
+            }
+            if attempt < 2 { tokio::time::sleep(std::time::Duration::from_millis(600)).await; }
+        }
+        got.ok_or_else(|| ToolError::Exec(format!("fetch: {last_err}")))?
+    };
 
     let cleaned = if ct.contains("application/json") || ct.contains("text/plain") {
         body
