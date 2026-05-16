@@ -1,6 +1,6 @@
 //! Investor research agent — built on harness-rs.
 //!
-//! 4 custom #[tool]s let an LLM autonomously navigate public financial info:
+//! 4 custom `#[tool]`s let an LLM autonomously navigate public financial info:
 //!   • web_search   — DuckDuckGo HTML search (no API key)
 //!   • web_fetch    — GET a URL, strip HTML to readable text (capped)
 //!   • save_note    — persist a research finding with source URL + tags

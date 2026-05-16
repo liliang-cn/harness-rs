@@ -1,4 +1,4 @@
-//! Opt-in `Guide` that renders [`UserProfile`] into the agent's system prompt.
+//! Opt-in `Guide` that renders [`harness_core::UserProfile`] into the agent's system prompt.
 //!
 //! Add to your loop when you want every model call to know who it's working for:
 //!

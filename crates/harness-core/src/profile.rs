@@ -5,7 +5,7 @@
 //! a free-form `extra` map for agent-specific preferences.
 //!
 //! Persistence is up to the runtime layer (see `harness_context::profile`).
-//! Tools read [`World::profile`]; an opt-in [`profile::ProfileGuide`] from
+//! Tools read [`crate::World::profile`]; an opt-in `ProfileGuide` from
 //! `harness_loop` automatically renders it into the agent's system prompt.
 
 use serde::{Deserialize, Serialize};

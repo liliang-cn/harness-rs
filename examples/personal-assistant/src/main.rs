@@ -1,6 +1,6 @@
 //! Personal assistant agent — calendar/scheduling demo for the harness-rs framework.
 //!
-//! Five custom #[tool]s manipulate a JSON event store at `~/.harness-assistant/events.json`.
+//! Five custom `#[tool]`s manipulate a JSON event store at `~/.harness-assistant/events.json`.
 //! The agent loop wires them up and lets DeepSeek handle natural language scheduling.
 //!
 //! ```sh
