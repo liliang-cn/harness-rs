@@ -216,8 +216,12 @@ impl<M: Model> AgentLoop<M> {
     }
 }
 
+/// Monotonic counter for `.harness-patch-*.diff` temp filenames — millisecond
+/// resolution alone collides under parallel agent runs.
+static PATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Apply auto-fix patches; return short descriptions of those that succeeded.
-async fn apply_patches(
+pub(crate) async fn apply_patches(
     patches: &[harness_core::FixPatch],
     world: &mut World,
 ) -> Vec<String> {
@@ -235,28 +239,8 @@ async fn apply_patches(
                 }
             }
             FixPatch::UnifiedDiff { diff } => {
-                // Naive: pipe diff through `patch -p0` via the world runner.
-                // Anything more sophisticated belongs in a dedicated patch-engine crate.
-                use tokio::io::AsyncWriteExt;
-                let tmp = world
-                    .repo
-                    .root
-                    .join(format!(".harness-patch-{}.diff", world.clock.now_ms()));
-                if let Ok(mut f) = tokio::fs::File::create(&tmp).await {
-                    if f.write_all(diff.as_bytes()).await.is_ok()
-                        && let Ok(out) = world
-                            .runner
-                            .exec(
-                                "patch",
-                                &["-p0", "-i", tmp.to_string_lossy().as_ref()],
-                                Some(world.repo.root.as_path()),
-                            )
-                            .await
-                        && out.status == 0
-                    {
-                        applied.push("unified diff applied".into());
-                    }
-                    let _ = tokio::fs::remove_file(&tmp).await;
+                if try_apply_diff(world, diff).await {
+                    applied.push("unified diff applied".into());
                 }
             }
             FixPatch::RunCommand { program, args, cwd } => {
@@ -270,5 +254,65 @@ async fn apply_patches(
             }
         }
     }
+    applied
+}
+
+/// Write `diff` to a unique temp file and try `patch -p1` first, then `-p0`.
+/// Returns whether either succeeded. The `-p1`-then-`-p0` order matches the
+/// reality that most agent-emitted diffs are git-style (need `-p1`) but some
+/// hand-rolled diffs use repo-relative paths (need `-p0`).
+async fn try_apply_diff(world: &mut World, diff: &str) -> bool {
+    use std::sync::atomic::Ordering;
+    use tokio::io::AsyncWriteExt;
+
+    let seq = PATCH_SEQ.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let now = world.clock.now_ms();
+    let tmp = world
+        .repo
+        .root
+        .join(format!(".harness-patch-{pid}-{now}-{seq}.diff"));
+
+    let mut f = match tokio::fs::File::create(&tmp).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error=%e, path=%tmp.display(), "could not create patch tempfile");
+            return false;
+        }
+    };
+    if let Err(e) = f.write_all(diff.as_bytes()).await {
+        tracing::warn!(error=%e, "could not write patch tempfile");
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return false;
+    }
+    drop(f);
+
+    let tmp_str = tmp.to_string_lossy().to_string();
+    let mut applied = false;
+    for strip in ["-p1", "-p0"] {
+        match world
+            .runner
+            .exec(
+                "patch",
+                &[strip, "--silent", "-i", tmp_str.as_str()],
+                Some(world.repo.root.as_path()),
+            )
+            .await
+        {
+            Ok(out) if out.status == 0 => {
+                tracing::info!(strip, "patch applied");
+                applied = true;
+                break;
+            }
+            Ok(out) => {
+                tracing::debug!(strip, stderr=%out.stderr, "patch failed; trying next strip level");
+            }
+            Err(e) => {
+                tracing::warn!(error=%e, "patch command not available");
+                break; // patch tool missing — no point trying other strip
+            }
+        }
+    }
+    let _ = tokio::fs::remove_file(&tmp).await;
     applied
 }
