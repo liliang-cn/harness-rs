@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use harness_core::Skill;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = "harness", version, about = "Harness agent framework CLI")]
@@ -23,6 +23,19 @@ enum Cmd {
         /// Parent directory (defaults to the current dir).
         #[arg(long)]
         path: Option<PathBuf>,
+        /// Auto-wire `[patch.crates-io]` pointing at this local harness workspace
+        /// (the directory containing the top-level `Cargo.toml` of the harness
+        /// workspace, e.g. `/Users/me/code/harness`). Use for local development
+        /// against an unpublished framework. If the CLI binary itself was
+        /// installed from a local checkout, that path is used as the default
+        /// when `--workspace` is omitted but `--local` is passed.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Shorthand: auto-detect the harness workspace from the running binary's
+        /// build context and inject [patch.crates-io] for it. Useful right after
+        /// `cargo install --path crates/harness-cli`.
+        #[arg(long)]
+        local: bool,
     },
     /// Pretty-print a recorded session JSONL log (from `SessionRecorder`).
     Trace {
@@ -139,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             println!("\nexported {} skill(s) to {}", paths.len(), target.display());
             Ok(())
         }
-        Cmd::New { name, path } => scaffold_new_project(name, path),
+        Cmd::New { name, path, workspace, local } => scaffold_new_project(name, path, workspace, local),
         Cmd::Trace { file, summary } => print_session_trace(file, summary),
         Cmd::Mcp { cmd: McpCmd::Serve { workspace } } => run_mcp_server(workspace).await,
     }
@@ -188,7 +201,12 @@ fn print_session_trace(file: PathBuf, summary_only: bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn scaffold_new_project(name: String, parent: Option<PathBuf>) -> anyhow::Result<()> {
+fn scaffold_new_project(
+    name: String,
+    parent: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+    local: bool,
+) -> anyhow::Result<()> {
     // Validate name as a cargo package identifier — same rules as agentskills.io
     // (lowercase, hyphens, no leading/trailing hyphen) plus Rust's no-leading-digit.
     if name.is_empty() {
@@ -213,6 +231,41 @@ fn scaffold_new_project(name: String, parent: Option<PathBuf>) -> anyhow::Result
     }
     std::fs::create_dir_all(dir.join("src"))?;
 
+    // Resolve which local harness workspace to [patch] against, if any.
+    let patch_root: Option<PathBuf> = match (workspace.as_ref(), local) {
+        (Some(p), _) => Some(canon_workspace_root(p)?),
+        (None, true) => Some(canon_workspace_root(&detect_local_workspace()?)?),
+        (None, false) => None,
+    };
+
+    let patch_section = if let Some(root) = &patch_root {
+        format!(
+            r#"
+[patch.crates-io]
+harness            = {{ path = "{root}/crates/harness" }}
+harness-core       = {{ path = "{root}/crates/harness-core" }}
+harness-loop       = {{ path = "{root}/crates/harness-loop" }}
+harness-models     = {{ path = "{root}/crates/harness-models" }}
+harness-tools-fs   = {{ path = "{root}/crates/harness-tools-fs" }}
+harness-tools-shell= {{ path = "{root}/crates/harness-tools-shell" }}
+harness-context    = {{ path = "{root}/crates/harness-context" }}
+harness-skills     = {{ path = "{root}/crates/harness-skills" }}
+harness-macros     = {{ path = "{root}/crates/harness-macros" }}
+harness-hooks      = {{ path = "{root}/crates/harness-hooks" }}
+harness-compactor  = {{ path = "{root}/crates/harness-compactor" }}
+harness-blueprint  = {{ path = "{root}/crates/harness-blueprint" }}
+harness-sandbox    = {{ path = "{root}/crates/harness-sandbox" }}
+harness-sensors-rust   = {{ path = "{root}/crates/harness-sensors-rust" }}
+harness-sensors-common = {{ path = "{root}/crates/harness-sensors-common" }}
+harness-templates  = {{ path = "{root}/crates/harness-templates" }}
+harness-mcp        = {{ path = "{root}/crates/harness-mcp" }}
+"#,
+            root = root.display()
+        )
+    } else {
+        String::new()
+    };
+
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
@@ -234,7 +287,7 @@ harness-context = "0.0.1"
 tokio          = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 anyhow         = "1"
 serde_json     = "1"
-"#
+{patch_section}"#
     );
     std::fs::write(dir.join("Cargo.toml"), cargo_toml)?;
 
@@ -302,12 +355,68 @@ async fn main() -> anyhow::Result<()> {
     println!("✓ created {}/", dir.display());
     println!("  └─ Cargo.toml");
     println!("  └─ src/main.rs   (one #[skill], one #[tool], a minimal AgentLoop)");
+    if let Some(root) = &patch_root {
+        println!("  └─ [patch.crates-io] → {}", root.display());
+    } else {
+        println!();
+        println!("Note: the framework isn't on crates.io yet. To build this project");
+        println!("today, either re-run with `--local` (auto-detects the harness");
+        println!("workspace from the installed binary) or `--workspace <path>`,");
+        println!("or add a [patch.crates-io] section manually.");
+    }
     println!();
     println!("Next steps:");
     println!("  cd {}", dir.display());
     println!("  export DEEPSEEK_API_KEY=…");
     println!("  cargo run");
     Ok(())
+}
+
+/// Canonicalize the user-supplied harness workspace path and verify it really
+/// is a harness checkout (has `crates/harness-core` and `crates/harness`).
+fn canon_workspace_root(p: &Path) -> anyhow::Result<PathBuf> {
+    let c = p
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("workspace `{}`: {e}", p.display()))?;
+    let core = c.join("crates/harness-core/Cargo.toml");
+    let facade = c.join("crates/harness/Cargo.toml");
+    if !core.exists() || !facade.exists() {
+        anyhow::bail!(
+            "{} does not look like a harness workspace (missing crates/harness-core or crates/harness)",
+            c.display()
+        );
+    }
+    Ok(c)
+}
+
+/// Try to find the harness workspace this binary was built from, by walking up
+/// from `CARGO_MANIFEST_DIR` (captured at build time). Falls back to walking up
+/// from the current dir, which catches the common case of running `--local`
+/// while in a sibling shell of the checkout.
+fn detect_local_workspace() -> anyhow::Result<PathBuf> {
+    // Cargo captures the per-crate manifest dir at build time. For the
+    // installed binary that's typically `…/crates/harness-cli`. Two `parent()`
+    // calls take us to the workspace root.
+    let cli_manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if let Some(crates) = cli_manifest.parent()
+        && let Some(root) = crates.parent()
+        && root.join("crates/harness-core/Cargo.toml").exists()
+    {
+        return Ok(root.to_path_buf());
+    }
+
+    // Fallback: walk up from CWD looking for the marker.
+    let mut cur = std::env::current_dir()?;
+    loop {
+        if cur.join("crates/harness-core/Cargo.toml").exists() {
+            return Ok(cur);
+        }
+        if !cur.pop() {
+            anyhow::bail!(
+                "could not auto-detect a harness workspace; pass --workspace <path> explicitly"
+            );
+        }
+    }
 }
 
 fn tracing_subscriber_init() {
