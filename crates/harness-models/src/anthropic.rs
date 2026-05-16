@@ -188,6 +188,10 @@ impl Model for AnthropicNative {
                 cached_input_tokens: parsed.usage.cache_read_input_tokens,
             },
             stop_reason,
+            // Anthropic returns thinking via separate content blocks; for v0.1
+            // we don't surface them in `reasoning` (they round-trip via
+            // history if/when we wire `Block::Reasoning → thinking blocks`).
+            reasoning: None,
         })
     }
 
@@ -273,6 +277,10 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                             ),
                         });
                     }
+                }
+                Block::Reasoning(_) => {
+                    // Anthropic's thinking blocks have stricter shape; for v0.1
+                    // we drop reasoning content rather than risk an invalid request.
                 }
             }
         }

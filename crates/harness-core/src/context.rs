@@ -21,6 +21,10 @@ pub enum Block {
     ToolResult { call_id: String, content: serde_json::Value },
     /// Feedback signals from sensors, rendered for the model.
     Feedback(Vec<Signal>),
+    /// Provider-specific reasoning trace (DeepSeek `reasoning_content`,
+    /// Anthropic `thinking` blocks). Must be echoed back to the provider on
+    /// subsequent calls or the API rejects the request.
+    Reasoning(String),
 }
 
 /// A single conversation turn (assistant or user).
@@ -92,9 +96,16 @@ impl Context {
         }
     }
 
-    /// Append a model turn to the history.
+    /// Append a model turn to the history. Captures reasoning content so it
+    /// can be echoed back on subsequent calls (required by DeepSeek thinking
+    /// mode and Anthropic thinking blocks).
     pub fn push_model_output(&mut self, out: &ModelOutput) {
         let mut blocks = Vec::new();
+        if let Some(r) = &out.reasoning
+            && !r.is_empty()
+        {
+            blocks.push(Block::Reasoning(r.clone()));
+        }
         if let Some(t) = &out.text
             && !t.is_empty()
         {

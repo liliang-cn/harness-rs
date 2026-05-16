@@ -48,8 +48,9 @@ struct ChatRequest<'a> {
 }
 
 /// `ChatMessage` is intentionally **lenient** — providers add fields
-/// (DeepSeek's `reasoning_content`, OpenAI's `refusal`, etc.); we ignore
-/// anything we don't recognise.
+/// (DeepSeek's `reasoning_content`, OpenAI's `refusal`, etc.). We capture
+/// `reasoning_content` because DeepSeek thinking mode demands it be echoed
+/// back; anything else we don't recognise is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatMessage {
     role:    String,
@@ -59,6 +60,8 @@ struct ChatMessage {
     tool_calls: Vec<WireToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,6 +215,7 @@ impl Model for OpenAiCompat {
                 cached_input_tokens: 0,
             },
             stop_reason,
+            reasoning: first.message.reasoning_content,
         })
     }
 
@@ -252,6 +256,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             content: Some(system_buf),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            reasoning_content: None,
         });
     }
 
@@ -271,6 +276,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             content: Some(ctx.task.description.clone()),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            reasoning_content: None,
         });
     }
     out
@@ -297,6 +303,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     content: Some(s),
                     tool_calls: Vec::new(),
                     tool_call_id: Some(call_id.clone()),
+                    reasoning_content: None,
                 });
             } else if let Block::Feedback(signals) = b {
                 let mut s = String::new();
@@ -312,6 +319,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     content: Some(s),
                     tool_calls: Vec::new(),
                     tool_call_id: None,
+                    reasoning_content: None,
                 });
             }
         }
@@ -321,6 +329,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
     // Assistant turn: split text content from tool_calls into the proper wire shape.
     let mut text = String::new();
     let mut tool_calls = Vec::new();
+    let mut reasoning: Option<String> = None;
     for b in &turn.blocks {
         match b {
             Block::Text(s) => { text.push_str(s); text.push('\n'); }
@@ -334,6 +343,11 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     },
                 });
             }
+            Block::Reasoning(r) => {
+                // Echo back what the model said it was thinking. DeepSeek
+                // requires this; OpenAI ignores unknown fields.
+                reasoning = Some(reasoning.map(|prev| format!("{prev}\n{r}")).unwrap_or_else(|| r.clone()));
+            }
             Block::ToolResult { .. } | Block::Feedback(_) => {
                 // shouldn't appear in assistant/user turns; ignore
             }
@@ -345,6 +359,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         content: if text.trim().is_empty() { None } else { Some(text) },
         tool_calls,
         tool_call_id: None,
+        reasoning_content: reasoning,
     });
 }
 
@@ -361,8 +376,11 @@ fn push_block_text(buf: &mut String, b: &Block) {
                 buf.push('\n');
             }
         }
-        Block::ToolCall { .. } | Block::ToolResult { .. } | Block::Feedback(_) => {
-            // handled in translate_turn
+        Block::ToolCall { .. }
+        | Block::ToolResult { .. }
+        | Block::Feedback(_)
+        | Block::Reasoning(_) => {
+            // handled in translate_turn (Reasoning becomes `reasoning_content`)
         }
     }
 }
