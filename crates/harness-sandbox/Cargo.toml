@@ -9,6 +9,9 @@ authors.workspace = true
 description = "Sandbox trait + worktree / container / vm backends"
 
 [dependencies]
-harness-core = { workspace = true }
-async-trait  = { workspace = true }
-thiserror    = { workspace = true }
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true }
+tracing         = { workspace = true }
