@@ -23,6 +23,7 @@ members = [
     "examples/crate-keeper",
     "examples/deepseek-hello",
     "examples/personal-assistant",
+    "examples/investor-bot",
 ]
 
 [workspace.package]

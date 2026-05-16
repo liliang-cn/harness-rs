@@ -1,0 +1,30 @@
+[package]
+name = "investor-bot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Example: autonomous investor-research agent — searches the web, scrapes filings/news, saves findings."
+
+[[bin]]
+name = "investor"
+path = "src/main.rs"
+
+[dependencies]
+harness         = { workspace = true }
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-models  = { workspace = true }
+harness-context = { workspace = true }
+tokio           = { workspace = true, features = ["io-std"] }
+anyhow          = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+clap            = { workspace = true }
+chrono          = { workspace = true }
+uuid            = { version = "1", features = ["v4"] }
+reqwest         = { workspace = true }
+scraper         = "0.20"
+urlencoding     = "2"
