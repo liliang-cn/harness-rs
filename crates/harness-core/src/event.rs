@@ -1,4 +1,4 @@
-use crate::{Action, CompactionStage, Context, GuideId, ModelOutput, SensorId, Signal, ToolResult};
+use crate::{Action, CompactionStage, Context, FixPatch, GuideId, ModelOutput, SensorId, Signal, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -29,6 +29,11 @@ pub enum Event<'a> {
     // sensors
     PreSensor      { sensor: &'a SensorId },
     PostSensor     { sensor: &'a SensorId, signals: &'a [Signal] },
+
+    // auto-fix patches (audit #7: sensor-emitted RunCommand etc. were applied
+    // silently — hooks can now intercept and Deny per-patch).
+    PreAutoFix     { patch: &'a FixPatch },
+    PostAutoFix    { patch: &'a FixPatch, applied: bool },
 
     // model
     PreModel       { ctx: &'a Context },
@@ -104,6 +109,8 @@ impl<'a> Event<'a> {
             Event::PostGuide { .. }      => "PostGuide",
             Event::PreSensor { .. }      => "PreSensor",
             Event::PostSensor { .. }     => "PostSensor",
+            Event::PreAutoFix { .. }     => "PreAutoFix",
+            Event::PostAutoFix { .. }    => "PostAutoFix",
             Event::PreModel { .. }       => "PreModel",
             Event::PostModel { .. }      => "PostModel",
             Event::SubagentStart { .. }  => "SubagentStart",
