@@ -24,6 +24,14 @@ enum Cmd {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Pretty-print a recorded session JSONL log (from `SessionRecorder`).
+    Trace {
+        /// Path to the .jsonl log file.
+        file: PathBuf,
+        /// Just print the SessionStats summary; skip per-event lines.
+        #[arg(long)]
+        summary: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -85,7 +93,35 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::New { name, path } => scaffold_new_project(name, path),
+        Cmd::Trace { file, summary } => print_session_trace(file, summary),
     }
+}
+
+fn print_session_trace(file: PathBuf, summary_only: bool) -> anyhow::Result<()> {
+    let events = harness_loop::read_session(&file)
+        .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
+    let stats = harness_loop::SessionStats::from(&events);
+
+    if !summary_only {
+        for e in &events {
+            println!("{}", harness_loop::format_event_short(e));
+        }
+        println!();
+    }
+    println!(
+        "── summary ────────────────────────────────────────────────"
+    );
+    println!("  events:        {}", stats.events);
+    println!("  model calls:   {}", stats.model_calls);
+    println!("  tool calls:    {}", stats.tool_calls);
+    println!("  compactions:   {}", stats.stages_run);
+    println!("  iterations:    {}", stats.iters);
+    println!(
+        "  tokens:        {} in / {} out",
+        stats.input_tokens, stats.output_tokens
+    );
+    println!("  duration:      {} ms", stats.duration_ms);
+    Ok(())
 }
 
 fn scaffold_new_project(name: String, parent: Option<PathBuf>) -> anyhow::Result<()> {
