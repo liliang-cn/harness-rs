@@ -1,23 +1,25 @@
 //! The MCP server core: dispatch JSON-RPC requests to the framework.
 
 use crate::protocol::*;
-use harness_core::{Action, Tool, World};
+use harness_core::{Action, Skill, Tool, World};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 pub struct McpServer {
-    tools:   HashMap<String, Arc<dyn Tool>>,
-    name:    String,
-    version: String,
+    tools:    HashMap<String, Arc<dyn Tool>>,
+    skills:   HashMap<String, Arc<dyn Skill>>,   // ← new: exposed as MCP resources
+    name:     String,
+    version:  String,
 }
 
 impl McpServer {
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
-            tools:   HashMap::new(),
-            name:    name.into(),
-            version: version.into(),
+            tools:    HashMap::new(),
+            skills:   HashMap::new(),
+            name:     name.into(),
+            version:  version.into(),
         }
     }
 
@@ -29,6 +31,20 @@ impl McpServer {
     pub fn with_tools(mut self, ts: Vec<Arc<dyn Tool>>) -> Self {
         for t in ts {
             self.tools.insert(t.name().to_string(), t);
+        }
+        self
+    }
+
+    /// Expose skills as MCP resources (`resources/list` + `resources/read`).
+    /// URI scheme: `harness://skill/<name>`.
+    pub fn with_skill(mut self, s: Arc<dyn Skill>) -> Self {
+        self.skills.insert(s.manifest().name.clone(), s);
+        self
+    }
+
+    pub fn with_skills(mut self, ss: Vec<Arc<dyn Skill>>) -> Self {
+        for s in ss {
+            self.skills.insert(s.manifest().name.clone(), s);
         }
         self
     }
@@ -70,10 +86,13 @@ impl McpServer {
         let id = req.id.unwrap_or(serde_json::Value::Null);
 
         match req.method.as_str() {
-            "initialize" => self.handle_initialize(id),
-            "ping"       => ok_response(id, serde_json::json!({})),
-            "tools/list" => self.handle_tools_list(id),
-            "tools/call" => self.handle_tools_call(id, req.params, world).await,
+            "initialize"      => self.handle_initialize(id),
+            "ping"            => ok_response(id, serde_json::json!({})),
+            "tools/list"      => self.handle_tools_list(id),
+            "tools/call"      => self.handle_tools_call(id, req.params, world).await,
+            "resources/list"  => self.handle_resources_list(id),
+            "resources/read"  => self.handle_resources_read(id, req.params),
+            "prompts/list"    => self.handle_prompts_list(id),
             other => error_response(
                 id,
                 ERR_METHOD_NOT_FOUND,
@@ -86,7 +105,13 @@ impl McpServer {
         let result = InitializeResult {
             protocol_version: "2025-06-18".into(),
             capabilities: Capabilities {
-                tools: ToolsCapability { list_changed: false },
+                tools:     ToolsCapability { list_changed: false },
+                // Advertise resources only when we actually have skills mounted —
+                // hosts that see an empty resource list still send list calls.
+                resources: if self.skills.is_empty() { None } else {
+                    Some(ResourcesCapability { list_changed: false, subscribe: false })
+                },
+                prompts:   Some(PromptsCapability { list_changed: false }),
             },
             server_info: ServerInfo {
                 name:    self.name.clone(),
@@ -94,6 +119,52 @@ impl McpServer {
             },
         };
         ok_response(id, serde_json::to_value(result).unwrap())
+    }
+
+    fn handle_resources_list(&self, id: serde_json::Value) -> JsonRpcResponse {
+        let mut resources: Vec<ResourceDescriptor> = self
+            .skills
+            .values()
+            .map(|s| {
+                let m = s.manifest();
+                ResourceDescriptor {
+                    uri:         format!("harness://skill/{}", m.name),
+                    name:        m.name.clone(),
+                    description: Some(m.description.clone()),
+                    mime_type:   Some("text/markdown".into()),
+                }
+            })
+            .collect();
+        resources.sort_by(|a, b| a.name.cmp(&b.name));
+        ok_response(id, serde_json::to_value(ResourcesListResult { resources }).unwrap())
+    }
+
+    fn handle_resources_read(&self, id: serde_json::Value, params: serde_json::Value) -> JsonRpcResponse {
+        let p: ReadResourceParams = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return error_response(id, ERR_INVALID_PARAMS, e.to_string()),
+        };
+        let Some(name) = p.uri.strip_prefix("harness://skill/") else {
+            return error_response(id, ERR_INVALID_PARAMS,
+                format!("unsupported URI scheme: {} (expected harness://skill/<name>)", p.uri));
+        };
+        let Some(skill) = self.skills.get(name) else {
+            return error_response(id, ERR_METHOD_NOT_FOUND, format!("no skill named `{name}`"));
+        };
+        let result = ReadResourceResult {
+            contents: vec![ResourceContent {
+                uri:       p.uri.clone(),
+                mime_type: "text/markdown".into(),
+                text:      skill.body().into_owned(),
+            }],
+        };
+        ok_response(id, serde_json::to_value(result).unwrap())
+    }
+
+    fn handle_prompts_list(&self, id: serde_json::Value) -> JsonRpcResponse {
+        // We don't ship pre-baked prompts yet; return an empty list so hosts
+        // that probe this method get a clean answer instead of method-not-found.
+        ok_response(id, serde_json::to_value(PromptsListResult { prompts: vec![] }).unwrap())
     }
 
     fn handle_tools_list(&self, id: serde_json::Value) -> JsonRpcResponse {
@@ -254,5 +325,90 @@ mod tests {
         let req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}"#;
         let resp = s.handle_line(req, &mut world).await;
         assert_eq!(resp.error.as_ref().unwrap().code, ERR_METHOD_NOT_FOUND);
+    }
+
+    // ====== resources / prompts coverage ======
+
+    /// A tiny in-memory Skill impl for resource tests.
+    struct DummySkill {
+        manifest: harness_core::SkillManifest,
+        body:     &'static str,
+    }
+    impl harness_core::Skill for DummySkill {
+        fn manifest(&self) -> &harness_core::SkillManifest { &self.manifest }
+        fn body(&self) -> std::borrow::Cow<'_, str> { std::borrow::Cow::Borrowed(self.body) }
+    }
+
+    fn srv_with_skill() -> McpServer {
+        McpServer::new("harness-mcp-test", "0.0.2")
+            .with_skill(Arc::new(DummySkill {
+                manifest: harness_core::SkillManifest {
+                    name:          "demo".into(),
+                    description:   "A tiny test skill.".into(),
+                    license:       None,
+                    compatibility: None,
+                    metadata:      Default::default(),
+                    allowed_tools: None,
+                },
+                body: "# Demo\n\nThis is the SKILL.md body.",
+            }))
+    }
+
+    #[tokio::test]
+    async fn resources_list_returns_skills() {
+        let mut world = default_world(".");
+        let s = srv_with_skill();
+        let req = r#"{"jsonrpc":"2.0","id":6,"method":"resources/list"}"#;
+        let resp = s.handle_line(req, &mut world).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let resources = resp.result.unwrap()["resources"].as_array().unwrap().clone();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0]["uri"], "harness://skill/demo");
+        assert_eq!(resources[0]["mimeType"], "text/markdown");
+    }
+
+    #[tokio::test]
+    async fn resources_read_returns_body() {
+        let mut world = default_world(".");
+        let s = srv_with_skill();
+        let req = r#"{"jsonrpc":"2.0","id":7,"method":"resources/read","params":{"uri":"harness://skill/demo"}}"#;
+        let resp = s.handle_line(req, &mut world).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let text = resp.result.unwrap()["contents"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("SKILL.md body"));
+    }
+
+    #[tokio::test]
+    async fn resources_read_unknown_uri_errors() {
+        let mut world = default_world(".");
+        let s = srv_with_skill();
+        let req = r#"{"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"harness://skill/does-not-exist"}}"#;
+        let resp = s.handle_line(req, &mut world).await;
+        assert!(resp.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn prompts_list_returns_empty_array() {
+        let mut world = default_world(".");
+        let s = srv();
+        let req = r#"{"jsonrpc":"2.0","id":9,"method":"prompts/list"}"#;
+        let resp = s.handle_line(req, &mut world).await;
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["prompts"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn initialize_advertises_resources_only_when_skills_present() {
+        let mut world = default_world(".");
+        // No skills → resources capability absent
+        let s = srv();
+        let req = r#"{"jsonrpc":"2.0","id":10,"method":"initialize","params":{}}"#;
+        let resp = s.handle_line(req, &mut world).await;
+        assert!(resp.result.as_ref().unwrap()["capabilities"]["resources"].is_null());
+        // With skill → resources capability present
+        let s = srv_with_skill();
+        let resp = s.handle_line(req, &mut world).await;
+        let r = &resp.result.as_ref().unwrap()["capabilities"]["resources"];
+        assert!(r.is_object(), "expected resources cap, got {r:?}");
     }
 }

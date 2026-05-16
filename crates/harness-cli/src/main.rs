@@ -62,6 +62,11 @@ enum McpCmd {
         /// Workspace root the tools operate inside. Defaults to current dir.
         #[arg(long)]
         workspace: Option<PathBuf>,
+        /// Directory of agentskills.io-compliant skills to expose as MCP
+        /// resources (resources/list + resources/read). Each subdirectory
+        /// containing a SKILL.md becomes a `harness://skill/<name>` resource.
+        #[arg(long)]
+        skills: Option<PathBuf>,
     },
 }
 
@@ -154,15 +159,18 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::New { name, path, workspace, local } => scaffold_new_project(name, path, workspace, local),
         Cmd::Trace { file, summary } => print_session_trace(file, summary),
-        Cmd::Mcp { cmd: McpCmd::Serve { workspace } } => run_mcp_server(workspace).await,
+        Cmd::Mcp { cmd: McpCmd::Serve { workspace, skills } } => run_mcp_server(workspace, skills).await,
     }
 }
 
-async fn run_mcp_server(workspace: Option<PathBuf>) -> anyhow::Result<()> {
+async fn run_mcp_server(
+    workspace: Option<PathBuf>,
+    skills:    Option<PathBuf>,
+) -> anyhow::Result<()> {
     use std::sync::Arc;
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
     let mut world = harness_context::default_world(root);
-    let server = harness_mcp::McpServer::new("harness-mcp", env!("CARGO_PKG_VERSION"))
+    let mut server = harness_mcp::McpServer::new("harness-mcp", env!("CARGO_PKG_VERSION"))
         .with_tools(vec![
             Arc::new(harness_tools_fs::ReadFile),
             Arc::new(harness_tools_fs::WriteFile),
@@ -170,6 +178,18 @@ async fn run_mcp_server(workspace: Option<PathBuf>) -> anyhow::Result<()> {
             Arc::new(harness_tools_fs::ListDir),
             Arc::new(harness_tools_shell::ShellRead),
         ]);
+
+    // Load skills from a directory if --skills <path> was given.
+    if let Some(skills_root) = skills {
+        let loaded = harness_skills::scan_skills_root(&skills_root)
+            .map_err(|e| anyhow::anyhow!("scan skills root {}: {e}", skills_root.display()))?;
+        let arc_skills: Vec<Arc<dyn harness_core::Skill>> = loaded
+            .into_iter()
+            .map(|s| Arc::new(s) as Arc<dyn harness_core::Skill>)
+            .collect();
+        server = server.with_skills(arc_skills);
+    }
+
     server.serve_stdio(&mut world).await?;
     Ok(())
 }
