@@ -7,6 +7,7 @@ use std::path::PathBuf;
 /// Lifetimes are intentionally borrowed: hooks must not own these references
 /// past the call.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Event<'a> {
     // session
     SessionStart   { source: SessionSource },
@@ -57,6 +58,7 @@ pub enum Event<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SessionSource {
     Startup,
     Resume,
@@ -67,6 +69,7 @@ pub enum SessionSource {
 /// Subagent self-report (Superpowers convention).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum SubagentStatus {
     Done,
     DoneWithConcerns,
@@ -76,6 +79,7 @@ pub enum SubagentStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum NotificationKind {
     PermissionPrompt,
     IdlePrompt,

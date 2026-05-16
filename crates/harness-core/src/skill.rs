@@ -63,6 +63,7 @@ pub struct Resource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ResourceKind {
     Script,
     Reference,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 /// When in the change lifecycle a sensor runs (DESIGN.md §3, lifecycle distribution).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Stage {
     /// Pre-action — runs before a tool invocation (rare; mostly used by hooks).
     PreAction,

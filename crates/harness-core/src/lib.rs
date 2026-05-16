@@ -48,6 +48,7 @@ pub use world::*;
 /// This dichotomy is from Böckeler (2026); see DESIGN.md §3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Execution {
     Computational,
     Inferential,

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 /// What a hook tells the runtime to do after firing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum HookOutcome {
     /// Continue normally.
     Allow,

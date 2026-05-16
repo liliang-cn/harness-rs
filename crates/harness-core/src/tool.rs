@@ -8,6 +8,7 @@ use std::sync::Arc;
 /// Names are MCP-aligned (readOnlyHint, destructiveHint, idempotentHint).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ToolRisk {
     /// No side effects.
     ReadOnly,

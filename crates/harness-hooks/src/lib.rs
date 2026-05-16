@@ -56,6 +56,10 @@ impl HookBus {
                     tracing::debug!(hook = h.name(), event = ev.name(), "hook mutation ignored (not yet wired)");
                 }
                 HookOutcome::Allow => {}
+                // HookOutcome is `#[non_exhaustive]`; treat any future variant as Allow.
+                _ => {
+                    tracing::warn!(hook = h.name(), "unrecognised HookOutcome variant — treating as Allow");
+                }
             }
         }
         if injects.is_empty() {

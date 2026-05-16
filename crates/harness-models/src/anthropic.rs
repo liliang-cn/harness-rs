@@ -77,6 +77,17 @@ enum AnthropicBlock {
     Text { text: String },
     ToolUse { id: String, name: String, input: JsonValue },
     ToolResult { tool_use_id: String, content: String },
+    /// Extended thinking block. Required to be echoed back verbatim to the API
+    /// (with signature) on subsequent calls during a thinking conversation.
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// Redacted thinking — content opaque, must still be passed through.
+    RedactedThinking {
+        data: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -155,11 +166,31 @@ impl Model for AnthropicNative {
 
         let mut text = String::new();
         let mut tool_calls = Vec::new();
+        let mut reasoning = String::new();
         for b in parsed.content {
             match b {
                 AnthropicBlock::Text { text: t } => text.push_str(&t),
                 AnthropicBlock::ToolUse { id, name, input } => {
                     tool_calls.push(ToolCall { id, name, args: input });
+                }
+                AnthropicBlock::Thinking { thinking, signature } => {
+                    // Round-trip via Block::Reasoning. Signature is required by
+                    // Anthropic when echoing back — pack it as JSON.
+                    let packed = serde_json::json!({
+                        "kind": "thinking",
+                        "thinking": thinking,
+                        "signature": signature,
+                    });
+                    if !reasoning.is_empty() { reasoning.push('\n'); }
+                    reasoning.push_str(&packed.to_string());
+                }
+                AnthropicBlock::RedactedThinking { data } => {
+                    let packed = serde_json::json!({
+                        "kind": "redacted_thinking",
+                        "data": data,
+                    });
+                    if !reasoning.is_empty() { reasoning.push('\n'); }
+                    reasoning.push_str(&packed.to_string());
                 }
                 AnthropicBlock::ToolResult { .. } => {} // shouldn't appear in assistant response
             }
@@ -188,10 +219,7 @@ impl Model for AnthropicNative {
                 cached_input_tokens: parsed.usage.cache_read_input_tokens,
             },
             stop_reason,
-            // Anthropic returns thinking via separate content blocks; for v0.1
-            // we don't surface them in `reasoning` (they round-trip via
-            // history if/when we wire `Block::Reasoning → thinking blocks`).
-            reasoning: None,
+            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
         })
     }
 
@@ -232,6 +260,7 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
             TurnRole::Assistant => "assistant",
             TurnRole::Tool => "user", // Anthropic models tool results as user-role with tool_result blocks
             TurnRole::System => continue, // already consumed above
+            _ => "user", // forward-compat: unknown roles fall back to user
         };
 
         let mut blocks = Vec::new();
@@ -278,10 +307,41 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                         });
                     }
                 }
-                Block::Reasoning(_) => {
-                    // Anthropic's thinking blocks have stricter shape; for v0.1
-                    // we drop reasoning content rather than risk an invalid request.
+                Block::Reasoning(raw) => {
+                    // `Block::Reasoning` was packed by the inbound parser as one
+                    // JSON object per line: {"kind":"thinking","thinking":..,
+                    // "signature":..} or {"kind":"redacted_thinking","data":..}.
+                    // Restore the exact wire shape so Anthropic accepts the echo.
+                    for line in raw.lines() {
+                        let line = line.trim();
+                        if line.is_empty() { continue; }
+                        let Ok(v) = serde_json::from_str::<JsonValue>(line) else {
+                            continue;
+                        };
+                        match v.get("kind").and_then(|k| k.as_str()) {
+                            Some("thinking") => {
+                                if let Some(t) = v.get("thinking").and_then(|x| x.as_str()) {
+                                    blocks.push(AnthropicBlock::Thinking {
+                                        thinking: t.to_string(),
+                                        signature: v
+                                            .get("signature")
+                                            .and_then(|x| x.as_str())
+                                            .map(str::to_string),
+                                    });
+                                }
+                            }
+                            Some("redacted_thinking") => {
+                                if let Some(d) = v.get("data").and_then(|x| x.as_str()) {
+                                    blocks.push(AnthropicBlock::RedactedThinking {
+                                        data: d.to_string(),
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
+                _ => {} // forward-compat: unknown Block variants silently skipped
             }
         }
         if blocks.is_empty() { continue; }
@@ -303,4 +363,124 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
     }
 
     (system, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_core::{Block, Policy, Task, Turn, TurnRole};
+    use std::collections::BTreeMap;
+
+    fn empty_ctx() -> Context {
+        Context {
+            system: vec![Block::Text("be helpful".into())],
+            guides: vec![Block::Text("be terse".into())],
+            history: vec![],
+            task: Task { description: "do the thing".into(), source: None, deadline: None },
+            policy: Policy::default(),
+            metadata: BTreeMap::new(),
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn build_messages_concatenates_system_and_falls_back_to_task() {
+        let (system, msgs) = build_messages(&empty_ctx());
+        assert!(system.unwrap().contains("be helpful"));
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
+        match &msgs[0].content[0] {
+            AnthropicBlock::Text { text } => assert_eq!(text, "do the thing"),
+            other => panic!("unexpected block: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_messages_translates_tool_calls_and_results() {
+        let mut ctx = empty_ctx();
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("read it".into())],
+        });
+        ctx.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::ToolCall {
+                call_id: "c1".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "x"}),
+            }],
+        });
+        ctx.history.push(Turn {
+            role: TurnRole::Tool,
+            blocks: vec![Block::ToolResult {
+                call_id: "c1".into(),
+                content: serde_json::json!("hello"),
+            }],
+        });
+        let (_system, msgs) = build_messages(&ctx);
+        // user -> assistant(tool_use) -> user(tool_result)
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].role, "assistant");
+        assert!(matches!(msgs[1].content[0], AnthropicBlock::ToolUse { .. }));
+        assert_eq!(msgs[2].role, "user");
+        assert!(matches!(msgs[2].content[0], AnthropicBlock::ToolResult { .. }));
+    }
+
+    #[test]
+    fn reasoning_block_round_trips_through_wire_format() {
+        let mut ctx = empty_ctx();
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("think".into())],
+        });
+        // Simulate a previous assistant turn carrying packed thinking.
+        let packed = serde_json::json!({
+            "kind": "thinking",
+            "thinking": "I should consider X",
+            "signature": "sig123"
+        })
+        .to_string();
+        ctx.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![
+                Block::Reasoning(packed),
+                Block::Text("therefore Y".into()),
+            ],
+        });
+        let (_system, msgs) = build_messages(&ctx);
+        let assistant = msgs.iter().find(|m| m.role == "assistant").unwrap();
+        let has_thinking = assistant.content.iter().any(|b| {
+            matches!(
+                b,
+                AnthropicBlock::Thinking { thinking, signature: Some(s) }
+                    if thinking == "I should consider X" && s == "sig123"
+            )
+        });
+        assert!(has_thinking, "thinking block missing in echo: {:#?}", assistant.content);
+        let has_text = assistant.content.iter().any(|b| {
+            matches!(b, AnthropicBlock::Text { text } if text.contains("therefore Y"))
+        });
+        assert!(has_text);
+    }
+
+    #[test]
+    fn redacted_thinking_also_round_trips() {
+        let mut ctx = empty_ctx();
+        let packed = serde_json::json!({
+            "kind": "redacted_thinking",
+            "data": "OPAQUE_BLOB"
+        })
+        .to_string();
+        ctx.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::Reasoning(packed)],
+        });
+        let (_system, msgs) = build_messages(&ctx);
+        let assistant = msgs.iter().find(|m| m.role == "assistant").unwrap();
+        assert!(matches!(
+            assistant.content[0],
+            AnthropicBlock::RedactedThinking { ref data } if data == "OPAQUE_BLOB"
+        ));
+    }
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Severity {
     /// Informational; agent may ignore.
     Hint,
@@ -42,6 +43,7 @@ pub struct CodeSpan {
 
 /// A direct patch a sensor can apply without going through the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FixPatch {
     /// Replace the entire file content.
     ReplaceFile  { path: PathBuf, content: String },

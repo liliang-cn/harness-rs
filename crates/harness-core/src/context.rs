@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 /// Blocks are grouped so that long-stable prefixes (system + guides) stay
 /// cacheable across turns ("prompt caching" pattern).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Block {
     /// Plain prompt text.
     Text(String),
@@ -36,6 +37,7 @@ pub struct Turn {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum TurnRole {
     User,
     Assistant,

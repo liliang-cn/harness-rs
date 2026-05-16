@@ -29,6 +29,7 @@ pub struct NodeOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Transition {
     /// Follow the named edge.
     Edge(String),

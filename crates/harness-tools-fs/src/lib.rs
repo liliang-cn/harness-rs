@@ -53,6 +53,7 @@ impl Tool for ReadFile {
         let a: ReadArgs = serde_json::from_value(args)
             .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
         let abs = resolve(&world.repo.root, &a.path)?;
+        verify_no_symlink_escape(&world.repo.root, &abs)?;
         let content = tokio::fs::read_to_string(&abs)
             .await
             .map_err(|e| ToolError::Exec(format!("{}: {e}", abs.display())))?;
@@ -60,19 +61,22 @@ impl Tool for ReadFile {
         let offset = a.offset.unwrap_or(0);
         let limit  = a.limit.unwrap_or(2000);
         let lines:  Vec<&str> = content.lines().collect();
-        let take    = lines.iter().skip(offset).take(limit).copied().collect::<Vec<&str>>();
         let total   = lines.len();
+        let take    = lines.iter().skip(offset).take(limit).copied().collect::<Vec<&str>>();
+        let returned = take.len();
+        let truncated = offset + returned < total;
         let snippet = take.join("\n");
 
         Ok(ToolResult {
             ok: true,
             content: json!({
-                "path":       abs.strip_prefix(&world.repo.root).unwrap_or(&abs).display().to_string(),
-                "lines":      take.len(),
-                "total":      total,
-                "offset":     offset,
-                "limit":      limit,
-                "content":    snippet,
+                "path":      abs.strip_prefix(&world.repo.root).unwrap_or(&abs).display().to_string(),
+                "lines":     returned,
+                "total":     total,
+                "offset":    offset,
+                "limit":     limit,
+                "truncated": truncated,
+                "content":   snippet,
             }),
             trace: None,
         })
@@ -119,6 +123,11 @@ impl Tool for WriteFile {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| ToolError::Exec(format!("mkdir {}: {e}", parent.display())))?;
+            verify_no_symlink_escape(&world.repo.root, parent)?;
+        }
+        // If file already exists, verify it's not a symlink-out before clobbering.
+        if abs.exists() {
+            verify_no_symlink_escape(&world.repo.root, &abs)?;
         }
         let bytes = a.content.len();
         tokio::fs::write(&abs, &a.content)
@@ -171,6 +180,7 @@ impl Tool for ListDir {
         } else {
             resolve(&world.repo.root, &rel)?
         };
+        verify_no_symlink_escape(&world.repo.root, &abs)?;
         let mut entries = Vec::new();
         let mut rd = tokio::fs::read_dir(&abs)
             .await
@@ -247,6 +257,7 @@ impl Tool for EditFile {
         let a: EditArgs = serde_json::from_value(args)
             .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
         let abs = resolve(&world.repo.root, &a.path)?;
+        verify_no_symlink_escape(&world.repo.root, &abs)?;
         let content = tokio::fs::read_to_string(&abs)
             .await
             .map_err(|e| ToolError::Exec(format!("read {}: {e}", abs.display())))?;
@@ -316,6 +327,32 @@ fn normalize(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Additional check beyond `resolve()`: if `path` exists, canonicalize it and
+/// verify that real-path stays inside the canonical workspace root. This
+/// defeats symlinks placed inside the workspace that point outside.
+///
+/// Best-effort: if either canonicalization fails (e.g. path doesn't exist yet),
+/// we trust `resolve()`'s lexical check.
+fn verify_no_symlink_escape(root: &Path, path: &Path) -> Result<(), ToolError> {
+    let canon_root = match root.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    let canon_path = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    if !canon_path.starts_with(&canon_root) {
+        Err(ToolError::Permission(format!(
+            "path resolves outside workspace via symlink: {} -> {}",
+            path.display(),
+            canon_path.display()
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -433,5 +470,56 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content["content"].as_str().unwrap().contains("BETA"));
+    }
+
+    #[tokio::test]
+    async fn read_signals_truncation_when_file_exceeds_limit() {
+        let (_td, mut w) = tmp_world();
+        let many_lines: String = (0..50).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        WriteFile
+            .invoke(json!({"path": "big.txt", "content": many_lines}), &mut w)
+            .await
+            .unwrap();
+        // Ask for 10 lines from a 50-line file → truncated must be true.
+        let out = ReadFile
+            .invoke(json!({"path": "big.txt", "limit": 10}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(out.content["truncated"], true);
+        assert_eq!(out.content["lines"], 10);
+        assert_eq!(out.content["total"], 50);
+        // Read everything → truncated false.
+        let out = ReadFile
+            .invoke(json!({"path": "big.txt"}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(out.content["truncated"], false);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_escape_blocked() {
+        let (_td, mut w) = tmp_world();
+        let root = w.repo.root.clone();
+        // Create a target file outside the workspace.
+        let outside = std::env::temp_dir().join(format!(
+            "harness-outside-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&outside, "SECRET").unwrap();
+        // Place a symlink inside the workspace pointing outside.
+        let link = root.join("trojan");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        // Lexical resolve succeeds; symlink check must catch it.
+        let res = ReadFile.invoke(json!({"path": "trojan"}), &mut w).await;
+        let _ = std::fs::remove_file(&outside);
+        assert!(
+            matches!(res, Err(ToolError::Permission(_))),
+            "symlink escape was not blocked: {res:?}"
+        );
     }
 }

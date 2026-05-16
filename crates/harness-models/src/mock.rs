@@ -227,6 +227,7 @@ fn snapshot_history(ctx: &Context) -> Vec<HistorySnapshot> {
                 TurnRole::Assistant => "assistant",
                 TurnRole::Tool      => "tool",
                 TurnRole::System    => "system",
+                _                   => "unknown",
             };
             let mut kinds = Vec::new();
             let mut texts = Vec::new();
@@ -241,6 +242,7 @@ fn snapshot_history(ctx: &Context) -> Vec<HistorySnapshot> {
                     Block::Skill { name, .. }   => ("skill", name.clone()),
                     Block::Feedback(s)          => ("feedback", format!("{} signal(s)", s.len())),
                     Block::Reasoning(s)         => ("reasoning", s.clone()),
+                    _                           => ("unknown", String::new()),
                 };
                 kinds.push(kind);
                 texts.push(text);

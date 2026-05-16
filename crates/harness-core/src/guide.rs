@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 /// What kind of work this guide applies to. Determines when `apply` runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum GuideScope {
     /// Always inject for every task.
     Always,
