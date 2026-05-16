@@ -1,13 +1,16 @@
 [package]
-name = "harness-compactor"
+name = "harness-rs-compactor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "5-stage progressive context compaction"
+description = "Five-stage progressive context compactor for harness-rs — DefaultCompactor (structural) and ModelBackedCompactor (semantic)."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core    = { workspace = true }
 harness-context = { workspace = true }

@@ -1,13 +1,16 @@
 [package]
-name = "harness-hooks"
+name = "harness-rs-hooks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "HookBus and the 27 lifecycle events"
+description = "HookBus for harness-rs. Dispatches 27 lifecycle events with Allow/Deny/Inject/Mutate semantics. Optional OpenTelemetry feature."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 inventory    = { workspace = true }

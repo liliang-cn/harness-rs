@@ -1,13 +1,16 @@
 [package]
-name = "harness-templates"
+name = "harness-rs-templates"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Pre-built Blueprint templates (crate-keeper, axum-crud, ...)"
+description = "Pre-built Blueprint templates (axum_crud, crate_keeper) and convention guides for harness-rs."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core         = { workspace = true }
 harness-blueprint    = { workspace = true }

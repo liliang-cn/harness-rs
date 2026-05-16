@@ -1,13 +1,16 @@
 [package]
-name = "harness-mcp"
+name = "harness-rs-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "MCP (Model Context Protocol) server that exposes the harness tool registry to external agents"
+description = "MCP (Model Context Protocol) stdio server exposing the harness-rs tool registry to Claude Code, Cursor, and Codex."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core    = { workspace = true }
 harness-context = { workspace = true }

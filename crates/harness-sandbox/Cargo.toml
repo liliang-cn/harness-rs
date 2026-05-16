@@ -1,13 +1,16 @@
 [package]
-name = "harness-sandbox"
+name = "harness-rs-sandbox"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Sandbox trait + worktree / container / vm backends"
+description = "Sandbox tiers for harness-rs — git Worktree, Docker Container, and Firecracker-shaped VM stubs."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core    = { workspace = true }
 harness-context = { workspace = true }

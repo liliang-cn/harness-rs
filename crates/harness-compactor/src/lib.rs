@@ -75,7 +75,7 @@ impl Compactor for DefaultCompactor {
 ///
 /// Typical wiring:
 /// ```ignore
-/// let cheap = OpenAiCompat::new(providers::deepseek_flash(key));
+/// let cheap = OpenAiCompat::with_key(providers::DEEPSEEK, "deepseek-v4-flash", key);
 /// let compactor = ModelBackedCompactor::new(Arc::new(cheap));
 /// let loop_ = AgentLoop::new(main_model).with_compactor(Arc::new(compactor));
 /// ```

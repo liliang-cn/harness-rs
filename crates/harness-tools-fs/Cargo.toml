@@ -1,13 +1,16 @@
 [package]
-name = "harness-tools-fs"
+name = "harness-rs-tools-fs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Filesystem tools (read, write, edit, ripgrep)"
+description = "Jail-safe filesystem tools (read_file, write_file, edit_file, list_dir) for harness-rs. Symlink-escape protection."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

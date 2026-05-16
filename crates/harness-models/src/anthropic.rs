@@ -37,6 +37,22 @@ impl AnthropicNative {
         }
     }
 
+    /// Convenience: pass model name + API key. URL is api.anthropic.com.
+    ///
+    /// ```ignore
+    /// use harness_models::AnthropicNative;
+    /// let m = AnthropicNative::with_key("claude-opus-4-7", api_key);
+    /// ```
+    pub fn with_key(model: impl Into<String>, api_key: impl Into<String>) -> Self {
+        let model = model.into();
+        Self::new(LlmConfig::new(
+            format!("anthropic:{model}"),
+            crate::providers::ANTHROPIC,
+            api_key,
+            model,
+        ))
+    }
+
     pub fn with_context_window(mut self, w: u32) -> Self {
         self.context_window = w;
         self

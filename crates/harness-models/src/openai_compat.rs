@@ -25,6 +25,21 @@ impl OpenAiCompat {
         Self { cfg, client, context_window: 128_000 }
     }
 
+    /// Convenience: 3-arg construction without writing out an `LlmConfig`.
+    ///
+    /// ```ignore
+    /// use harness_models::{OpenAiCompat, providers::DEEPSEEK};
+    /// let m = OpenAiCompat::with_key(DEEPSEEK, "deepseek-v4-pro", api_key);
+    /// ```
+    pub fn with_key(
+        base_url: impl Into<String>,
+        model:    impl Into<String>,
+        api_key:  impl Into<String>,
+    ) -> Self {
+        let model = model.into();
+        Self::new(LlmConfig::new(format!("openai-compat:{model}"), base_url, api_key, model))
+    }
+
     pub fn with_context_window(mut self, window: u32) -> Self {
         self.context_window = window;
         self

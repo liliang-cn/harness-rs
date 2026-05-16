@@ -331,7 +331,7 @@ async fn reverse(
 async fn main() -> anyhow::Result<()> {
     let key = std::env::var("DEEPSEEK_API_KEY")
         .map_err(|_| anyhow::anyhow!("set DEEPSEEK_API_KEY first"))?;
-    let model = OpenAiCompat::new(providers::deepseek_flash(key));
+    let model = OpenAiCompat::with_key(providers::DEEPSEEK, "deepseek-v4-flash", key);
     let mut world = default_world(".");
 
     let task = Task {

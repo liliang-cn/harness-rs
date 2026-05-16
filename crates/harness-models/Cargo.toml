@@ -1,13 +1,16 @@
 [package]
-name = "harness-models"
+name = "harness-rs-models"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Model trait adapters: Anthropic, OpenAI, Rig adapters"
+description = "LLM model adapters for harness-rs — OpenAiCompat (DeepSeek/Groq/Together/Ollama), AnthropicNative (Messages API), MockModel."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

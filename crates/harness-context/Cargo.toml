@@ -1,13 +1,16 @@
 [package]
-name = "harness-context"
+name = "harness-rs-context"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Context assembly and prompt budget management"
+description = "Default World runtime (Tokio process runner, system clock, in-memory KV) and Context helpers for harness-rs."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 serde        = { workspace = true }

@@ -1,13 +1,16 @@
 [package]
-name = "harness-sensors-rust"
+name = "harness-rs-sensors-rust"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Rust-specific sensors: cargo check / clippy / fmt / test / deny"
+description = "cargo-check and clippy feedback sensors for harness-rs. Emits LLM-friendly correction signals."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

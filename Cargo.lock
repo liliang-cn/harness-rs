@@ -182,15 +182,15 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
- "harness",
- "harness-context",
- "harness-core",
- "harness-loop",
- "harness-models",
- "harness-sensors-rust",
- "harness-skills",
- "harness-tools-fs",
- "harness-tools-shell",
+ "harness-rs",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-models",
+ "harness-rs-sensors-rust",
+ "harness-rs-skills",
+ "harness-rs-tools-fs",
+ "harness-rs-tools-shell",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -201,10 +201,10 @@ name = "deepseek-hello"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "harness",
- "harness-core",
- "harness-models",
- "harness-skills",
+ "harness-rs",
+ "harness-rs-core",
+ "harness-rs-models",
+ "harness-rs-skills",
  "tokio",
 ]
 
@@ -366,27 +366,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness"
+name = "harness-rs"
 version = "0.0.1"
 dependencies = [
- "harness-context",
- "harness-core",
- "harness-macros",
- "harness-skills",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-macros",
+ "harness-rs-skills",
  "inventory",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "harness-blueprint"
+name = "harness-rs-blueprint"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "futures",
- "harness-context",
- "harness-core",
- "harness-loop",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
  "serde",
  "serde_json",
  "tokio",
@@ -394,41 +394,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-cli"
+name = "harness-rs-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
- "harness-context",
- "harness-core",
- "harness-loop",
- "harness-mcp",
- "harness-skills",
- "harness-tools-fs",
- "harness-tools-shell",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-mcp",
+ "harness-rs-skills",
+ "harness-rs-tools-fs",
+ "harness-rs-tools-shell",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "harness-compactor"
+name = "harness-rs-compactor"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-context",
- "harness-core",
- "harness-models",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-models",
  "serde_json",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "harness-context"
+name = "harness-rs-context"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "serde",
  "serde_json",
  "tokio",
@@ -436,7 +436,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-core"
+name = "harness-rs-core"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -449,28 +449,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-hooks"
+name = "harness-rs-hooks"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "inventory",
  "opentelemetry",
  "tracing",
 ]
 
 [[package]]
-name = "harness-loop"
+name = "harness-rs-loop"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-compactor",
- "harness-context",
- "harness-core",
- "harness-hooks",
- "harness-models",
- "harness-skills",
- "harness-tools-fs",
+ "harness-rs-compactor",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-hooks",
+ "harness-rs-models",
+ "harness-rs-skills",
+ "harness-rs-tools-fs",
  "once_cell",
  "serde",
  "serde_json",
@@ -479,7 +479,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-macros"
+name = "harness-rs-macros"
 version = "0.0.1"
 dependencies = [
  "proc-macro2",
@@ -490,14 +490,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-mcp"
+name = "harness-rs-mcp"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "harness-context",
- "harness-core",
- "harness-tools-fs",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-tools-fs",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -506,13 +506,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-models"
+name = "harness-rs-models"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "harness-core",
+ "harness-rs-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -523,32 +523,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-sandbox"
+name = "harness-rs-sandbox"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-context",
- "harness-core",
+ "harness-rs-context",
+ "harness-rs-core",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "harness-sensors-common"
+name = "harness-rs-sensors-common"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "tokio",
 ]
 
 [[package]]
-name = "harness-sensors-rust"
+name = "harness-rs-sensors-rust"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "serde",
  "serde_json",
  "tokio",
@@ -556,11 +556,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-skills"
+name = "harness-rs-skills"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "inventory",
  "once_cell",
  "regex",
@@ -573,29 +573,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-templates"
+name = "harness-rs-templates"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "futures",
- "harness-blueprint",
- "harness-context",
- "harness-core",
- "harness-loop",
- "harness-sensors-rust",
- "harness-tools-fs",
- "harness-tools-shell",
+ "harness-rs-blueprint",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-sensors-rust",
+ "harness-rs-tools-fs",
+ "harness-rs-tools-shell",
  "serde_json",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "harness-tools-fs"
+name = "harness-rs-tools-fs"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "once_cell",
  "serde",
  "serde_json",
@@ -603,11 +603,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-tools-shell"
+name = "harness-rs-tools-shell"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "harness-core",
+ "harness-rs-core",
  "once_cell",
  "serde",
  "serde_json",

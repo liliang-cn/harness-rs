@@ -1,13 +1,16 @@
 [package]
-name = "harness-macros"
+name = "harness-rs-macros"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Procedural macros for the harness framework (#[skill], #[tool], #[guide], #[sensor], #[hook])"
+description = "Procedural macros for harness-rs: #[skill], #[tool], #[guide], #[sensor], #[hook]. agentskills.io-compliant registration via inventory."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [lib]
 proc-macro = true
 

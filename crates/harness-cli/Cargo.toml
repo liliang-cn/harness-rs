@@ -1,13 +1,16 @@
 [package]
-name = "harness-cli"
+name = "harness-rs-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "harness command-line interface"
+description = "Command-line interface for harness-rs — new, skills validate/list/lint/export, trace, mcp serve."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [[bin]]
 name = "harness"
 path = "src/main.rs"

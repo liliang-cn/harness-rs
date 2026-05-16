@@ -1,13 +1,16 @@
 [package]
-name = "harness-blueprint"
+name = "harness-rs-blueprint"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Deterministic + agent hybrid state machine"
+description = "Deterministic + agent hybrid state-machine executor for harness-rs. Stripe-Minions-style with branch-on-failure retries."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 harness-loop = { workspace = true }
