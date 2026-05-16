@@ -46,14 +46,35 @@ pub fn lint_skills(skills: &[FileSkill]) -> Vec<LintFinding> {
             });
         }
 
-        // R2: missing trigger-style language ("use when", "use for", "when the user")
+        // R2: missing trigger-style language. Accept a broad set of phrasings —
+        // the spec ([agentskills.io](https://agentskills.io/specification)) just
+        // says "describe both what the skill does AND when to use it", so any
+        // clear routing cue counts. The list below was widened after lint
+        // wrongly flagged Anthropic's own `pptx` skill (uses "Use this skill
+        // any time…" + "Trigger whenever the user mentions…").
         let lower = m.description.to_ascii_lowercase();
-        if !(lower.contains("use when")
-            || lower.contains("use for")
-            || lower.contains("when the user")
-            || lower.contains("activate when")
-            || lower.contains("invoke for"))
-        {
+        let routing_cues = [
+            "use when",
+            "use for",
+            "use this skill",
+            "use any time",
+            "any time a ",
+            "any time the ",
+            "whenever the user",
+            "when the user",
+            "trigger when",
+            "trigger whenever",
+            "activate when",
+            "activate whenever",
+            "invoke for",
+            "invoke when",
+            "call when",
+            "call this skill",
+            "applies when",
+            "use after",
+            "use before",
+        ];
+        if !routing_cues.iter().any(|p| lower.contains(p)) {
             findings.push(LintFinding {
                 skill_name: m.name.clone(),
                 severity:   LintSeverity::Info,
