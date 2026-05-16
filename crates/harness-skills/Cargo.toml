@@ -1,0 +1,22 @@
+[package]
+name = "harness-skills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "agentskills.io-compliant SKILL.md parser, validator, and registry"
+
+[dependencies]
+harness-core    = { workspace = true }
+async-trait     = { workspace = true }
+thiserror       = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+serde_yaml      = { workspace = true }
+tracing         = { workspace = true }
+regex           = { workspace = true }
+inventory       = { workspace = true }
+walkdir         = { workspace = true }
+once_cell       = { workspace = true }

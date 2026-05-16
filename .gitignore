@@ -1,0 +1,5 @@
+/target
+/HARNESS_NOTES.md
+**/Cargo.lock.bak
+.env
+.env.local

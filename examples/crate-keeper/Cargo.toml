@@ -1,0 +1,29 @@
+[package]
+name = "crate-keeper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Example: a minion that maintains a Rust crate (bump deps, run tests, write changelog)"
+
+[[bin]]
+name = "crate-keeper"
+path = "src/main.rs"
+
+[dependencies]
+harness        = { workspace = true }
+harness-core   = { workspace = true }
+harness-skills = { workspace = true }
+harness-models = { workspace = true }
+harness-context = { workspace = true }
+harness-loop   = { workspace = true }
+harness-tools-fs   = { workspace = true }
+harness-tools-shell = { workspace = true }
+harness-sensors-rust = { workspace = true }
+tokio          = { workspace = true }
+anyhow         = { workspace = true }
+tracing        = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap           = { workspace = true }

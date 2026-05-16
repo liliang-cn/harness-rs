@@ -1,0 +1,21 @@
+[package]
+name = "deepseek-hello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Smoke-test the Model trait against DeepSeek (OpenAI-compatible)"
+
+[[bin]]
+name = "deepseek-hello"
+path = "src/main.rs"
+
+[dependencies]
+harness        = { workspace = true }
+harness-core   = { workspace = true }
+harness-skills = { workspace = true }
+harness-models = { workspace = true }
+tokio          = { workspace = true }
+anyhow         = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "harness-templates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pre-built Blueprint templates (crate-keeper, axum-crud, ...)"
+
+[dependencies]
+harness-core      = { workspace = true }
+harness-blueprint = { workspace = true }
