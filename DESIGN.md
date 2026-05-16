@@ -702,24 +702,29 @@ harness trace ./session.jsonl            # 回放
 - [ ] `harness-cli` — `harness run`、`harness skills validate`
 - [ ] `examples/crate-keeper` — 端到端跑通: bump deps + 跑 test + 提交
 
-### v0.1
+### v0.1 ✅
 
-- [ ] Compactor 全部 5 阶段
-- [ ] HookBus + 全部 27 事件 + `#[hook]` 宏
-- [ ] Blueprint 状态机
-- [ ] WorktreeSandbox + ContainerSandbox
-- [ ] `#[guide]` `#[sensor]` 宏
-- [ ] Subagent (隔离 context)
-- [ ] `harness skills export` — 把 `#[skill]` 宏生成的 skill 物化为 spec 合规目录
-- [ ] `harness-templates::AxumCrud`
+- [x] Compactor 全部 5 阶段 — `DefaultCompactor` 在 `AgentLoop` 内按预算阈值自动触发
+- [x] HookBus + 全部 27 事件 + `#[hook]` 宏 — `HookBus` 在 PreTool/PostTool/Pre…/Post…/SessionStart/SessionEnd/Heartbeat/PreCompact/PostCompact 等点全部触发；PreToolUse `Deny` 短路并把原因喂回模型
+- [x] Blueprint 状态机 — `Deterministic` + `Agent` 节点，命名边 + Transition::Next/Done/Edge/Abort，`branch_on_failure` + `retry_cap`
+- [x] WorktreeSandbox — 真实 `git worktree add` + drop-time `git worktree remove`；`NullSandbox` 作 fallback；`ContainerSandbox`/`VmSandbox` 留 v0.2
+- [x] `#[guide]` `#[sensor]` `#[hook]` `#[tool]` 全部宏 — 与 `#[skill]` 同一 inventory 注册模式
+- [x] Subagent — `SubagentSpec` + `Subagent::run` 跑隔离 `AgentLoop`，按 `SubagentStatus` (Done/DoneWithConcerns/Blocked/NeedsContext) 报告
+- [x] `harness skills export` — 把所有注册 skill (宏 + 文件系统) 物化为 `<target>/<name>/SKILL.md`，验证后可被 Claude Code/Cursor/Codex 直接消费
+- [x] `harness-templates::axum_crud` — `tools()` + `sensors()` + `guides()` + `blueprint(agent_step)` 端到端模板，含 axum/sqlx/tracing 三组约定 guide
+- [x] Anthropic 原生 provider — `AnthropicNative` 加 Messages API + content-block tool-calling；`providers::anthropic_{sonnet_46, opus_47, haiku_45}`
+- [x] Auto-fix patches 实际落地 — `FixPatch::ReplaceFile/UnifiedDiff/RunCommand` 在 `AgentLoop` 内通过 `World.runner` / fs 真实应用并报告
 
-### v0.2+
+### v0.2+ (out of scope today)
 
-- [ ] VmSandbox (Firecracker)
-- [ ] MCP 服务端 (开放本框架的工具)
-- [ ] OpenTelemetry 追踪输出
-- [ ] Session replay
+- [ ] VmSandbox (Firecracker) — production-grade isolation
+- [ ] ContainerSandbox (OCI) — middle-ground isolation
+- [ ] MCP 服务端 — 把本框架的工具开放给外部 MCP 客户端
+- [ ] OpenTelemetry 追踪输出 — 把 27 个 Event 转 OTel span
+- [ ] Session replay — 从 `tracing` 日志重放完整 agent run
 - [ ] Harness "linter" — 检测互相冲突的 guides / sensors
+- [ ] `ModelBackedCompactor` — Microcompact + AutoCompact stages 用便宜模型语义化摘要 (今天是结构化收缩)
+- [ ] Streaming tool calls — OpenAiCompat 已支持 stream=true，但 tool_call 增量解析未接
 
 ---
 
