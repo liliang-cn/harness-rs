@@ -60,7 +60,7 @@ publish_one() {
     sleep 10
     if is_published "$crate" "$VERSION"; then
       echo "[$(stamp)] $crate: ✓ published $VERSION"
-      sleep 600  # pace next publish to dodge rate limit
+      sleep 45  # pace next publish; existing crates get a friendly rate limit
       return 0
     fi
 
