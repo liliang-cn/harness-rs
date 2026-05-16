@@ -16,11 +16,13 @@
 //! Framework extensions live in `metadata.harness.*` per DESIGN.md §6.1.
 
 pub mod export;
+pub mod lint;
 pub mod loader;
 pub mod registry;
 pub mod validate;
 
 pub use export::*;
+pub use lint::*;
 pub use loader::*;
 pub use registry::*;
 pub use validate::*;

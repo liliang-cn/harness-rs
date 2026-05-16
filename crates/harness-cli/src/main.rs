@@ -32,6 +32,24 @@ enum Cmd {
         #[arg(long)]
         summary: bool,
     },
+    /// Run an MCP server over stdio. Exposes the framework's built-in tool
+    /// registry (read_file, write_file, edit_file, list_dir, shell_read) to
+    /// any MCP-compatible client (Claude Code, Cursor, Codex, …).
+    Mcp {
+        #[command(subcommand)]
+        cmd: McpCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum McpCmd {
+    /// Start the stdio JSON-RPC server. Reads requests on stdin, writes
+    /// responses on stdout, one line each.
+    Serve {
+        /// Workspace root the tools operate inside. Defaults to current dir.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -51,6 +69,12 @@ enum SkillsCmd {
         /// Pull skills from this filesystem directory too (optional).
         #[arg(long)]
         from: Option<PathBuf>,
+    },
+    /// Lint a directory of skills for configuration smells beyond what the
+    /// spec validator requires (short descriptions, missing trigger language,
+    /// duplicate / overlapping skills).
+    Lint {
+        dir: PathBuf,
     },
 }
 
@@ -79,6 +103,29 @@ async fn main() -> anyhow::Result<()> {
             println!("\n{} skill(s)", skills.len());
             Ok(())
         }
+        Cmd::Skills { cmd: SkillsCmd::Lint { dir } } => {
+            let findings = harness_skills::lint_dir(&dir)?;
+            if findings.is_empty() {
+                println!("✓ no lint findings in {}", dir.display());
+                return Ok(());
+            }
+            let mut errors = 0;
+            let mut warnings = 0;
+            let mut infos = 0;
+            for f in &findings {
+                let tag = match f.severity {
+                    harness_skills::LintSeverity::Error   => { errors   += 1; "ERROR" }
+                    harness_skills::LintSeverity::Warning => { warnings += 1; "WARN " }
+                    harness_skills::LintSeverity::Info    => { infos    += 1; "INFO " }
+                };
+                println!("[{tag}] {}: {}", f.skill_name, f.message);
+            }
+            println!("\n{errors} error(s), {warnings} warning(s), {infos} info");
+            if errors > 0 {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Cmd::Skills { cmd: SkillsCmd::Export { target, from } } => {
             let mut registry = harness_skills::SkillRegistry::new()
                 .with_macro_skills()?;
@@ -94,7 +141,24 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::New { name, path } => scaffold_new_project(name, path),
         Cmd::Trace { file, summary } => print_session_trace(file, summary),
+        Cmd::Mcp { cmd: McpCmd::Serve { workspace } } => run_mcp_server(workspace).await,
     }
+}
+
+async fn run_mcp_server(workspace: Option<PathBuf>) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
+    let mut world = harness_context::default_world(root);
+    let server = harness_mcp::McpServer::new("harness-mcp", env!("CARGO_PKG_VERSION"))
+        .with_tools(vec![
+            Arc::new(harness_tools_fs::ReadFile),
+            Arc::new(harness_tools_fs::WriteFile),
+            Arc::new(harness_tools_fs::EditFile),
+            Arc::new(harness_tools_fs::ListDir),
+            Arc::new(harness_tools_shell::ShellRead),
+        ]);
+    server.serve_stdio(&mut world).await?;
+    Ok(())
 }
 
 fn print_session_trace(file: PathBuf, summary_only: bool) -> anyhow::Result<()> {

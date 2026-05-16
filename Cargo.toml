@@ -17,6 +17,7 @@ members = [
     "crates/harness-sensors-common",
     "crates/harness-models",
     "crates/harness-templates",
+    "crates/harness-mcp",
     "crates/harness-cli",
     "examples/crate-keeper",
     "examples/deepseek-hello",
@@ -48,6 +49,7 @@ harness-sensors-rust   = { path = "crates/harness-sensors-rust",   version = "0.
 harness-sensors-common = { path = "crates/harness-sensors-common", version = "0.0.1" }
 harness-models     = { path = "crates/harness-models",     version = "0.0.1" }
 harness-templates  = { path = "crates/harness-templates",  version = "0.0.1" }
+harness-mcp        = { path = "crates/harness-mcp",        version = "0.0.1" }
 harness-cli        = { path = "crates/harness-cli",        version = "0.0.1" }
 
 # external

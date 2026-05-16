@@ -715,16 +715,16 @@ harness trace ./session.jsonl            # 回放
 - [x] Anthropic 原生 provider — `AnthropicNative` 加 Messages API + content-block tool-calling；`providers::anthropic_{sonnet_46, opus_47, haiku_45}`
 - [x] Auto-fix patches 实际落地 — `FixPatch::ReplaceFile/UnifiedDiff/RunCommand` 在 `AgentLoop` 内通过 `World.runner` / fs 真实应用并报告
 
-### v0.2+
+### v0.2 ✅
 
-- [x] **Session replay** — `SessionRecorder` Hook serialises every lifecycle event to JSONL; `read_session` + `replay_as_mock` reconstruct a deterministic `MockModel` from the log. `harness trace <file>` pretty-prints the session + summary stats. `crate-keeper --record <path>` produces live recordings.
-- [ ] VmSandbox (Firecracker) — production-grade isolation
-- [ ] ContainerSandbox (OCI) — middle-ground isolation
-- [ ] MCP 服务端 — 把本框架的工具开放给外部 MCP 客户端
-- [ ] OpenTelemetry 追踪输出 — 把 27 个 Event 转 OTel span (session-replay 已覆盖大部分诊断需求)
-- [ ] Harness "linter" — 检测互相冲突的 guides / sensors
-- [ ] `ModelBackedCompactor` — Microcompact + AutoCompact stages 用便宜模型语义化摘要 (今天是结构化收缩)
-- [ ] Streaming tool calls — OpenAiCompat 已支持 stream=true，但 tool_call 增量解析未接
+- [x] **Session replay** — `SessionRecorder` Hook serialises every lifecycle event to JSONL; `read_session` + `replay_as_mock` reconstruct a deterministic `MockModel` from the log. `harness trace <file>` pretty-prints with stats. `crate-keeper --record <path>` produces live recordings.
+- [x] **ContainerSandbox** — `docker run -d --rm` + bind-mount + `docker exec` routing for the world runner. `--network none` by default.
+- [x] **VmSandbox** — Firecracker-shaped API with image-path validation; Firecracker process backend stubbed with a clear error so callers can detect the missing infra path without crashing.
+- [x] **MCP server** — `harness-mcp` crate ships a JSON-RPC 2.0 server over stdio implementing `initialize`, `tools/list`, `tools/call`, `ping`. Bin: `harness mcp serve --workspace <path>`. Tools exposed: read/write/edit/list_dir/shell_read. Tested round-trips with 6 unit tests.
+- [x] **OpenTelemetry** — `harness-hooks` `otel` feature emits OTel spans for session/model/tool/sensor/compaction. Token usage, stop reason, signal counts as attributes. Uses `BoxedSpan` to stay dyn-compatible.
+- [x] **Harness linter** — `harness skills lint <dir>` flags short / vague / overlapping descriptions, near-duplicate names, Jaccard keyword overlap > 50%. 5 unit tests.
+- [x] **ModelBackedCompactor** — Microcompact + AutoCompact stages call an LLM (typically `deepseek-flash` or `haiku`) for real semantic summarisation; structural strategies still cover BudgetReduce / Snip / ContextCollapse.
+- [x] **Streaming tool calls** — `OpenAiCompat::stream()` parses SSE chunks into `ModelDelta::{Text, ToolCallStart, ToolCallArgs, Usage, Stop}` so callers can render incrementally. 2 unit tests over canned SSE bytes.
 
 ---
 

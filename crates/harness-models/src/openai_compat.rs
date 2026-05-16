@@ -2,9 +2,10 @@
 
 use crate::LlmConfig;
 use async_trait::async_trait;
+use futures::stream::{BoxStream, StreamExt};
 use harness_core::{
-    Block, Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall, TurnRole,
-    Usage,
+    Block, Context, Model, ModelDelta, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall,
+    TurnRole, Usage,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -231,6 +232,192 @@ impl Model for OpenAiCompat {
             supports_streaming:                      true,
         }
     }
+
+    async fn stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        let messages = build_messages(ctx);
+        let tools = ctx
+            .tools
+            .iter()
+            .map(|t| ToolDecl {
+                kind: "function",
+                function: ToolDeclFunction {
+                    name:        t.name.clone(),
+                    description: t.description.clone(),
+                    parameters:  t.input.clone(),
+                },
+            })
+            .collect();
+        let req = ChatRequest {
+            model:      &self.cfg.model,
+            messages,
+            max_tokens: Some(ctx.policy.max_output_tokens),
+            tools,
+            stream:     true,
+        };
+        let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| ModelError::Transport(format!("send: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ModelError::Transport(format!("HTTP {status}: {body}")));
+        }
+        let byte_stream = resp.bytes_stream();
+        let delta_stream = parse_sse_stream(byte_stream);
+        Ok(delta_stream.boxed())
+    }
+}
+
+/// Parse the SSE byte stream from OpenAI chat completions into `ModelDelta`s.
+///
+/// Each event is a line like `data: {"choices":[{"delta":{...}}]}` and a
+/// final `data: [DONE]` marker. Lines without `data:` prefix (keepalives,
+/// comments) are skipped.
+fn parse_sse_stream<S>(stream: S) -> impl futures::Stream<Item = Result<ModelDelta, ModelError>>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + Unpin + 'static,
+{
+    use futures::stream::unfold;
+
+    struct State<S> {
+        upstream: S,
+        buf: String,
+        done: bool,
+        // Partial JSON args for in-flight tool calls, keyed by call index.
+        partial_tool_args: std::collections::HashMap<u32, ToolCallAccumPriv>,
+    }
+
+    let init = State {
+        upstream: stream,
+        buf: String::new(),
+        done: false,
+        partial_tool_args: std::collections::HashMap::new(),
+    };
+
+    unfold(init, |mut state| async move {
+        if state.done { return None; }
+
+        loop {
+            // Try to find a complete event in the buffer first.
+            if let Some(eol) = state.buf.find('\n') {
+                let line = state.buf.drain(..=eol).collect::<String>();
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if let Some(rest) = line.strip_prefix("data:") {
+                    let payload = rest.trim();
+                    if payload == "[DONE]" {
+                        state.done = true;
+                        return Some((Ok(ModelDelta::Stop(StopReason::EndTurn)), state));
+                    }
+                    if payload.is_empty() { continue; }
+                    let v: serde_json::Value = match serde_json::from_str(payload) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if let Some(delta) = decode_delta(&v, &mut state.partial_tool_args) {
+                        return Some((Ok(delta), state));
+                    }
+                    continue;
+                }
+                // ignore non-data lines
+                continue;
+            }
+            // Need more bytes.
+            match state.upstream.next().await {
+                Some(Ok(bytes)) => {
+                    if let Ok(s) = std::str::from_utf8(&bytes) {
+                        state.buf.push_str(s);
+                    }
+                }
+                Some(Err(e)) => {
+                    state.done = true;
+                    return Some((Err(ModelError::Transport(format!("stream: {e}"))), state));
+                }
+                None => {
+                    state.done = true;
+                    return None;
+                }
+            }
+        }
+    })
+}
+
+fn decode_delta(
+    v: &serde_json::Value,
+    partial: &mut std::collections::HashMap<u32, ToolCallAccumPriv>,
+) -> Option<ModelDelta> {
+    use serde_json::Value;
+
+    let choices = v.get("choices")?.as_array()?;
+    let first = choices.first()?;
+    let delta = first.get("delta")?;
+
+    // Plain text content
+    if let Some(Value::String(t)) = delta.get("content")
+        && !t.is_empty()
+    {
+        return Some(ModelDelta::Text(t.clone()));
+    }
+    // Tool calls
+    if let Some(Value::Array(tcs)) = delta.get("tool_calls") {
+        for tc in tcs {
+            let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let acc = partial.entry(idx).or_default();
+            if let Some(Value::String(id)) = tc.get("id")
+                && acc.id.is_none()
+            {
+                acc.id = Some(id.clone());
+                return Some(ModelDelta::ToolCallStart {
+                    id: id.clone(),
+                    name: tc
+                        .get("function").and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                });
+            }
+            if let Some(Value::String(args)) = tc.get("function").and_then(|f| f.get("arguments")) {
+                acc.args.push_str(args);
+                return Some(ModelDelta::ToolCallArgs {
+                    id: acc.id.clone().unwrap_or_default(),
+                    partial_json: args.clone(),
+                });
+            }
+        }
+    }
+    // Usage (final chunk on some providers)
+    if let Some(Value::Object(u)) = v.get("usage") {
+        let usage = Usage {
+            input_tokens:        u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            output_tokens:       u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            cached_input_tokens: 0,
+        };
+        return Some(ModelDelta::Usage(usage));
+    }
+    // Finish reason
+    if let Some(Value::String(reason)) = first.get("finish_reason") {
+        let r = match reason.as_str() {
+            "stop"           => StopReason::EndTurn,
+            "length"         => StopReason::MaxTokens,
+            "tool_calls"     => StopReason::ToolUse,
+            "content_filter" => StopReason::Other,
+            _                => StopReason::EndTurn,
+        };
+        return Some(ModelDelta::Stop(r));
+    }
+    None
+}
+
+#[derive(Default)]
+struct ToolCallAccumPriv {
+    id:   Option<String>,
+    args: String,
 }
 
 fn provider_from_base_url(url: &str) -> String {
@@ -392,6 +579,68 @@ mod tests {
     use super::*;
     use harness_core::{Policy, Task};
     use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn sse_stream_parses_text_then_done() {
+        use futures::stream::StreamExt;
+
+        let chunks = vec![
+            br#"data: {"choices":[{"delta":{"content":"Hello"}}]}
+"#.to_vec().into(),
+            br#"data: {"choices":[{"delta":{"content":" world"}}]}
+"#.to_vec().into(),
+            br#"data: {"choices":[{"finish_reason":"stop"}]}
+"#.to_vec().into(),
+            br#"data: [DONE]
+"#.to_vec().into(),
+        ];
+        // Convert Vec<Bytes> into a Stream<Result<Bytes, reqwest::Error>>.
+        // We synthesise an Ok-only stream — the parser doesn't care about the
+        // error type as long as it never has to construct one.
+        let stream = futures::stream::iter(
+            chunks.into_iter().map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+        );
+
+        let mut deltas = Vec::new();
+        let mut s = std::pin::pin!(parse_sse_stream(stream));
+        while let Some(d) = s.next().await {
+            deltas.push(d.unwrap());
+        }
+        let texts: Vec<String> = deltas
+            .iter()
+            .filter_map(|d| if let ModelDelta::Text(s) = d { Some(s.clone()) } else { None })
+            .collect();
+        assert_eq!(texts, vec!["Hello".to_string(), " world".to_string()]);
+        let has_stop = deltas.iter().any(|d| matches!(d, ModelDelta::Stop(_)));
+        assert!(has_stop, "expected a Stop delta");
+    }
+
+    #[tokio::test]
+    async fn sse_stream_parses_tool_call_increments() {
+        use futures::stream::StreamExt;
+        let chunks = vec![
+            br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":""}}]}}]}
+"#.to_vec().into(),
+            br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]}}]}
+"#.to_vec().into(),
+            br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]}}]}
+"#.to_vec().into(),
+            br#"data: [DONE]
+"#.to_vec().into(),
+        ];
+        let stream = futures::stream::iter(
+            chunks.into_iter().map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+        );
+        let mut deltas = Vec::new();
+        let mut s = std::pin::pin!(parse_sse_stream(stream));
+        while let Some(d) = s.next().await {
+            deltas.push(d.unwrap());
+        }
+        let starts: usize = deltas.iter().filter(|d| matches!(d, ModelDelta::ToolCallStart { .. })).count();
+        let args_count: usize = deltas.iter().filter(|d| matches!(d, ModelDelta::ToolCallArgs { .. })).count();
+        assert_eq!(starts, 1);
+        assert_eq!(args_count, 2);
+    }
 
     #[test]
     fn build_messages_emits_system_and_user() {

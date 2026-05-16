@@ -209,6 +209,225 @@ impl Sandbox for WorktreeSandbox {
 }
 
 // ============================================================
+// ContainerSandbox
+// ============================================================
+
+/// Run the agent against a Docker container. The agent itself runs on the
+/// host, but every `world.runner.exec(...)` call routes through `docker exec`
+/// into a long-lived container whose workspace is bind-mounted from the host.
+///
+/// Requires `docker` on PATH; the container image must include the tools the
+/// agent intends to use (cargo, git, etc.).
+pub struct ContainerSandbox {
+    /// OCI image to spawn (e.g. `rust:1.92-slim`).
+    pub image:   String,
+    /// Host directory to mount inside the container at `/workspace`.
+    pub source:  PathBuf,
+    /// Container name; auto-generated if `None`.
+    pub name:    Option<String>,
+    /// Pass `--network none` to the container.
+    pub no_net:  bool,
+}
+
+impl ContainerSandbox {
+    pub fn new(image: impl Into<String>, source: impl Into<PathBuf>) -> Self {
+        Self {
+            image:  image.into(),
+            source: source.into(),
+            name:   None,
+            no_net: true,
+        }
+    }
+
+    pub fn with_network(mut self, allow: bool) -> Self {
+        self.no_net = !allow;
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
+#[async_trait]
+impl Sandbox for ContainerSandbox {
+    fn fs_policy(&self)  -> FsPolicy  { FsPolicy::Confined }
+    fn net_policy(&self) -> NetPolicy { if self.no_net { NetPolicy::None } else { NetPolicy::Allowed } }
+
+    async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
+        // probe docker
+        let probe = tokio::process::Command::new("docker")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|e| SandboxError::GitMissing(format!("docker missing: {e}")))?;
+        if !probe.status.success() {
+            return Err(SandboxError::GitMissing(
+                String::from_utf8_lossy(&probe.stderr).to_string(),
+            ));
+        }
+
+        let name = self.name.clone().unwrap_or_else(|| {
+            format!(
+                "harness-sb-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            )
+        });
+        let mount = format!("{}:/workspace", self.source.display());
+        let mut args = vec!["run", "-d", "--rm", "--name", &name, "-v", &mount, "-w", "/workspace"];
+        if self.no_net {
+            args.push("--network");
+            args.push("none");
+        }
+        args.push(&self.image);
+        args.push("sleep");
+        args.push("infinity");
+
+        tracing::info!(image=%self.image, name=%name, "spawning container sandbox");
+        let out = tokio::process::Command::new("docker")
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| SandboxError::Io(e.to_string()))?;
+        if !out.status.success() {
+            return Err(SandboxError::Git(format!(
+                "docker run failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+
+        // Wrap the world's runner so every exec routes through `docker exec`.
+        let runner: Arc<dyn harness_core::ProcessRunner> =
+            Arc::new(DockerExecRunner { container: name.clone() });
+        let world = World {
+            repo:   RepoView { root: self.source.clone() },
+            runner,
+            clock:  Arc::new(harness_context::SystemClock),
+            kv:     Arc::new(harness_context::InMemoryKv::new()),
+        };
+
+        let kill_name = name.clone();
+        let cleanup: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let _ = std::process::Command::new("docker")
+                .args(["kill", &kill_name])
+                .output();
+        });
+
+        Ok(SandboxHandle {
+            world,
+            root: self.source.clone(),
+            cleanup: Some(cleanup),
+            keep: false,
+            label: format!("container:{name}"),
+        })
+    }
+}
+
+struct DockerExecRunner {
+    container: String,
+}
+
+#[async_trait]
+impl harness_core::ProcessRunner for DockerExecRunner {
+    async fn exec(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&std::path::Path>,
+    ) -> std::io::Result<harness_core::ProcessOutput> {
+        let mut docker_args: Vec<String> = vec![
+            "exec".into(),
+        ];
+        if let Some(c) = cwd {
+            docker_args.push("-w".into());
+            // Re-anchor relative cwd inside the container's /workspace mount.
+            let inside = if c.is_absolute() {
+                c.display().to_string()
+            } else {
+                format!("/workspace/{}", c.display())
+            };
+            docker_args.push(inside);
+        }
+        docker_args.push(self.container.clone());
+        docker_args.push(program.into());
+        for a in args {
+            docker_args.push((*a).into());
+        }
+        let out = tokio::process::Command::new("docker")
+            .args(&docker_args)
+            .output()
+            .await?;
+        Ok(harness_core::ProcessOutput {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        })
+    }
+}
+
+// ============================================================
+// VmSandbox — Firecracker-shaped API, stub backend
+// ============================================================
+
+/// Sandbox API for VM-isolated agent runs. The full Firecracker backend is
+/// out of scope for a pure Rust crate; this type validates configuration and
+/// returns an error from `spawn()` so callers can detect missing infra
+/// without bringing the framework down.
+pub struct VmSandbox {
+    pub kernel_image: PathBuf,
+    pub rootfs_image: PathBuf,
+    pub source:       PathBuf,
+    pub vcpus:        u8,
+    pub mem_mb:       u32,
+}
+
+impl VmSandbox {
+    pub fn new(kernel: impl Into<PathBuf>, rootfs: impl Into<PathBuf>, source: impl Into<PathBuf>) -> Self {
+        Self {
+            kernel_image: kernel.into(),
+            rootfs_image: rootfs.into(),
+            source:       source.into(),
+            vcpus:        1,
+            mem_mb:       512,
+        }
+    }
+}
+
+#[async_trait]
+impl Sandbox for VmSandbox {
+    fn fs_policy(&self)  -> FsPolicy  { FsPolicy::Confined }
+    fn net_policy(&self) -> NetPolicy { NetPolicy::None }
+
+    async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
+        // Validate config so users get an early error before learning the
+        // backend isn't wired up.
+        if !self.kernel_image.exists() {
+            return Err(SandboxError::Io(format!(
+                "kernel image not found: {}",
+                self.kernel_image.display()
+            )));
+        }
+        if !self.rootfs_image.exists() {
+            return Err(SandboxError::Io(format!(
+                "rootfs image not found: {}",
+                self.rootfs_image.display()
+            )));
+        }
+        Err(SandboxError::GitMissing(
+            "VmSandbox: Firecracker backend not yet implemented in this build. \
+             Use ContainerSandbox for OCI isolation or WorktreeSandbox for cheap \
+             git-level isolation."
+                .into(),
+        ))
+    }
+}
+
+// ============================================================
 // NullSandbox (for tests & for "I don't actually need isolation")
 // ============================================================
 
@@ -246,6 +465,41 @@ impl Sandbox for NullSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn vm_sandbox_returns_clear_error_when_unimplemented() {
+        let tmp = std::env::temp_dir().join(format!("harness-vm-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("kernel"), b"fake").unwrap();
+        std::fs::write(tmp.join("rootfs"), b"fake").unwrap();
+        let s = VmSandbox::new(tmp.join("kernel"), tmp.join("rootfs"), tmp.clone());
+        let err = match s.spawn().await {
+            Ok(_) => panic!("expected VmSandbox spawn to error"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Firecracker") || msg.contains("not yet implemented"),
+            "got: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn vm_sandbox_rejects_missing_images() {
+        let s = VmSandbox::new("/no/such/kernel", "/no/such/rootfs", ".");
+        assert!(matches!(s.spawn().await, Err(SandboxError::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn container_sandbox_fails_cleanly_without_docker() {
+        let s = ContainerSandbox::new("harness-nonexistent-image-xyzzy:latest", ".");
+        let res = s.spawn().await;
+        match res {
+            Ok(_) => panic!("expected error spawning bogus container"),
+            Err(_) => {} // either docker missing OR image pull fails — both fine
+        }
+    }
 
     #[tokio::test]
     async fn null_sandbox_returns_world() {

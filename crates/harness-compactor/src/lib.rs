@@ -7,8 +7,10 @@
 
 use async_trait::async_trait;
 use harness_core::{
-    Block, Budget, CompactError, CompactionStage, Compactor, Context, Turn, TurnRole,
+    Block, Budget, CompactError, CompactionStage, Compactor, Context, Model, Policy, Task, Turn,
+    TurnRole,
 };
+use std::sync::Arc;
 
 /// Heuristic compactor — operates on the structure of the context only.
 pub struct DefaultCompactor {
@@ -61,6 +63,144 @@ impl Compactor for DefaultCompactor {
         }
         Ok(())
     }
+}
+
+// ============================================================
+// ModelBackedCompactor — uses a (typically cheap) Model to do real semantic
+// summarisation for Microcompact and AutoCompact stages.
+// ============================================================
+
+/// Compactor that calls an LLM for the inferential stages and falls back to
+/// `DefaultCompactor`'s structural strategies for the computational ones.
+///
+/// Typical wiring:
+/// ```ignore
+/// let cheap = OpenAiCompat::new(providers::deepseek_flash(key));
+/// let compactor = ModelBackedCompactor::new(Arc::new(cheap));
+/// let loop_ = AgentLoop::new(main_model).with_compactor(Arc::new(compactor));
+/// ```
+pub struct ModelBackedCompactor {
+    pub model: Arc<dyn Model>,
+    pub tokens_per_char: f32,
+    /// Keep the most recent N turns intact during semantic compaction.
+    pub keep_recent: usize,
+    /// Hard cap on the summary length the model is asked to produce.
+    pub summary_max_tokens: u32,
+}
+
+impl ModelBackedCompactor {
+    pub fn new(model: Arc<dyn Model>) -> Self {
+        Self {
+            model,
+            tokens_per_char: 0.30,
+            keep_recent: 6,
+            summary_max_tokens: 600,
+        }
+    }
+}
+
+#[async_trait]
+impl Compactor for ModelBackedCompactor {
+    fn budget(&self, ctx: &Context) -> Budget {
+        DefaultCompactor { tokens_per_char: self.tokens_per_char }.budget(ctx)
+    }
+
+    async fn compact(&self, stage: CompactionStage, ctx: &mut Context) -> Result<(), CompactError> {
+        match stage {
+            CompactionStage::BudgetReduce    => { budget_reduce(ctx);     Ok(()) }
+            CompactionStage::Snip            => { snip_file_reads(ctx);   Ok(()) }
+            CompactionStage::ContextCollapse => { context_collapse(ctx);  Ok(()) }
+            CompactionStage::Microcompact    => {
+                self.model_summarise(ctx, "microcompact-summary").await
+            }
+            CompactionStage::AutoCompact     => {
+                self.model_summarise(ctx, "auto-compact-summary").await
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl ModelBackedCompactor {
+    /// Ask the model to produce a tight summary of the older history; replace
+    /// `0..split` with the resulting [`Block::Text`] in a synthetic system turn.
+    async fn model_summarise(&self, ctx: &mut Context, tag: &str) -> Result<(), CompactError> {
+        if ctx.history.len() <= self.keep_recent { return Ok(()); }
+        let split = ctx.history.len() - self.keep_recent;
+        let mut dump = String::new();
+        for turn in ctx.history.iter().take(split) {
+            dump.push_str(&format_turn_for_summary(turn));
+        }
+        if dump.trim().is_empty() { return Ok(()); }
+
+        let prompt = format!(
+            "You are compacting an in-progress agent conversation for downstream replay. \
+             Produce a terse summary (≤ 200 words) of the conversation below. Preserve: \
+             concrete file paths, decisions made, sensor outcomes, and the current goal. \
+             Drop: chit-chat, redundant tool reads, verbose stack traces.\n\n\
+             ---- TRANSCRIPT ----\n{dump}\n---- END ----\n\n\
+             Reply with the summary text only, no preamble."
+        );
+
+        let mut summary_ctx = Context::new(Task {
+            description: prompt,
+            source: None,
+            deadline: None,
+        });
+        summary_ctx.policy = Policy {
+            max_iters: 1,
+            max_input_tokens: 100_000,
+            max_output_tokens: self.summary_max_tokens,
+            self_correct_rounds: 0,
+        };
+        summary_ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text(summary_ctx.task.description.clone())],
+        });
+
+        let out = self.model.complete(&summary_ctx).await.map_err(|e| {
+            CompactError::Failed { stage: tag.into(), reason: format!("model: {e}") }
+        })?;
+
+        let summary = out.text.unwrap_or_else(|| "(empty summary)".into());
+        let mut new_history = vec![Turn {
+            role: TurnRole::System,
+            blocks: vec![Block::Text(format!("[{tag}]\n{summary}"))],
+        }];
+        new_history.extend(ctx.history.drain(split..));
+        ctx.history = new_history;
+        Ok(())
+    }
+}
+
+fn format_turn_for_summary(turn: &Turn) -> String {
+    let role = match turn.role {
+        TurnRole::User      => "user",
+        TurnRole::Assistant => "assistant",
+        TurnRole::Tool      => "tool",
+        TurnRole::System    => "system",
+        _                   => "unknown",
+    };
+    let mut s = format!("[{role}]\n");
+    for b in &turn.blocks {
+        match b {
+            Block::Text(t) => { s.push_str(t); s.push('\n'); }
+            Block::ToolCall { name, args, .. } => {
+                s.push_str(&format!("(tool-call {name} {args})\n"));
+            }
+            Block::ToolResult { call_id, content } => {
+                let preview = content.to_string();
+                let preview = preview.chars().take(160).collect::<String>();
+                s.push_str(&format!("(tool-result {call_id}: {preview}…)\n"));
+            }
+            Block::FileRef { path, .. } => {
+                s.push_str(&format!("(file-ref {path})\n"));
+            }
+            _ => {}
+        }
+    }
+    s.push('\n');
+    s
 }
 
 fn block_chars(b: &Block) -> usize {
@@ -288,6 +428,39 @@ mod tests {
             _ => String::new(),
         };
         assert!(first_text.starts_with("[microcompact-summary]"));
+    }
+
+    #[tokio::test]
+    async fn model_backed_compactor_replaces_old_turns_with_summary() {
+        use harness_models::{MockModel, MockResponse};
+
+        let model = Arc::new(MockModel::new().script(MockResponse::text("CONCISE-SUMMARY-OK")))
+            as Arc<dyn Model>;
+        let c = ModelBackedCompactor::new(model);
+
+        let mut ctx = mk_ctx(20);
+        let original_len = ctx.history.len();
+        c.compact(CompactionStage::Microcompact, &mut ctx).await.unwrap();
+        // First turn now the summary, total shrinks to keep_recent (6) + 1 summary = 7
+        assert_eq!(ctx.history.len(), c.keep_recent + 1);
+        assert!(original_len > ctx.history.len());
+        let first = match &ctx.history[0].blocks[0] {
+            Block::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert!(first.starts_with("[microcompact-summary]"));
+        assert!(first.contains("CONCISE-SUMMARY-OK"));
+    }
+
+    #[tokio::test]
+    async fn model_backed_compactor_noop_when_history_short() {
+        use harness_models::{MockModel, MockResponse};
+        let mock = Arc::new(MockModel::new().script(MockResponse::text("never called")));
+        let c = ModelBackedCompactor::new(mock.clone() as Arc<dyn Model>);
+        let mut ctx = mk_ctx(4); // < keep_recent
+        c.compact(CompactionStage::Microcompact, &mut ctx).await.unwrap();
+        assert_eq!(ctx.history.len(), 4);
+        assert_eq!(mock.call_count(), 0, "model must not be called when history is short");
     }
 
     #[tokio::test]
