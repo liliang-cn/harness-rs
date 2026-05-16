@@ -1,13 +1,16 @@
 [package]
-name = "harness-loop"
+name = "harness-rs-loop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "ReAct agent loop with self-correction"
+description = "ReAct agent loop, subagent isolation, and session record/replay (JSONL) for the harness-rs framework."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core      = { workspace = true }
 harness-context   = { workspace = true }

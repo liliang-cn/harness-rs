@@ -74,11 +74,11 @@ async fn main() -> anyhow::Result<()> {
             .to_string()
     });
 
-    let cfg = match cli.tier.as_str() {
-        "flash" => providers::deepseek_flash(api_key),
-        _       => providers::deepseek_pro(api_key),
+    let model_id = match cli.tier.as_str() {
+        "flash" => "deepseek-v4-flash",
+        _       => "deepseek-v4-pro",
     };
-    let model = OpenAiCompat::new(cfg);
+    let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
     let info = model.info();
     println!(
         "→ harness crate-keeper\n  workspace: {}\n  model:     {} ({}/{}) window={}",

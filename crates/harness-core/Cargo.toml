@@ -1,13 +1,16 @@
 [package]
-name = "harness-core"
+name = "harness-rs-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Core traits and types for the harness agent framework"
+description = "Core traits and types for the harness-rs agent framework: Model, Tool, Guide, Sensor, Hook, Compactor, Skill, plus Context, World, Block, Event, FixPatch and 27 lifecycle events."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 async-trait     = { workspace = true }
 thiserror       = { workspace = true }

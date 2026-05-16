@@ -1,13 +1,16 @@
 [package]
-name = "harness-skills"
+name = "harness-rs-skills"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "agentskills.io-compliant SKILL.md parser, validator, and registry"
+description = "agentskills.io-compliant SKILL.md loader, validator, linter, exporter, and in-process registry for harness-rs."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core    = { workspace = true }
 async-trait     = { workspace = true }

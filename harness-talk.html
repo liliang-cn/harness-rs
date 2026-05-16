@@ -1,0 +1,1717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>harness — Agent = Model + Harness</title>
+
+<!-- === FONTS: Clash Display (display) + Satoshi (body) via Fontshare === -->
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+/* =================================================================
+   THEME — Neon Cyber: deep navy + cyan glow + magenta accent
+   Change these to retheme the whole deck.
+   ================================================================= */
+:root {
+    --bg-deep:        #0a0f1c;
+    --bg-elev:        #111a2e;
+    --bg-grid:        rgba(0,255,204,0.06);
+    --accent-cyan:    #00ffcc;
+    --accent-magenta: #ff00aa;
+    --accent-amber:   #ffd166;
+    --text-light:     #e8f0ff;
+    --text-dim:       rgba(232,240,255,0.55);
+    --text-muted:     rgba(232,240,255,0.4);
+    --code-bg:        rgba(0,0,0,0.45);
+    --line-glow:      rgba(0,255,204,0.25);
+
+    --font-display:   'Clash Display', 'Manrope', sans-serif;
+    --font-body:      'Satoshi', 'Inter', system-ui, sans-serif;
+    --font-mono:      'JetBrains Mono', 'Menlo', monospace;
+
+    --ease:           cubic-bezier(.2,.85,.2,1);
+    --dur:            0.7s;
+}
+
+/* =================================================================
+   VIEWPORT-BASE.CSS (mandatory; pasted verbatim)
+   ================================================================= */
+html, body {
+    height: 100%;
+    overflow-x: hidden;
+}
+html {
+    scroll-snap-type: y mandatory;
+    scroll-behavior: smooth;
+}
+.slide {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+.slide-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-height: 100%;
+    overflow: hidden;
+    padding: var(--slide-padding);
+}
+:root {
+    --title-size:   clamp(1.6rem, 5vw, 4.2rem);
+    --h2-size:      clamp(1.25rem, 3.5vw, 2.5rem);
+    --h3-size:      clamp(1rem, 2.4vw, 1.6rem);
+    --body-size:    clamp(0.8rem, 1.4vw, 1.1rem);
+    --small-size:   clamp(0.65rem, 1vw, 0.85rem);
+    --slide-padding: clamp(1.5rem, 4vw, 4rem);
+    --content-gap:  clamp(0.6rem, 1.8vw, 1.6rem);
+    --element-gap:  clamp(0.3rem, 1vw, 1rem);
+}
+.card, .container, .content-box {
+    max-width: min(92vw, 1100px);
+    max-height: min(82vh, 720px);
+}
+.feature-list, .bullet-list { gap: clamp(0.4rem, 1vh, 1rem); }
+.feature-list li, .bullet-list li { font-size: var(--body-size); line-height: 1.4; }
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+    gap: clamp(0.5rem, 1.5vw, 1rem);
+}
+img, .image-container {
+    max-width: 100%;
+    max-height: min(50vh, 400px);
+    object-fit: contain;
+}
+@media (max-height: 700px) {
+    :root {
+        --slide-padding: clamp(0.75rem, 3vw, 2rem);
+        --content-gap: clamp(0.4rem, 1.5vw, 1rem);
+        --title-size: clamp(1.3rem, 4.5vw, 2.6rem);
+        --h2-size: clamp(1rem, 3vw, 1.75rem);
+    }
+}
+@media (max-height: 600px) {
+    :root {
+        --slide-padding: clamp(0.5rem, 2.5vw, 1.5rem);
+        --content-gap: clamp(0.3rem, 1vw, 0.75rem);
+        --title-size: clamp(1.1rem, 4vw, 2rem);
+        --body-size: clamp(0.7rem, 1.2vw, 0.95rem);
+    }
+    .nav-dots, .keyboard-hint, .decorative { display: none; }
+}
+@media (max-height: 500px) {
+    :root {
+        --slide-padding: clamp(0.4rem, 2vw, 1rem);
+        --title-size: clamp(1rem, 3.5vw, 1.5rem);
+        --h2-size: clamp(0.9rem, 2.5vw, 1.25rem);
+        --body-size: clamp(0.65rem, 1vw, 0.85rem);
+    }
+}
+@media (max-width: 600px) {
+    :root { --title-size: clamp(1.25rem, 7vw, 2.5rem); }
+    .grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+    html { scroll-behavior: auto; }
+}
+
+/* =================================================================
+   BASE
+   ================================================================= */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: var(--font-body);
+    color: var(--text-light);
+    background: var(--bg-deep);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+/* =================================================================
+   ATMOSPHERE — grid + glow that lives on every slide
+   ================================================================= */
+.slide::before {
+    /* perspective grid */
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+        linear-gradient(var(--bg-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+    background-size: clamp(40px, 5vw, 80px) clamp(40px, 5vw, 80px);
+    mask-image: radial-gradient(ellipse 90% 75% at 50% 50%, #000 25%, transparent 95%);
+    pointer-events: none;
+    z-index: 0;
+}
+.glow {
+    position: absolute; border-radius: 50%;
+    filter: blur(80px); opacity: 0.55;
+    pointer-events: none; z-index: 0;
+    animation: float 9s ease-in-out infinite;
+}
+.glow.cyan {
+    top: -12%; right: -8%;
+    width: clamp(260px, 32vw, 480px); height: clamp(260px, 32vw, 480px);
+    background: var(--accent-cyan);
+}
+.glow.mag {
+    bottom: -15%; left: -10%;
+    width: clamp(300px, 36vw, 540px); height: clamp(300px, 36vw, 540px);
+    background: var(--accent-magenta);
+    opacity: 0.35;
+    animation-delay: -4s;
+}
+@keyframes float {
+    0%,100% { transform: translate(0,0); }
+    50%     { transform: translate(2vw, -2vh); }
+}
+/* Stack content above the grid pseudo-element WITHOUT clobbering .glow's
+   position: absolute — earlier rule was `.slide > * { position: relative }`
+   which equal-specificity-overrode .glow and dragged it into flex flow,
+   crushing .slide-content to ~115px. */
+.slide-content, .rail-top, .rail-bot, .keyboard-hint { z-index: 2; }
+.slide::before { z-index: 0; }
+
+/* =================================================================
+   REVEAL — adds .visible class triggers staggered fade-up
+   ================================================================= */
+.reveal {
+    opacity: 0;
+    transform: translateY(28px);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.slide.visible .reveal { opacity: 1; transform: translateY(0); }
+.slide.visible .r0 { transition-delay: 0.05s; }
+.slide.visible .r1 { transition-delay: 0.15s; }
+.slide.visible .r2 { transition-delay: 0.28s; }
+.slide.visible .r3 { transition-delay: 0.42s; }
+.slide.visible .r4 { transition-delay: 0.56s; }
+.slide.visible .r5 { transition-delay: 0.70s; }
+.slide.visible .r6 { transition-delay: 0.85s; }
+
+.scale-in {
+    opacity: 0;
+    transform: scale(0.94);
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.slide.visible .scale-in { opacity: 1; transform: scale(1); }
+
+/* =================================================================
+   TYPOGRAPHY
+   ================================================================= */
+.kicker {
+    display: inline-block;
+    width: fit-content;           /* natural width but still respect container's align-items */
+    max-width: 100%;
+    font-family: var(--font-body);
+    font-weight: 700;
+    font-size: clamp(0.7rem, 1.2vw, 0.92rem);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent-cyan);
+    padding: 0.35em 0.95em;
+    border: 1px solid var(--accent-cyan);
+    border-radius: 999px;
+    margin-bottom: var(--content-gap);
+}
+.kicker.mag { color: var(--accent-magenta); border-color: var(--accent-magenta); }
+.kicker.amber { color: var(--accent-amber); border-color: var(--accent-amber); }
+
+h1, h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+}
+h1 {
+    font-size: var(--title-size);
+    background: linear-gradient(135deg, #fff 0%, #fff 40%, var(--accent-cyan) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+h2 {
+    font-size: var(--h2-size);
+    color: var(--text-light);
+}
+h2 em {
+    font-style: normal;
+    color: var(--accent-cyan);
+    font-weight: 700;
+}
+h2 em.mag { color: var(--accent-magenta); }
+
+p, li { font-size: var(--body-size); line-height: 1.55; }
+p.lede {
+    font-size: clamp(1.05rem, 2.2vw, 1.6rem);
+    line-height: 1.45;
+    max-width: 38ch;
+    color: var(--text-light);
+}
+p.lede b { color: var(--accent-magenta); font-weight: 700; }
+.muted { color: var(--text-dim); }
+.mono { font-family: var(--font-mono); }
+
+/* =================================================================
+   CHROMES — header / footer rails on each slide
+   ================================================================= */
+.rail-top, .rail-bot {
+    position: absolute; left: 0; right: 0;
+    padding: clamp(0.8rem, 2vh, 1.4rem) clamp(1.5rem, 4vw, 4rem);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: clamp(0.65rem, 1.1vw, 0.82rem);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    z-index: 5;
+}
+.rail-top { top: 0; }
+.rail-bot { bottom: 0; }
+.rail-top .brand {
+    display: flex; align-items: center; gap: 0.6rem;
+    color: var(--text-light); font-weight: 700;
+}
+.rail-top .brand::before {
+    content: ""; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent-cyan);
+    box-shadow: 0 0 12px var(--accent-cyan);
+    animation: pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: 0.35; } }
+.rail-bot .page { color: var(--text-light); font-weight: 700; letter-spacing: 0.3em; }
+
+/* =================================================================
+   CODE BLOCK
+   ================================================================= */
+pre.code {
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1.05vw, 0.9rem);
+    line-height: 1.55;
+    background: var(--code-bg);
+    border: 1px solid var(--line-glow);
+    border-left: 3px solid var(--accent-cyan);
+    border-radius: 6px;
+    padding: clamp(0.9rem, 2vh, 1.4rem) clamp(1rem, 2.5vw, 1.6rem);
+    color: var(--text-light);
+    max-height: min(60vh, 540px);
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,255,204,0.08);
+}
+pre.code .k { color: var(--accent-cyan); font-weight: 500; }   /* keyword */
+pre.code .s { color: var(--accent-amber); }                     /* string  */
+pre.code .c { color: var(--text-muted); font-style: italic; }   /* comment */
+pre.code .a { color: var(--accent-magenta); font-weight: 500; } /* attr / macro */
+pre.code .t { color: #b3a5ff; }                                 /* type    */
+pre.code .n { color: #ffb3ec; }                                 /* numeric */
+
+/* =================================================================
+   CARDS / GRIDS
+   ================================================================= */
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: clamp(0.6rem, 1.6vw, 1.2rem);
+    max-width: 100%;
+}
+.card-grid.two { grid-template-columns: repeat(2, 1fr); }
+.card-grid.six { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, auto); }
+@media (max-width: 700px) {
+    .card-grid, .card-grid.two, .card-grid.six { grid-template-columns: 1fr; }
+}
+.tile {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: clamp(0.9rem, 2vh, 1.3rem) clamp(1rem, 2vw, 1.4rem);
+    transition: border-color 0.3s ease, background 0.3s ease;
+}
+.tile:hover { border-color: var(--accent-cyan); background: rgba(0,255,204,0.04); }
+.tile .t-h {
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1vw, 0.8rem);
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--accent-cyan);
+    margin-bottom: 0.6rem;
+}
+.tile .t-t {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(1.05rem, 2vw, 1.5rem);
+    line-height: 1.15;
+    margin-bottom: 0.55rem;
+    color: var(--text-light);
+}
+.tile .t-b {
+    font-size: clamp(0.75rem, 1.15vw, 0.95rem);
+    color: var(--text-dim);
+    line-height: 1.45;
+}
+
+/* =================================================================
+   STAT ROW
+   ================================================================= */
+.stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: clamp(1rem, 3vw, 2.5rem);
+    margin-top: var(--content-gap);
+}
+@media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat-num {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 5vw, 3.6rem);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: var(--accent-cyan);
+}
+.stat-lbl {
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1vw, 0.8rem);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: 0.45rem;
+}
+
+/* =================================================================
+   FOOTNOTE / KBD / TAG STYLES
+   ================================================================= */
+kbd {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    background: rgba(0,255,204,0.12);
+    border: 1px solid var(--line-glow);
+    color: var(--accent-cyan);
+}
+.tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: clamp(0.6rem, 1vw, 0.78rem);
+    letter-spacing: 0.15em;
+    padding: 0.25em 0.7em;
+    border-radius: 4px;
+    background: rgba(255,0,170,0.12);
+    color: var(--accent-magenta);
+    border: 1px solid rgba(255,0,170,0.4);
+    margin-right: 0.4em;
+}
+.tag.cyan { background: rgba(0,255,204,0.1); color: var(--accent-cyan); border-color: rgba(0,255,204,0.4); }
+
+/* =================================================================
+   PROGRESS BAR
+   ================================================================= */
+.progress-bar {
+    position: fixed; top: 0; left: 0;
+    height: 3px; width: 0;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-magenta));
+    z-index: 9999;
+    transition: width 0.15s linear;
+    box-shadow: 0 0 14px var(--accent-cyan);
+}
+
+/* =================================================================
+   NAV DOTS
+   ================================================================= */
+.nav-dots {
+    position: fixed; right: clamp(0.5rem, 1.5vw, 1.25rem);
+    top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 0.55rem;
+    z-index: 50;
+}
+.nav-dots button {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255,255,255,0.25);
+    cursor: pointer;
+    transition: all 0.25s ease;
+    padding: 0;
+}
+.nav-dots button:hover { background: rgba(255,255,255,0.6); }
+.nav-dots button.active {
+    background: var(--accent-cyan);
+    box-shadow: 0 0 10px var(--accent-cyan);
+    transform: scale(1.25);
+}
+
+/* =================================================================
+   KEYBOARD HINT (only on first slide)
+   ================================================================= */
+.keyboard-hint {
+    position: absolute;
+    bottom: clamp(3.5rem, 8vh, 5rem);
+    left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1.1vw, 0.82rem);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    opacity: 0;
+    animation: fade 0.6s ease 1.6s forwards;
+}
+@keyframes fade { to { opacity: 1; } }
+
+/* =================================================================
+   SLIDE-SPECIFIC LAYOUTS
+   ================================================================= */
+.title-slide .slide-content {
+    justify-content: space-between;
+    padding-top: clamp(5rem, 14vh, 8rem);
+    padding-bottom: clamp(5rem, 14vh, 8rem);
+}
+.title-slide h1 {
+    font-size: clamp(4rem, 14vw, 12rem);
+    font-weight: 700;
+    line-height: 0.9;
+}
+.title-slide h1 .dot {
+    color: var(--accent-magenta);
+    -webkit-text-fill-color: var(--accent-magenta);
+}
+.title-slide .sub {
+    font-size: clamp(1.05rem, 2.4vw, 1.7rem);
+    line-height: 1.4;
+    max-width: 34ch;
+    color: var(--text-light);
+}
+.title-slide .sub b { color: var(--accent-cyan); font-weight: 700; }
+
+/* horizontal rule */
+hr.div {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+    margin: var(--content-gap) 0;
+    opacity: 0.5;
+}
+
+/* generic two-col layout */
+.two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(1.2rem, 3vw, 2.5rem);
+    align-items: center;
+}
+@media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+
+/* event grid (for HookBus 27 events) */
+.event-cloud {
+    display: flex; flex-wrap: wrap;
+    gap: clamp(0.35rem, 1vw, 0.6rem);
+    max-width: 100%;
+}
+.event-cloud .ev {
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1vw, 0.8rem);
+    padding: 0.35em 0.8em;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text-dim);
+    transition: all 0.2s ease;
+}
+.event-cloud .ev.hot {
+    color: var(--accent-cyan);
+    border-color: var(--line-glow);
+    background: rgba(0,255,204,0.05);
+}
+
+/* big footer numbers (closing slide) */
+.bignum-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: clamp(1rem, 3vw, 2.5rem);
+}
+@media (max-width: 700px) { .bignum-row { grid-template-columns: repeat(2, 1fr); } }
+.bignum b {
+    font-family: var(--font-display);
+    font-size: clamp(2.5rem, 7vw, 5rem);
+    font-weight: 600;
+    line-height: 1;
+    background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-magenta) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: block;
+}
+.bignum span {
+    font-family: var(--font-mono);
+    font-size: clamp(0.65rem, 1vw, 0.82rem);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: 0.6rem;
+    display: block;
+}
+
+/* =================================================================
+   INLINE EDITOR — opt-in only (user chose Yes in Phase 1)
+   ================================================================= */
+.edit-hotzone {
+    position: fixed;
+    top: 0; left: 0;
+    width: 80px; height: 80px;
+    z-index: 10000;
+    cursor: pointer;
+}
+.edit-toggle {
+    position: fixed;
+    top: 16px; left: 16px;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--bg-elev);
+    border: 1px solid var(--line-glow);
+    color: var(--accent-cyan);
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 10001;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.2s ease;
+    display: flex; align-items: center; justify-content: center;
+}
+.edit-toggle.show, .edit-toggle.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+.edit-toggle:hover { transform: scale(1.08); }
+.edit-toggle.active {
+    background: var(--accent-cyan);
+    color: var(--bg-deep);
+}
+.edit-banner {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(50px);
+    padding: 0.7rem 1.5rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--line-glow);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--accent-cyan);
+    z-index: 10000;
+    box-shadow: 0 0 24px rgba(0,255,204,0.15);
+    opacity: 0;
+    transition: all 0.3s ease;
+    pointer-events: none;
+}
+.edit-banner.active {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+.edit-banner kbd {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(0,255,204,0.3);
+    margin: 0 0.2em;
+}
+body.edit-active [contenteditable="true"] {
+    outline: 1px dashed var(--line-glow);
+    outline-offset: 4px;
+    border-radius: 3px;
+}
+body.edit-active [contenteditable="true"]:focus {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 4px;
+    background: rgba(0,255,204,0.06);
+}
+
+/* =================================================================
+   FONT WEIGHT FIX FOR title-slide gradient with Clash Display
+   ================================================================= */
+.title-slide h1 {
+    -webkit-text-fill-color: transparent;
+    background: linear-gradient(135deg, #fff 0%, #fff 35%, var(--accent-cyan) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+}
+.title-slide h1 .dot {
+    -webkit-text-fill-color: var(--accent-magenta);
+    background: var(--accent-magenta);
+    -webkit-background-clip: text;
+    background-clip: text;
+}
+</style>
+</head>
+<body>
+
+<!-- ===== GLOBAL CHROME ===== -->
+<div class="progress-bar" id="progressBar"></div>
+<nav class="nav-dots" id="navDots"></nav>
+
+<!-- inline editor controls (user opted in) -->
+<div class="edit-hotzone" id="editHotzone" title="Edit mode hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="Toggle edit mode (E)" aria-label="Toggle edit mode">✎</button>
+<div class="edit-banner" id="editBanner">
+    Edit mode · click any text · <kbd>Ctrl</kbd>+<kbd>S</kbd> to save · <kbd>E</kbd> to exit
+</div>
+
+<!-- ===========================================================
+     SLIDE 01 — TITLE
+     =========================================================== -->
+<section class="slide title-slide" data-idx="1">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+
+    <div class="rail-top">
+        <div class="brand reveal r0">harness · v0.0.1</div>
+        <div class="reveal r0">RustConf — 2026</div>
+    </div>
+
+    <div class="slide-content">
+        <div>
+            <span class="kicker reveal r1">▸ Agent = Model + ?</span>
+            <h1 class="reveal r2">harness<span class="dot">.</span></h1>
+        </div>
+        <p class="sub reveal r3">
+            Build the <b>other half</b> of every coding agent — in Rust.
+        </p>
+    </div>
+
+    <div class="keyboard-hint">scroll · <kbd>→</kbd> · space · click dots</div>
+
+    <div class="rail-bot">
+        <div class="reveal r4">github.com/liliang-cn/harness</div>
+        <div class="page reveal r4">01 / 24</div>
+    </div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 02 — THE PROBLEM
+     =========================================================== -->
+<section class="slide" data-idx="2">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>the problem</div></div>
+
+    <div class="slide-content">
+        <span class="kicker mag reveal r0">▸ a thought experiment</span>
+        <h2 class="reveal r1">Every coding agent today<br>is <em class="mag">Model + something</em>.</h2>
+        <hr class="div reveal r2">
+        <p class="lede reveal r3">
+            That "something" is what makes Claude Code, Codex, Stripe Minions
+            actually <b>work</b> — not the model.
+        </p>
+        <p class="muted reveal r4" style="margin-top: var(--content-gap); max-width: 50ch;">
+            Claude Code v2.1.88: ~1.6% AI, 98.4% infrastructure.<br>
+            Stripe Minions: deterministic state machine wrapping LLM nodes.<br>
+            Codex CLI: 27 hook events, 7 permission modes, 5 compaction stages.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">02 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 03 — THE DEFINITION
+     =========================================================== -->
+<section class="slide" data-idx="3">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>definition</div></div>
+
+    <div class="slide-content" style="align-items: center; text-align: center;">
+        <span class="kicker reveal r0">▸ harness engineering</span>
+        <h2 class="reveal r1" style="font-size: clamp(2rem, 5.5vw, 4rem); max-width: 22ch;">
+            Agent <em>=</em> Model <em>+</em> <em class="mag">Harness</em>
+        </h2>
+        <hr class="div reveal r2" style="max-width: 50%;">
+        <p class="lede reveal r3" style="text-align: center;">
+            The harness is <b>everything around the model</b>: guides that shape
+            input, sensors that judge output, the loop, the sandbox, the memory.
+        </p>
+        <p class="muted reveal r4" style="margin-top: var(--content-gap); font-size: 0.85rem;">
+            — Ryan Lopopolo (OpenAI, 2026-02) · Birgitta Böckeler (Thoughtworks, 2026-04)
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">03 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 04 — TWO AXES (Guide / Sensor)
+     =========================================================== -->
+<section class="slide" data-idx="4">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>two axes</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ feedforward + feedback</span>
+        <h2 class="reveal r1">Two complementary control flows.</h2>
+
+        <div class="card-grid two reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-cyan);">▸ Guide (feedforward)</div>
+                <div class="t-t">Shape the model's view <em style="color:var(--accent-cyan);">before</em> it acts.</div>
+                <div class="t-b">AGENTS.md · skills · API conventions · LSP hints · codemod recipes. Computational or inferential.</div>
+            </div>
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-magenta);">▸ Sensor (feedback)</div>
+                <div class="t-t">Observe results <em class="mag">after</em> it acts; produce signals.</div>
+                <div class="t-b">clippy · cargo test · review agent · runtime SLOs. Signals carry LLM-friendly correction hints.</div>
+            </div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 56ch;">
+            Skip one and the agent either repeats mistakes (no feedback) or
+            knows the rules but never learns whether they applied (no feedforward).
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">04 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 05 — Computational × Inferential
+     =========================================================== -->
+<section class="slide" data-idx="5">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>execution</div></div>
+
+    <div class="slide-content">
+        <span class="kicker amber reveal r0">▸ second axis</span>
+        <h2 class="reveal r1">Don't burn tokens<br>on things <em>code can do</em>.</h2>
+
+        <div class="card-grid two reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile">
+                <div class="t-h">Computational</div>
+                <div class="t-t" style="color: var(--accent-cyan);">deterministic · ms</div>
+                <div class="t-b">
+                    <span class="tag cyan">tests</span><span class="tag cyan">linters</span><span class="tag cyan">type-check</span><span class="tag cyan">fmt</span><span class="tag cyan">codemod</span>
+                </div>
+            </div>
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-magenta);">Inferential</div>
+                <div class="t-t" style="color: var(--accent-magenta);">probabilistic · $$</div>
+                <div class="t-b">
+                    <span class="tag">code review</span><span class="tag">semantic dup</span><span class="tag">spec validation</span>
+                </div>
+            </div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 58ch;">
+            Stripe Minions principle: the LLM only gets called when you actually
+            need creativity or judgment. <b style="color: var(--accent-cyan);">Everything else is just code.</b>
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">05 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 06 — THE SEVEN TRAITS
+     =========================================================== -->
+<section class="slide" data-idx="6">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>core traits</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ harness-core</span>
+        <h2 class="reveal r1">Seven first-class abstractions.</h2>
+
+        <div class="card-grid six reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile"><div class="t-h">01</div><div class="t-t">Model</div><div class="t-b">LLM, provider-agnostic.</div></div>
+            <div class="tile"><div class="t-h">02</div><div class="t-t">Tool</div><div class="t-b">Risk-classified action.</div></div>
+            <div class="tile"><div class="t-h">03</div><div class="t-t">Guide</div><div class="t-b">Feedforward injector.</div></div>
+            <div class="tile"><div class="t-h">04</div><div class="t-t">Sensor</div><div class="t-b">Feedback signal source.</div></div>
+            <div class="tile"><div class="t-h">05</div><div class="t-t">Hook</div><div class="t-b">27 lifecycle events.</div></div>
+            <div class="tile"><div class="t-h">06</div><div class="t-t">Compactor</div><div class="t-b">5-stage context shrink.</div></div>
+        </div>
+        <p class="muted reveal r3" style="margin-top: var(--content-gap);">
+            <b style="color: var(--accent-cyan);">+ Skill</b> (the 7th) — strictly <code style="color: var(--accent-cyan);">agentskills.io</code>-compliant.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">06 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 07 — agentskills.io
+     =========================================================== -->
+<section class="slide" data-idx="7">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>skill spec</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ no vendor lock-in</span>
+        <h2 class="reveal r1">Skills follow the public<br><em>agentskills.io</em> spec.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap); max-width: 80ch;">
+<span class="c">---</span>
+<span class="k">name</span>: format-rust
+<span class="k">description</span>: Run cargo fmt across the workspace. Use after edits.
+<span class="k">license</span>: Apache-2.0
+<span class="k">allowed-tools</span>: <span class="s">Bash(cargo:fmt)</span>
+<span class="k">metadata</span>:
+  <span class="a">harness</span>:            <span class="c"># framework-specific extension — spec-allowed</span>
+    <span class="k">kind</span>: <span class="s">computational</span>
+    <span class="k">risk</span>: <span class="s">read-only</span>
+<span class="c">---</span>
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap);">
+            Our skills load into Claude Code / Cursor / Codex unmodified.
+            <b style="color: var(--accent-cyan);">harness skills export</b> round-trips through the validator.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">07 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 08 — #[skill] macro
+     =========================================================== -->
+<section class="slide" data-idx="8">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>#[skill]</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ rust-native</span>
+        <h2 class="reveal r1">Compile-time-safe <em>#[skill]</em>.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+<span class="c">/// Run cargo fmt. Use after edits to .rs files.</span>
+<span class="a">#[harness::skill(</span>
+    <span class="k">name</span> = <span class="s">"format-rust"</span>,
+    <span class="k">license</span> = <span class="s">"Apache-2.0"</span>,
+    <span class="k">allowed_tools</span> = <span class="s">"Bash(cargo:fmt)"</span>,
+    <span class="a">harness</span>(<span class="k">kind</span> = <span class="s">"computational"</span>, <span class="k">risk</span> = <span class="s">"read-only"</span>),
+<span class="a">)]</span>
+<span class="k">async fn</span> <span class="t">format_rust</span>(ctx: &mut <span class="t">Context</span>, w: &mut <span class="t">World</span>) <span class="k">-></span> <span class="t">Result</span><(), <span class="t">SkillError</span>> {
+    w.runner.exec(<span class="s">"cargo fmt --all"</span>).<span class="a">await</span>?;
+    <span class="t">Ok</span>(())
+}
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            Auto-registers via <code class="mono" style="color: var(--accent-cyan);">inventory</code>.
+            Compiler enforces name regex, description ≤ 1024 chars, dir match.
+            <b style="color: var(--accent-cyan);">harness skills export</b> writes a spec-compliant <code class="mono">SKILL.md</code>.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">08 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 09 — AgentLoop in 12 lines
+     =========================================================== -->
+<section class="slide" data-idx="9">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>agent loop</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ smallest useful agent</span>
+        <h2 class="reveal r1">An entire agent in <em>12 lines</em>.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+<span class="k">use</span> harness::prelude::*;
+<span class="k">use</span> harness_models::{<span class="t">OpenAiCompat</span>, providers};
+<span class="k">use</span> harness_tools_fs::{<span class="t">ReadFile</span>, <span class="t">ListDir</span>, <span class="t">WriteFile</span>};
+
+<span class="a">#[tokio::main]</span>
+<span class="k">async fn</span> <span class="t">main</span>() <span class="k">-></span> anyhow::<span class="t">Result</span><()> {
+    <span class="k">let</span> model = <span class="t">OpenAiCompat</span>::<span class="t">with_key</span>(providers::<span class="t">DEEPSEEK</span>, <span class="s">"deepseek-v4-pro"</span>, std::env::var(<span class="s">"DEEPSEEK_API_KEY"</span>)?);
+    <span class="k">let mut</span> world = harness_context::default_world(<span class="s">"."</span>);
+    <span class="t">AgentLoop</span>::<span class="t">new</span>(model)
+        .with_tool(<span class="t">Arc</span>::<span class="t">new</span>(<span class="t">ReadFile</span>)).with_tool(<span class="t">Arc</span>::<span class="t">new</span>(<span class="t">ListDir</span>)).with_tool(<span class="t">Arc</span>::<span class="t">new</span>(<span class="t">WriteFile</span>))
+        .run(<span class="t">Task</span>::from(<span class="s">"summarise this repo into NOTES.md"</span>), &mut world)
+        .<span class="a">await</span>?;
+    <span class="t">Ok</span>(())
+}
+        </pre>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">09 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 10 — Blueprint (deterministic + agent)
+     =========================================================== -->
+<section class="slide" data-idx="10">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>blueprint</div></div>
+
+    <div class="slide-content">
+        <span class="kicker mag reveal r0">▸ stripe minions pattern</span>
+        <h2 class="reveal r1">Hybrid state machines:<br><em>deterministic</em> + <em class="mag">agent</em> nodes.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+<span class="t">Blueprint</span>::<span class="t">new</span>(<span class="t">WorktreeSandbox</span>::<span class="t">new</span>(repo))
+    .add(<span class="s">"bump_deps"</span>,   <span class="t">Node</span>::agent(/* read Cargo.toml, propose upgrades */))
+    .add(<span class="s">"fmt"</span>,         <span class="t">Node</span>::deterministic(|w| w.runner.exec(<span class="s">"cargo fmt --all"</span>)))
+    .add(<span class="s">"clippy_fix"</span>,  <span class="t">Node</span>::deterministic(|w| w.runner.exec(<span class="s">"cargo clippy --fix"</span>)))
+    .add(<span class="s">"test"</span>,        <span class="t">Node</span>::deterministic(|w| w.runner.exec(<span class="s">"cargo nextest run"</span>)))
+    .add(<span class="s">"changelog"</span>,   <span class="t">Node</span>::agent(/* write changelog from diff */))
+    .edges([(<span class="s">"bump_deps"</span>, <span class="s">"fmt"</span>), (<span class="s">"fmt"</span>, <span class="s">"clippy_fix"</span>), (<span class="s">"clippy_fix"</span>, <span class="s">"test"</span>)])
+    .branch_on_failure(<span class="s">"test"</span>, <span class="n">retry_cap</span>=<span class="n">2</span>)
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 58ch;">
+            The LLM never formats code or runs git ops.
+            <b style="color: var(--accent-cyan);">Token spend drops; reliability climbs.</b>
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">10 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 11 — Compactor 5 stages
+     =========================================================== -->
+<section class="slide" data-idx="11">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>compactor</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ context is finite</span>
+        <h2 class="reveal r1">Five-stage <em>progressive compaction</em>.</h2>
+
+        <div class="card-grid reveal r2" style="margin-top: var(--content-gap); grid-template-columns: repeat(5, 1fr);">
+            <div class="tile"><div class="t-h">> 60%</div><div class="t-t">BudgetReduce</div><div class="t-b">Drop redundant tool results.</div></div>
+            <div class="tile"><div class="t-h">> 70%</div><div class="t-t">Snip</div><div class="t-b">Hash old file reads.</div></div>
+            <div class="tile"><div class="t-h">> 80%</div><div class="t-t">Microcompact</div><div class="t-b">Cheap-model summary.</div></div>
+            <div class="tile"><div class="t-h">> 90%</div><div class="t-t">Collapse</div><div class="t-b">Merge to file list + excerpts.</div></div>
+            <div class="tile"><div class="t-h">> 95%</div><div class="t-t">AutoCompact</div><div class="t-b">Main model rewrite.</div></div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            Stages are <b>cumulative</b>. <code style="color: var(--accent-cyan);">PreCompact</code> /
+            <code style="color: var(--accent-cyan);">PostCompact</code> hooks let you protect "identity" docs.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">11 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 12 — HookBus 27 events
+     =========================================================== -->
+<section class="slide" data-idx="12">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>hookbus</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ everything is observable</span>
+        <h2 class="reveal r1">Twenty-seven lifecycle events.</h2>
+
+        <div class="event-cloud reveal r2" style="margin-top: var(--content-gap);">
+            <span class="ev hot">SessionStart</span>
+            <span class="ev">SessionEnd</span>
+            <span class="ev hot">PreToolUse</span>
+            <span class="ev hot">PostToolUse</span>
+            <span class="ev">PermissionRequest</span>
+            <span class="ev hot">PreModel</span>
+            <span class="ev hot">PostModel</span>
+            <span class="ev">PreGuide</span>
+            <span class="ev">PostGuide</span>
+            <span class="ev hot">PreSensor</span>
+            <span class="ev hot">PostSensor</span>
+            <span class="ev">PreCompact</span>
+            <span class="ev">PostCompact</span>
+            <span class="ev">SubagentStart</span>
+            <span class="ev">SubagentReport</span>
+            <span class="ev">FileChanged</span>
+            <span class="ev">CwdChanged</span>
+            <span class="ev">BlueprintNodeEnter</span>
+            <span class="ev">BlueprintNodeExit</span>
+            <span class="ev">TaskCompleted</span>
+            <span class="ev">BudgetWarning</span>
+            <span class="ev">Notification</span>
+            <span class="ev">Error</span>
+            <span class="ev">Stop</span>
+            <span class="ev">Heartbeat</span>
+            <span class="ev">Custom</span>
+            <span class="ev">…</span>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            Hooks can <b style="color: var(--accent-magenta);">Deny</b>, <b style="color: var(--accent-cyan);">Allow</b>,
+            <b>Inject</b> context, or <b>Mutate</b> events. Deny on <code style="color: var(--accent-cyan);">PreToolUse</code> = safety gate.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">12 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 13 — Sandbox tiers
+     =========================================================== -->
+<section class="slide" data-idx="13">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>sandbox</div></div>
+
+    <div class="slide-content">
+        <span class="kicker mag reveal r0">▸ isolation over constraints</span>
+        <h2 class="reveal r1">Three isolation tiers,<br>one <em>Sandbox</em> trait.</h2>
+
+        <div class="card-grid reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-cyan);">▸ Tier 1</div>
+                <div class="t-t">Worktree</div>
+                <div class="t-b">Real <code class="mono">git worktree add/remove</code>. Drop-cleans.</div>
+            </div>
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-magenta);">▸ Tier 2</div>
+                <div class="t-t">Container</div>
+                <div class="t-b"><code class="mono">docker run -d --rm</code> · bind-mount · <code class="mono">--network none</code>.</div>
+            </div>
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-amber);">▸ Tier 3</div>
+                <div class="t-t">microVM</div>
+                <div class="t-b">Firecracker-shaped API (Stripe Devbox vibe).</div>
+            </div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 58ch;">
+            <b style="color: var(--accent-cyan);">Permission ≡ isolation</b>, not runtime prompts.
+            Stripe Minions philosophy: the sandbox <em>is</em> the policy.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">13 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 14 — Provider abstraction
+     =========================================================== -->
+<section class="slide" data-idx="14">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>providers</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ one shape, many backends</span>
+        <h2 class="reveal r1">Four fields. <em>That's it.</em></h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+<span class="k">pub struct</span> <span class="t">LlmConfig</span> {
+    <span class="k">pub</span> name:     <span class="t">String</span>,    <span class="c">// logical handle, for logs/metrics</span>
+    <span class="k">pub</span> base_url: <span class="t">String</span>,    <span class="c">// any OpenAI-compatible endpoint</span>
+    <span class="k">pub</span> api_key:  <span class="t">String</span>,
+    <span class="k">pub</span> model:    <span class="t">String</span>,    <span class="c">// wire-protocol model id</span>
+}
+
+<span class="c">// You pass the model name. Endpoint URLs are constants.</span>
+<span class="t">OpenAiCompat</span>::<span class="t">with_key</span>(<span class="t">DEEPSEEK</span>,  <span class="s">"deepseek-v4-pro"</span>,  key)
+<span class="t">OpenAiCompat</span>::<span class="t">with_key</span>(<span class="t">OPENAI</span>,    <span class="s">"gpt-5"</span>,             key)
+<span class="t">OpenAiCompat</span>::<span class="t">with_key</span>(<span class="t">GROQ</span>,      <span class="s">"llama-3.3-70b"</span>,     key)
+<span class="t">OpenAiCompat</span>::<span class="t">with_key</span>(<span class="t">OLLAMA</span>,    <span class="s">"qwen2.5-coder:7b"</span>, <span class="s">""</span>)
+<span class="t">AnthropicNative</span>::<span class="t">with_key</span>(<span class="s">"claude-opus-4-7"</span>, key)   <span class="c">// URL baked in</span>
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            No tier helpers, no version-in-function-name. Anthropic ships a new
+            model? Change one string literal in your call site.
+            <code style="color: var(--accent-cyan);">MockModel</code> implements the same trait for tests.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">14 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 15 — Wire protocol gotcha
+     =========================================================== -->
+<section class="slide" data-idx="15">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>wire reality</div></div>
+
+    <div class="slide-content">
+        <span class="kicker mag reveal r0">▸ live demo caught a bug mocks couldn't</span>
+        <h2 class="reveal r1">Real providers have<br><em class="mag">teeth</em>.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap); border-left-color: var(--accent-magenta);">
+<span class="c">HTTP 400 — DeepSeek (round 2 of an agent loop):</span>
+
+<span class="s">"The reasoning_content in the thinking mode must be passed back to the API."</span>
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 64ch; font-size: clamp(0.85rem, 1.4vw, 1.05rem);">
+            50 unit tests <em style="color: var(--accent-cyan); font-style:normal;">passed</em>; MockModel never sees this. Fix: <code style="color: var(--accent-cyan);">Block::Reasoning(String)</code> stores the trace; OpenAiCompat / Anthropic adapters echo it back as <code style="color: var(--accent-cyan);">reasoning_content</code> / <code style="color: var(--accent-cyan);">thinking</code> blocks.
+        </p>
+        <p class="reveal r4" style="margin-top: var(--content-gap); color: var(--accent-cyan); font-family: var(--font-mono); font-size: clamp(0.75rem, 1.2vw, 0.95rem);">
+            ▸ verifiability = mock <em style="font-style:normal;">+</em> live, both at every commit.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">15 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 16 — Session record + replay
+     =========================================================== -->
+<section class="slide" data-idx="16">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>record · replay</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ deterministic offline replay</span>
+        <h2 class="reveal r1">Every run produces a<br><em>JSONL session log</em>.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+$ crate-keeper /path/to/repo --record session.jsonl
+<span class="c"># …agent runs, every lifecycle event written…</span>
+
+$ harness trace session.jsonl
+iter 0
+→ model (history=1, tools=4)
+← model: 1 tool_call(s) [790/56 tok]
+  → tool list_dir args={<span class="s">"path"</span>:<span class="s">""</span>}
+  ← tool ok=true · ⚑ sensor cargo-check: 0 signal(s)
+<span class="c">...</span>
+── summary ──
+  events: 32 · model: 5 · tools: 5 · tokens 5741/589 · 8.7s
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            <code style="color: var(--accent-cyan);">replay_as_mock(events)</code> rebuilds a deterministic <code style="color: var(--accent-cyan);">MockModel</code> — the run reproduces bit-for-bit, offline, forever.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">16 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 17 — Live demo numbers
+     =========================================================== -->
+<section class="slide" data-idx="17">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>live numbers</div></div>
+
+    <div class="slide-content">
+        <span class="kicker amber reveal r0">▸ measured, not promised</span>
+        <h2 class="reveal r1">DeepSeek + crate-keeper<br>against this repo, just now.</h2>
+
+        <div class="stats reveal r2" style="margin-top: var(--content-gap);">
+            <div><div class="stat-num">6</div><div class="stat-lbl">iterations</div></div>
+            <div><div class="stat-num">5</div><div class="stat-lbl">tool calls</div></div>
+            <div><div class="stat-num">5,741</div><div class="stat-lbl">tokens in</div></div>
+            <div><div class="stat-num">589</div><div class="stat-lbl">tokens out</div></div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            8.7 s wallclock. Agent <code class="mono">list_dir</code> → <code class="mono">read Cargo.toml</code> →
+            <code class="mono">read src/main.rs</code> → wrote a correct <code class="mono">HARNESS_NOTES.md</code>.
+            Identified "this is a smoke-test target, not a real app" without being told.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">17 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 18 — MCP server
+     =========================================================== -->
+<section class="slide" data-idx="18">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>interop · mcp</div></div>
+
+    <div class="slide-content">
+        <span class="kicker mag reveal r0">▸ play well with others</span>
+        <h2 class="reveal r1">Expose tools to<br><em class="mag">any</em> MCP agent.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+$ harness mcp serve --workspace ~/code/some-repo
+
+<span class="c"># In Claude Code's settings.json:</span>
+{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"harness"</span>: {
+      <span class="s">"command"</span>: <span class="s">"harness"</span>,
+      <span class="s">"args"</span>: [<span class="s">"mcp"</span>, <span class="s">"serve"</span>, <span class="s">"--workspace"</span>, <span class="s">"~/code/some-repo"</span>]
+    }
+  }
+}
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            Five tools immediately available to Claude Code / Cursor / Codex:
+            <code style="color: var(--accent-cyan);">read_file · write_file · edit_file · list_dir · shell_read</code>
+            (the last with a curated safe-args allowlist).
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">18 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 19 — Test pyramid
+     =========================================================== -->
+<section class="slide" data-idx="19">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>verifiability</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ test what's hard, not what's easy</span>
+        <h2 class="reveal r1">Two layers, <em>both required</em>.</h2>
+
+        <div class="two-col reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-cyan);">▸ 92 tests · MockModel</div>
+                <div class="t-t">Internal wiring</div>
+                <div class="t-b">
+                    AgentLoop full path · 27 hook events · 5 compactor stages ·
+                    auto-fix patches · tool dispatch · spec validators · session record/replay.<br>
+                    <b style="color: var(--accent-cyan);">Zero network. Deterministic.</b>
+                </div>
+            </div>
+            <div class="tile">
+                <div class="t-h" style="color: var(--accent-magenta);">▸ 1 live DeepSeek smoke</div>
+                <div class="t-t">Wire protocol</div>
+                <div class="t-b">
+                    Provider-specific reality: <code class="mono">reasoning_content</code>,
+                    <code class="mono">tool_calls[].index</code>, content-block translation, prompt cache hits.<br>
+                    <b style="color: var(--accent-magenta);">Catches what mocks can't.</b>
+                </div>
+            </div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 64ch; text-align: center;">
+            The framework's only fully-passed-but-wrong moment shipped because layer 1 alone said OK.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">19 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 20 — 18 crates workspace map
+     =========================================================== -->
+<section class="slide" data-idx="20">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>workspace</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ small crates, sharp seams</span>
+        <h2 class="reveal r1">Eighteen crates, one responsibility each.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap); font-size: clamp(0.6rem, 1vw, 0.82rem);">
+<span class="c">harness/</span>                  <span class="c"># facade re-export</span>
+<span class="c">├── harness-core/</span>        <span class="c"># traits + types (zero heavy deps)</span>
+<span class="c">├── harness-macros/</span>      <span class="c"># #[skill] #[tool] #[guide] #[sensor] #[hook]</span>
+<span class="c">├── harness-context/</span>     <span class="c"># Context, default World runtime</span>
+<span class="c">├── harness-compactor/</span>   <span class="c"># 5-stage Default + ModelBacked</span>
+<span class="c">├── harness-hooks/</span>       <span class="c"># HookBus + OTel feature</span>
+<span class="c">├── harness-loop/</span>        <span class="c"># AgentLoop + Subagent + SessionRecorder</span>
+<span class="c">├── harness-blueprint/</span>   <span class="c"># state machine executor</span>
+<span class="c">├── harness-sandbox/</span>     <span class="c"># Worktree / Container / VM</span>
+<span class="c">├── harness-skills/</span>      <span class="c"># spec validator + lint + export</span>
+<span class="c">├── harness-tools-fs/</span>    <span class="c"># read/write/edit/list (jail-safe)</span>
+<span class="c">├── harness-tools-shell/</span> <span class="c"># shell_read (safe-args allowlist)</span>
+<span class="c">├── harness-sensors-rust/</span><span class="c"># cargo check / clippy</span>
+<span class="c">├── harness-sensors-common/</span><span class="c"># git/lsp scaffolding</span>
+<span class="c">├── harness-models/</span>      <span class="c"># OpenAiCompat + AnthropicNative + Mock</span>
+<span class="c">├── harness-templates/</span>   <span class="c"># axum_crud / crate_keeper</span>
+<span class="c">├── harness-mcp/</span>         <span class="c"># JSON-RPC stdio server</span>
+<span class="c">└── harness-cli/</span>         <span class="c"># `harness new/skills/trace/mcp/...`</span>
+        </pre>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">20 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 21 — Getting started
+     =========================================================== -->
+<section class="slide" data-idx="21">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>getting started</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ zero hand-editing</span>
+        <h2 class="reveal r1">From clone to live agent in <em>90 seconds</em>.</h2>
+
+        <pre class="code reveal r2" style="margin-top: var(--content-gap);">
+$ git clone github.com/liliang-cn/harness
+$ cargo install --path crates/harness-cli
+
+$ harness new my-agent --local        <span class="c"># auto-wires [patch.crates-io]</span>
+$ cd my-agent
+$ export DEEPSEEK_API_KEY=sk-…
+$ cargo run
+
+<span class="c">→ Done { text: Some("..."), iters: 2 }</span>
+        </pre>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); max-width: 60ch;">
+            Generated <code class="mono">main.rs</code> ships with one <code class="mono">#[skill]</code>, one <code class="mono">#[tool]</code>,
+            and a working <code class="mono">AgentLoop</code>. Swap providers by changing one line.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">21 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 22 — The numbers
+     =========================================================== -->
+<section class="slide" data-idx="22">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>by the numbers</div></div>
+
+    <div class="slide-content" style="justify-content: center;">
+        <span class="kicker amber reveal r0">▸ today, May 2026</span>
+        <h2 class="reveal r1" style="margin-bottom: var(--content-gap);">Built in two sessions. Live since this morning.</h2>
+
+        <div class="bignum-row reveal r2" style="margin-top: clamp(1rem, 3vh, 2.5rem);">
+            <div class="bignum"><b>18</b><span>crates</span></div>
+            <div class="bignum"><b>92</b><span>tests · 0 failed</span></div>
+            <div class="bignum"><b>10.4k</b><span>lines of rust</span></div>
+            <div class="bignum"><b>15</b><span>focused commits</span></div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: clamp(1.5rem, 4vh, 3rem); text-align: center; max-width: 56ch; margin-left: auto; margin-right: auto;">
+            Every DESIGN.md checkbox closed. <code class="mono" style="color: var(--accent-cyan);">cargo check</code> clean.
+            Live DeepSeek round-trip verified on every commit.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">22 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 23 — Thanks / references
+     =========================================================== -->
+<section class="slide" data-idx="23">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+    <div class="rail-top"><div class="brand">harness</div><div>standing on shoulders</div></div>
+
+    <div class="slide-content">
+        <span class="kicker reveal r0">▸ this work owes</span>
+        <h2 class="reveal r1">References &amp; <em class="mag">prior art</em>.</h2>
+
+        <div class="card-grid reveal r2" style="margin-top: var(--content-gap);">
+            <div class="tile">
+                <div class="t-h">harness engineering</div>
+                <div class="t-t">Lopopolo · Böckeler</div>
+                <div class="t-b">openai.com/index/harness-engineering · martinfowler.com/articles/harness-engineering.html</div>
+            </div>
+            <div class="tile">
+                <div class="t-h">blueprints · shift-left</div>
+                <div class="t-t">Stripe Minions</div>
+                <div class="t-b">stripe.dev/blog/minions · deterministic + agent state machine</div>
+            </div>
+            <div class="tile">
+                <div class="t-h">skills · methodology</div>
+                <div class="t-t">obra/superpowers · agentskills.io</div>
+                <div class="t-b">brainstorm → plan → TDD → subagent · SKILL.md public spec</div>
+            </div>
+        </div>
+
+        <p class="muted reveal r3" style="margin-top: var(--content-gap); text-align: center;">
+            Reverse-engineered Claude Code v2.1.88 for the 27 events + 5 compaction stages.
+        </p>
+    </div>
+
+    <div class="rail-bot"><div></div><div class="page">23 / 24</div></div>
+</section>
+
+<!-- ===========================================================
+     SLIDE 24 — Q&A / closing
+     =========================================================== -->
+<section class="slide title-slide" data-idx="24">
+    <div class="glow cyan"></div>
+    <div class="glow mag"></div>
+
+    <div class="rail-top">
+        <div class="brand reveal r0">harness</div>
+        <div class="reveal r0">end · q&amp;a</div>
+    </div>
+
+    <div class="slide-content">
+        <div>
+            <span class="kicker mag reveal r1">▸ try it</span>
+            <h1 class="reveal r2" style="font-size: clamp(3rem, 9vw, 7rem);">
+                cargo&nbsp;install&nbsp;harness<span class="dot">.</span>
+            </h1>
+        </div>
+        <div>
+            <p class="sub reveal r3">
+                <b>github.com/liliang-cn/harness</b><br>
+                <span class="muted">questions · contributions · war stories welcome</span>
+            </p>
+            <p class="mono reveal r4" style="margin-top: clamp(0.8rem, 2vh, 1.2rem); color: var(--accent-cyan); font-size: clamp(0.75rem, 1.2vw, 0.95rem); letter-spacing: 0.15em;">
+                Agent = Model + <span style="color: var(--accent-magenta);">harness</span>.
+            </p>
+        </div>
+    </div>
+
+    <div class="rail-bot">
+        <div class="reveal r5">made with Rust · DeepSeek · Claude Code</div>
+        <div class="page reveal r5">24 / 24</div>
+    </div>
+</section>
+
+<!-- ===========================================================
+     JAVASCRIPT — controller + inline editor
+     =========================================================== -->
+<script>
+(function(){
+'use strict';
+
+/* =================================================================
+   1. SlidePresentation: scroll observation, dots, progress, keys
+   ================================================================= */
+class SlidePresentation {
+    constructor() {
+        this.slides = Array.from(document.querySelectorAll('.slide'));
+        this.dotsRoot = document.getElementById('navDots');
+        this.progressBar = document.getElementById('progressBar');
+        this.current = 0;
+        this.buildDots();
+        this.setupObserver();
+        this.setupKeyboard();
+        this.setupWheel();
+        this.setupScrollProgress();
+        // First slide visible immediately
+        this.slides[0]?.classList.add('visible');
+    }
+    buildDots() {
+        // CRITICAL: clear before building — outerHTML capture during save
+        // could otherwise stack duplicates on re-open.
+        this.dotsRoot.innerHTML = '';
+        this.slides.forEach((_, i) => {
+            const b = document.createElement('button');
+            b.setAttribute('aria-label', 'Go to slide ' + (i+1));
+            if (i === 0) b.classList.add('active');
+            b.addEventListener('click', () => this.goto(i));
+            this.dotsRoot.appendChild(b);
+        });
+        this.dots = Array.from(this.dotsRoot.children);
+    }
+    setupObserver() {
+        const obs = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const idx = this.slides.indexOf(entry.target);
+                if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+                    entry.target.classList.add('visible');
+                    this.setActive(idx);
+                }
+            });
+        }, { threshold: [0.5, 0.75] });
+        this.slides.forEach(s => obs.observe(s));
+    }
+    setActive(i) {
+        if (this.current === i) return;
+        this.dots[this.current]?.classList.remove('active');
+        this.current = i;
+        this.dots[i]?.classList.add('active');
+    }
+    goto(i) {
+        this.slides[i]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    setupKeyboard() {
+        document.addEventListener('keydown', (e) => {
+            // Skip when editing text
+            if (e.target.getAttribute && e.target.getAttribute('contenteditable') === 'true') return;
+            if (e.metaKey || e.ctrlKey) return;
+            switch (e.key) {
+                case 'ArrowRight': case 'ArrowDown': case ' ': case 'PageDown':
+                    e.preventDefault(); this.goto(Math.min(this.current+1, this.slides.length-1)); break;
+                case 'ArrowLeft': case 'ArrowUp': case 'PageUp':
+                    e.preventDefault(); this.goto(Math.max(this.current-1, 0)); break;
+                case 'Home': e.preventDefault(); this.goto(0); break;
+                case 'End':  e.preventDefault(); this.goto(this.slides.length-1); break;
+            }
+        });
+    }
+    setupWheel() {
+        let cooldown = false;
+        window.addEventListener('wheel', (e) => {
+            if (cooldown) return;
+            if (Math.abs(e.deltaY) < 30) return;
+            cooldown = true;
+            setTimeout(() => cooldown = false, 600);
+            if (e.deltaY > 0) this.goto(Math.min(this.current+1, this.slides.length-1));
+            else              this.goto(Math.max(this.current-1, 0));
+        }, { passive: true });
+    }
+    setupScrollProgress() {
+        const update = () => {
+            const sh = document.documentElement.scrollHeight - window.innerHeight;
+            const pct = sh > 0 ? (window.scrollY / sh) * 100 : 0;
+            this.progressBar.style.width = pct + '%';
+        };
+        window.addEventListener('scroll', update, { passive: true });
+        update();
+    }
+}
+
+/* =================================================================
+   2. InlineEditor: optional contenteditable + localStorage + export
+   (Skill says: only generate when user opted in. They did.)
+   ================================================================= */
+class InlineEditor {
+    constructor() {
+        this.isActive = false;
+        this.STORAGE_KEY = 'harness-talk-edits-v1';
+        this.toggleBtn = document.getElementById('editToggle');
+        this.hotzone = document.getElementById('editHotzone');
+        this.banner = document.getElementById('editBanner');
+        this.editableSelector = 'h1, h2, h3, p, li, .stat-num, .stat-lbl, .t-t, .t-b, .t-h, .kicker, .sub, .lede, .ev, .tag, .bignum b, .bignum span';
+        this.editables = Array.from(document.querySelectorAll(this.editableSelector));
+        this.editables.forEach((el, i) => el.dataset.eid = 'e' + i);
+        this.restoreFromStorage();
+        this.setupToggle();
+        this.setupSaveShortcut();
+    }
+    setupToggle() {
+        let hideTimeout = null;
+        // 1. Click handler on the toggle button
+        this.toggleBtn.addEventListener('click', () => this.toggle());
+
+        // 2. Hotzone hover with 400ms grace period
+        this.hotzone.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimeout);
+            this.toggleBtn.classList.add('show');
+        });
+        this.hotzone.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!this.isActive) this.toggleBtn.classList.remove('show');
+            }, 400);
+        });
+        this.toggleBtn.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
+        this.toggleBtn.addEventListener('mouseleave', () => {
+            hideTimeout = setTimeout(() => {
+                if (!this.isActive) this.toggleBtn.classList.remove('show');
+            }, 400);
+        });
+
+        // 3. Hotzone direct click
+        this.hotzone.addEventListener('click', () => this.toggle());
+
+        // 4. Keyboard shortcut (E)
+        document.addEventListener('keydown', (e) => {
+            if ((e.key === 'e' || e.key === 'E')
+                && !(e.target.getAttribute && e.target.getAttribute('contenteditable') === 'true')
+                && !e.metaKey && !e.ctrlKey) {
+                this.toggle();
+            }
+        });
+    }
+    toggle() {
+        this.isActive = !this.isActive;
+        document.body.classList.toggle('edit-active', this.isActive);
+        this.toggleBtn.classList.toggle('active', this.isActive);
+        this.banner.classList.toggle('active', this.isActive);
+        this.editables.forEach(el => {
+            if (this.isActive) el.setAttribute('contenteditable', 'true');
+            else el.removeAttribute('contenteditable');
+        });
+        if (this.isActive) {
+            this.editables.forEach(el => {
+                el.addEventListener('input', this.onEdit);
+            });
+        } else {
+            this.editables.forEach(el => {
+                el.removeEventListener('input', this.onEdit);
+            });
+            this.saveToStorage();
+        }
+    }
+    onEdit = (e) => {
+        // Debounced storage save on edit
+        clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() => this.saveToStorage(), 600);
+    }
+    saveToStorage() {
+        const data = {};
+        this.editables.forEach(el => {
+            data[el.dataset.eid] = el.innerHTML;
+        });
+        try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
+    }
+    restoreFromStorage() {
+        try {
+            const raw = localStorage.getItem(this.STORAGE_KEY);
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            this.editables.forEach(el => {
+                if (data[el.dataset.eid] != null) el.innerHTML = data[el.dataset.eid];
+            });
+        } catch (_) {}
+    }
+    setupSaveShortcut() {
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+                e.preventDefault();
+                this.exportFile();
+            }
+        });
+    }
+    exportFile() {
+        // CRITICAL: strip edit state so the saved file opens cleanly
+        const editableEls = Array.from(document.querySelectorAll('[contenteditable]'));
+        editableEls.forEach(el => el.removeAttribute('contenteditable'));
+        document.body.classList.remove('edit-active');
+        this.toggleBtn?.classList.remove('active', 'show');
+        this.banner?.classList.remove('active', 'show');
+
+        const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+        // Restore edit state so the user can keep editing
+        if (this.isActive) {
+            document.body.classList.add('edit-active');
+            editableEls.forEach(el => el.setAttribute('contenteditable', 'true'));
+            this.toggleBtn?.classList.add('active');
+            this.banner?.classList.add('active');
+        }
+
+        const blob = new Blob([html], { type: 'text/html' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'harness-talk.html';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+}
+
+/* =================================================================
+   3. Boot
+   ================================================================= */
+new SlidePresentation();
+new InlineEditor();
+
+})();
+</script>
+</body>
+</html>

@@ -1,13 +1,16 @@
 [package]
-name = "harness-tools-shell"
+name = "harness-rs-tools-shell"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Risk-classified shell execution tools"
+description = "Allowlisted read-only shell tool for harness-rs. Per-program safe-args predicate."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

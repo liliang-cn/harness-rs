@@ -1,13 +1,16 @@
 [package]
-name = "harness"
+name = "harness-rs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Harness agent framework — facade re-export"
+description = "Rust agent framework based on harness-engineering principles (Lopopolo, Böckeler). Facade re-exporting the public surface of the harness-rs-* crates."
 
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
 [dependencies]
 harness-core    = { workspace = true }
 harness-skills  = { workspace = true }

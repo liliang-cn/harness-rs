@@ -91,12 +91,9 @@ async fn main() -> anyhow::Result<()> {
         tools:    Vec::new(),
     };
 
-    // 4. Call DeepSeek — every adapter consumes the uniform 4-field LlmConfig
-    let cfg = match tier {
-        "pro" => providers::deepseek_pro(api_key),
-        _     => providers::deepseek_flash(api_key),
-    };
-    let model = OpenAiCompat::new(cfg);
+    // 4. Call DeepSeek — pass model name directly, no factory layer
+    let model_id = if tier == "pro" { "deepseek-v4-pro" } else { "deepseek-v4-flash" };
+    let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
     let info = model.info();
     println!(
         "→ model: {} ({} via {}, window {} tokens)",
