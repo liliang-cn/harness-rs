@@ -221,7 +221,9 @@ impl<M: Model> AgentLoop<M> {
 static PATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Apply auto-fix patches; return short descriptions of those that succeeded.
-pub(crate) async fn apply_patches(
+///
+/// Made `pub` (was `pub(crate)`) so integration tests can call it directly.
+pub async fn apply_patches(
     patches: &[harness_core::FixPatch],
     world: &mut World,
 ) -> Vec<String> {
@@ -252,6 +254,8 @@ pub(crate) async fn apply_patches(
                     applied.push(format!("ran `{program} {}`", args.join(" ")));
                 }
             }
+            // FixPatch is `#[non_exhaustive]`; unknown variants are skipped.
+            _ => tracing::warn!("apply_patches: unknown FixPatch variant — skipped"),
         }
     }
     applied

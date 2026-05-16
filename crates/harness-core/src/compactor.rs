@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// The 5 progressive compaction stages (DESIGN.md §9 — borrowed from Claude Code).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CompactionStage {
     /// > 60% — trim redundant tool results, keep recent full turns.
     BudgetReduce,

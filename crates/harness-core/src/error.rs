@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum HarnessError {
     #[error("model error: {0}")]
     Model(#[from] ModelError),

@@ -48,6 +48,7 @@ pub struct Usage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum StopReason {
     EndTurn,
     ToolUse,
@@ -58,6 +59,7 @@ pub enum StopReason {
 
 /// Streaming delta — incremental output from the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ModelDelta {
     Text(String),
     ToolCallStart { id: String, name: String },

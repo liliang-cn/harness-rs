@@ -56,6 +56,8 @@ impl Compactor for DefaultCompactor {
             CompactionStage::Microcompact    => microcompact_old(ctx),
             CompactionStage::ContextCollapse => context_collapse(ctx),
             CompactionStage::AutoCompact     => auto_compact(ctx),
+            // Forward-compat: ignore stages this version doesn't recognise.
+            _ => tracing::warn!(?stage, "unknown compaction stage — ignoring"),
         }
         Ok(())
     }
@@ -70,6 +72,7 @@ fn block_chars(b: &Block) -> usize {
         Block::ToolResult { call_id, content } => call_id.len() + content.to_string().len(),
         Block::Feedback(signals) => signals.iter().map(|s| s.message.len() + s.agent_hint.as_ref().map_or(0, String::len)).sum(),
         Block::Reasoning(s) => s.len(),
+        _ => 0,
     }
 }
 
@@ -136,6 +139,7 @@ fn microcompact_old(ctx: &mut Context) {
             TurnRole::Assistant => "assistant",
             TurnRole::Tool      => "tool",
             TurnRole::System    => "system",
+            _                   => "unknown",
         };
         summary.push_str(&format!("- {role}: "));
         for b in &turn.blocks {
@@ -212,6 +216,7 @@ fn auto_compact(ctx: &mut Context) {
                 Block::Skill { .. }       => "skill",
                 Block::Feedback(_)        => "feedback",
                 Block::Reasoning(_)       => "reasoning",
+                _                         => "unknown",
             };
             *counts.entry(key).or_insert(0u32) += 1;
         }

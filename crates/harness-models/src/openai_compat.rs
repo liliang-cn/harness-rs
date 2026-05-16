@@ -288,6 +288,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         TurnRole::Assistant => "assistant",
         TurnRole::Tool      => "tool",
         TurnRole::System    => "system",
+        _                   => "user",
     };
 
     // Tool results become individual `tool` messages keyed by call_id.
@@ -382,6 +383,7 @@ fn push_block_text(buf: &mut String, b: &Block) {
         | Block::Reasoning(_) => {
             // handled in translate_turn (Reasoning becomes `reasoning_content`)
         }
+        _ => {} // forward-compat: skip unknown block variants
     }
 }
 

@@ -25,32 +25,77 @@ struct ShellArgs {
 
 pub struct ShellRead;
 
-/// Allowlist of program names that are safe to invoke through `ShellRead`.
-/// `args` are not inspected — callers should still write tight schemas if they
-/// pass `ShellRead` to an agent.
-const READ_ALLOWLIST: &[&str] = &[
-    "cargo",
-    "git",
-    "ls",
-    "pwd",
-    "rustc",
-    "rustup",
-    "rg",
-    "fd",
-    "wc",
-    "find",
-    "head",
-    "tail",
-    "cat",
-    "grep",
+/// Per-program safe-argument matchers. `ShellRead` will refuse any program
+/// not listed here AND any args that fail the matcher.
+///
+/// Returns `Ok(())` if `args` are safe for `program`, else an error message.
+fn check_safe_args(program: &str, args: &[String]) -> Result<(), String> {
+    match program {
+        "cargo" => match args.first().map(String::as_str) {
+            Some("check" | "test" | "build" | "fmt" | "clippy" | "doc" | "tree"
+                 | "metadata" | "search" | "audit" | "deny" | "outdated"
+                 | "bench" | "nextest" | "vendor") => Ok(()),
+            Some("install" | "uninstall" | "publish" | "yank" | "owner"
+                 | "login" | "logout" | "package") => {
+                Err(format!("`cargo {}` is not read-only", args[0]))
+            }
+            Some(s) => Err(format!(
+                "`cargo {s}` not in shell_read subcommand allowlist (use shell_exec for writes)"
+            )),
+            None => Err("cargo needs a subcommand".into()),
+        },
+        "git" => match args.first().map(String::as_str) {
+            Some("status" | "log" | "show" | "diff" | "blame" | "rev-parse"
+                 | "ls-files" | "ls-tree" | "describe" | "branch"
+                 | "remote" | "config" | "shortlog" | "tag") => {
+                // Reject `git config <key> <value>` (write) — accept `git config <key>` (read).
+                if args[0] == "config" && args.len() >= 3 && !args[1].starts_with('-') {
+                    Err("`git config <k> <v>` is a write — use shell_exec".into())
+                } else {
+                    Ok(())
+                }
+            }
+            Some(s) => Err(format!("`git {s}` is not in the read-only subcommand list")),
+            None => Err("git needs a subcommand".into()),
+        },
+        // Pure read commands — no arg filter beyond not allowing -exec
+        "ls" | "pwd" | "rustc" | "rustup" | "rg" | "fd" | "wc"
+        | "head" | "tail" | "cat" | "grep" => {
+            // Block xargs-style execution hand-offs.
+            if args.iter().any(|a| a.contains("-exec") || a.contains("--exec")) {
+                Err(format!("`{program}` with -exec is not allowed via shell_read"))
+            } else {
+                Ok(())
+            }
+        }
+        "find" => {
+            // `find -exec`, `-delete`, `-fprint` are write-equivalent.
+            for a in args {
+                let lower = a.as_str();
+                if matches!(lower, "-exec" | "-execdir" | "-delete" | "-fprint" | "-fprintf" | "-ok" | "-okdir") {
+                    return Err(format!("`find {lower}` mutates state; use shell_exec"));
+                }
+            }
+            Ok(())
+        }
+        other => Err(format!("`{other}` is not in the read program allowlist")),
+    }
+}
+
+/// Programs that pass the program-name gate (the args are still validated per-program).
+const READ_PROGRAMS: &[&str] = &[
+    "cargo", "git", "ls", "pwd", "rustc", "rustup", "rg", "fd",
+    "wc", "find", "head", "tail", "cat", "grep",
 ];
 
 static SHELL_READ_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
     name: "shell_read".into(),
     description: format!(
-        "Run an allowlisted read-only program. Allowed programs: {}. \
-         Returns stdout/stderr/status.",
-        READ_ALLOWLIST.join(", ")
+        "Run a read-only program. Allowed programs: {}. Each program has a \
+         curated allowlist of safe subcommands (cargo check/test/clippy/fmt; \
+         git status/log/diff/blame; etc.). Write-equivalents like \
+         `cargo install`, `git config <k> <v>`, `find -exec/-delete` are rejected.",
+        READ_PROGRAMS.join(", ")
     ),
     input: json!({
         "type": "object",
@@ -76,13 +121,8 @@ impl Tool for ShellRead {
     ) -> Result<ToolResult, ToolError> {
         let a: ShellArgs = serde_json::from_value(args)
             .map_err(|e| ToolError::InvalidArgs { name: self.name().into(), reason: e.to_string() })?;
-        if !READ_ALLOWLIST.contains(&a.program.as_str()) {
-            return Err(ToolError::Permission(format!(
-                "`{}` is not in the read allowlist: {}",
-                a.program,
-                READ_ALLOWLIST.join(", ")
-            )));
-        }
+        check_safe_args(&a.program, &a.args)
+            .map_err(ToolError::Permission)?;
         run(&a, world).await
     }
 }
@@ -177,4 +217,55 @@ fn clip_for_model(s: &str) -> String {
         "{head}\n... [{} lines clipped] ...\n{tail}",
         lines.len() - 120
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn cargo_check_is_safe() {
+        check_safe_args("cargo", &args(&["check"])).unwrap();
+        check_safe_args("cargo", &args(&["test", "--all"])).unwrap();
+        check_safe_args("cargo", &args(&["clippy", "--", "-D", "warnings"])).unwrap();
+    }
+
+    #[test]
+    fn cargo_install_blocked() {
+        assert!(check_safe_args("cargo", &args(&["install", "ripgrep"])).is_err());
+        assert!(check_safe_args("cargo", &args(&["publish"])).is_err());
+        assert!(check_safe_args("cargo", &args(&["yank", "0.1.0"])).is_err());
+    }
+
+    #[test]
+    fn git_config_read_vs_write() {
+        // Read: `git config user.email`
+        check_safe_args("git", &args(&["config", "user.email"])).unwrap();
+        // Write: `git config user.email evil@x` → blocked
+        assert!(
+            check_safe_args("git", &args(&["config", "user.email", "evil@x"])).is_err()
+        );
+        // Flag-prefixed (like --list) is allowed
+        check_safe_args("git", &args(&["config", "--list"])).unwrap();
+    }
+
+    #[test]
+    fn find_exec_blocked() {
+        assert!(check_safe_args(
+            "find",
+            &args(&[".", "-name", "*.rs", "-exec", "rm", "{}", ";"])
+        )
+        .is_err());
+        check_safe_args("find", &args(&[".", "-name", "*.rs"])).unwrap();
+    }
+
+    #[test]
+    fn unknown_program_blocked() {
+        assert!(check_safe_args("sudo", &args(&["rm", "-rf", "/"])).is_err());
+        assert!(check_safe_args("curl", &args(&["evil.com"])).is_err());
+    }
 }
