@@ -398,4 +398,196 @@ enabled = false
         assert_eq!(daemon.jobs[0].name, "brief");
         assert_eq!(daemon.jobs[0].argv, vec!["assistant", "--brief"]);
     }
+
+    // ====== audit #9: edge cases ======
+
+    #[test]
+    fn parse_zero_argv_falls_back_to_command_string() {
+        // `command = "echo hi there"` → split by whitespace
+        let toml_src = r#"
+[[job]]
+name = "echo"
+schedule = "every 1m"
+command = "echo hi there"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let d = Daemon::from_config(cfg).unwrap();
+        assert_eq!(d.jobs.len(), 1);
+        assert_eq!(d.jobs[0].argv, vec!["echo", "hi", "there"]);
+    }
+
+    #[test]
+    fn parse_argv_wins_over_command_when_both_present() {
+        let toml_src = r#"
+[[job]]
+name = "either-or"
+schedule = "every 1m"
+argv = ["cmd-a", "arg-1"]
+command = "cmd-b arg-2"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let d = Daemon::from_config(cfg).unwrap();
+        assert_eq!(d.jobs[0].argv, vec!["cmd-a", "arg-1"]);
+    }
+
+    #[test]
+    fn parse_empty_argv_then_command_is_used() {
+        let toml_src = r#"
+[[job]]
+name = "fallthrough"
+schedule = "every 1m"
+argv = []
+command = "echo from-command"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let d = Daemon::from_config(cfg).unwrap();
+        assert_eq!(d.jobs[0].argv, vec!["echo", "from-command"]);
+    }
+
+    #[test]
+    fn parse_job_with_neither_argv_nor_command_errors() {
+        let toml_src = r#"
+[[job]]
+name = "broken"
+schedule = "every 1m"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let r = Daemon::from_config(cfg);
+        match r {
+            Err(DaemonError::NoCommand { name }) => assert_eq!(name, "broken"),
+            Err(e)                               => panic!("expected NoCommand, got: {e}"),
+            Ok(_)                                => panic!("expected NoCommand, got Ok"),
+        }
+    }
+
+    #[test]
+    fn parse_bad_schedule_propagates() {
+        let toml_src = r#"
+[[job]]
+name = "x"
+schedule = "every 5min"
+command = "true"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let r = Daemon::from_config(cfg);
+        assert!(matches!(r, Err(DaemonError::Schedule(_))));
+    }
+
+    #[test]
+    fn weekly_wraps_to_next_week_when_today_is_after_target_time() {
+        // Today is Mon 12:00, schedule is "weekly mon 09:30" — target already
+        // passed today, so next fire is next Mon, NOT later today.
+        let mon = Local.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap();
+        assert_eq!(mon.weekday(), Weekday::Mon);
+        let next = Schedule::Weekly { weekday: Weekday::Mon, hour: 9, minute: 30 }.next_after(mon);
+        assert_eq!(next.weekday(), Weekday::Mon);
+        assert_eq!(next.date_naive(), mon.date_naive() + Duration::days(7));
+    }
+
+    #[test]
+    fn daily_midnight_boundary() {
+        // 23:30 today, schedule daily 00:05 → next is 00:05 tomorrow
+        let late = Local.with_ymd_and_hms(2026, 5, 16, 23, 30, 0).unwrap();
+        let next = Schedule::Daily { hour: 0, minute: 5 }.next_after(late);
+        assert_eq!(next.date_naive(), late.date_naive() + Duration::days(1));
+        assert_eq!(next.hour(), 0);
+        assert_eq!(next.minute(), 5);
+    }
+
+    #[test]
+    fn interval_next_is_always_now_plus_d() {
+        // Interval schedules don't anchor to a wall-clock time — they just
+        // measure from "now". This is a regression test against the temptation
+        // to anchor them.
+        let now = Local::now();
+        let s = Schedule::Interval(Duration::seconds(30));
+        let next = s.next_after(now);
+        let delta = next - now;
+        assert!(delta >= Duration::seconds(29) && delta <= Duration::seconds(31),
+            "expected ~30s, got {delta:?}");
+    }
+
+    #[test]
+    fn fmt_delta_handles_hours_minutes_seconds() {
+        assert_eq!(fmt_delta(Duration::seconds(5)),     "5s");
+        assert_eq!(fmt_delta(Duration::seconds(65)),    "1m 5s");
+        assert_eq!(fmt_delta(Duration::seconds(3725)),  "1h 2m");
+        assert_eq!(fmt_delta(Duration::seconds(-10)),   "due");
+    }
+
+    #[test]
+    fn env_preserved_in_resolved_job() {
+        let toml_src = r#"
+[[job]]
+name = "with-env"
+schedule = "every 1m"
+command = "env"
+env = { FOO = "bar", BAZ = "qux" }
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let d = Daemon::from_config(cfg).unwrap();
+        assert_eq!(d.jobs[0].env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(d.jobs[0].env.get("BAZ").map(String::as_str), Some("qux"));
+    }
+
+    #[test]
+    fn cwd_preserved_in_resolved_job() {
+        let toml_src = r#"
+[[job]]
+name = "with-cwd"
+schedule = "every 1m"
+command = "pwd"
+cwd = "/tmp"
+"#;
+        let cfg: DaemonConfig = toml::from_str(toml_src).unwrap();
+        let d = Daemon::from_config(cfg).unwrap();
+        assert_eq!(d.jobs[0].cwd.as_deref(), Some(std::path::Path::new("/tmp")));
+    }
+
+    #[test]
+    fn weekday_aliases_all_accepted() {
+        // Both short and long forms parse.
+        for s in ["mon", "monday", "Mon", "MONDAY"] {
+            assert!(matches!(
+                Schedule::parse(&format!("weekly {s} 09:00")).unwrap(),
+                Schedule::Weekly { weekday: Weekday::Mon, .. }
+            ));
+        }
+        for s in ["sun", "sunday"] {
+            assert!(matches!(
+                Schedule::parse(&format!("weekly {s} 09:00")).unwrap(),
+                Schedule::Weekly { weekday: Weekday::Sun, .. }
+            ));
+        }
+    }
+
+    /// Spawn an actual `true` subprocess via the daemon's run_once and confirm
+    /// the env + cwd are propagated. Uses a Bash-built-in (well, /bin/true)
+    /// so the test doesn't depend on any sysadmin binary beyond what every
+    /// Unix box has.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_once_executes_subprocess_with_env_and_cwd() {
+        let tmp = std::env::temp_dir().join(format!(
+            "harness-daemon-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Write a marker via sh -c "echo $FOO > marker"; verify the env var
+        // and cwd land where we expect.
+        let job = ResolvedJob {
+            name:     "test".into(),
+            schedule: Schedule::Interval(Duration::seconds(60)),
+            argv:     vec!["sh".into(), "-c".into(), "echo \"$FOO\" > marker".into()],
+            env:      std::collections::HashMap::from([("FOO".into(), "hello-edge".into())]),
+            cwd:      Some(tmp.clone()),
+        };
+        let status = run_once(&job).await.expect("spawn");
+        assert!(status.success(), "subprocess exit: {status:?}");
+        let marker = std::fs::read_to_string(tmp.join("marker")).unwrap();
+        assert_eq!(marker.trim(), "hello-edge");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
