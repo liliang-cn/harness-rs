@@ -645,11 +645,11 @@ async fn run_once(
         source: None, deadline: None,
     };
     match loop_.run_with_max_iters(task, &mut world, max_iters).await? {
-        Outcome::Done { text, iters } => {
+        Outcome::Done { text, iters, .. } => {
             println!("✓ done after {iters} iteration(s)\n");
             if let Some(t) = text { println!("{t}"); }
         }
-        Outcome::BudgetExhausted { iters } => {
+        Outcome::BudgetExhausted { iters, .. } => {
             eprintln!("✗ budget exhausted after {iters} iteration(s)");
             std::process::exit(2);
         }
@@ -706,13 +706,13 @@ async fn run_repl(
         };
 
         match loop_.run_with_max_iters(task, &mut world, max_iters).await {
-            Ok(Outcome::Done { text, iters }) => {
+            Ok(Outcome::Done { text, iters, .. }) => {
                 let response = text.unwrap_or_else(|| "(no response)".into());
                 println!("\nasst ({iters} iter)> {response}");
                 history.push(("user".into(), input.to_string()));
                 history.push(("asst".into(), response));
             }
-            Ok(Outcome::BudgetExhausted { iters }) => {
+            Ok(Outcome::BudgetExhausted { iters, .. }) => {
                 eprintln!("\nasst> ✗ ran out of budget after {iters} iterations.");
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),
