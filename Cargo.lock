@@ -546,8 +546,18 @@ dependencies = [
 name = "harness-templates"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "futures",
  "harness-blueprint",
+ "harness-context",
  "harness-core",
+ "harness-loop",
+ "harness-sensors-rust",
+ "harness-tools-fs",
+ "harness-tools-shell",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

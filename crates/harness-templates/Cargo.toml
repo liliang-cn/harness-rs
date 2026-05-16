@@ -9,5 +9,17 @@ authors.workspace = true
 description = "Pre-built Blueprint templates (crate-keeper, axum-crud, ...)"
 
 [dependencies]
-harness-core      = { workspace = true }
-harness-blueprint = { workspace = true }
+harness-core         = { workspace = true }
+harness-blueprint    = { workspace = true }
+harness-loop         = { workspace = true }
+harness-tools-fs     = { workspace = true }
+harness-tools-shell  = { workspace = true }
+harness-sensors-rust = { workspace = true }
+async-trait          = { workspace = true }
+futures              = { workspace = true }
+serde_json           = { workspace = true }
+tracing              = { workspace = true }
+
+[dev-dependencies]
+tokio           = { workspace = true }
+harness-context = { workspace = true }

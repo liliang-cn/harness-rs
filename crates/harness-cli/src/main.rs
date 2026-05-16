@@ -25,6 +25,16 @@ enum SkillsCmd {
     List {
         dir: PathBuf,
     },
+    /// Export every registered skill (filesystem + #[skill] macro) to a
+    /// spec-compliant directory tree that Claude Code / Cursor / Codex can
+    /// consume.
+    Export {
+        /// Target directory; created if missing.
+        target: PathBuf,
+        /// Pull skills from this filesystem directory too (optional).
+        #[arg(long)]
+        from: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -50,6 +60,19 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}  —  {}", s.manifest().name, s.manifest().description);
             }
             println!("\n{} skill(s)", skills.len());
+            Ok(())
+        }
+        Cmd::Skills { cmd: SkillsCmd::Export { target, from } } => {
+            let mut registry = harness_skills::SkillRegistry::new()
+                .with_macro_skills()?;
+            if let Some(p) = from {
+                registry = registry.with_filesystem_root(&p)?;
+            }
+            let paths = harness_skills::export_registry(&registry, &target)?;
+            for p in &paths {
+                println!("✓ {}", p.display());
+            }
+            println!("\nexported {} skill(s) to {}", paths.len(), target.display());
             Ok(())
         }
     }
