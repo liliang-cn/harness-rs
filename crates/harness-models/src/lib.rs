@@ -11,9 +11,11 @@
 
 pub mod anthropic;
 pub mod config;
+pub mod mock;
 pub mod openai_compat;
 pub mod providers;
 
 pub use anthropic::*;
 pub use config::*;
+pub use mock::*;
 pub use openai_compat::*;

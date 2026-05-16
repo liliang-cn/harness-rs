@@ -260,9 +260,12 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
         translate_turn(turn, &mut out);
     }
 
-    // 3. final user task message (only if the history doesn't already end with one)
-    let last_role = ctx.history.last().map(|t| t.role);
-    if !matches!(last_role, Some(TurnRole::User)) {
+    // 3. fallback ONLY when caller forgot to push the task: if no user-shaped
+    //    message exists at all, surface task.description as one. Do NOT re-append
+    //    the task whenever history just happens to end on a tool turn — the loop
+    //    pushes the task once at the start and that's the canonical placement.
+    let has_user = out.iter().any(|m| m.role == "user");
+    if !has_user {
         out.push(ChatMessage {
             role:    "user".into(),
             content: Some(ctx.task.description.clone()),

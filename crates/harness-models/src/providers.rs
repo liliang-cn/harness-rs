@@ -26,9 +26,21 @@ pub fn deepseek_pro(api_key: impl Into<String>) -> LlmConfig {
     )
 }
 
-/// Local Ollama (or any OpenAI-compatible self-hosted) endpoint.
+/// Local Ollama OpenAI-compatible endpoint (default port 11434 — Ollama's own).
 pub fn ollama(model: impl Into<String>) -> LlmConfig {
-    LlmConfig::new("ollama-local", "http://127.0.0.1:43511/v1", "", model)
+    LlmConfig::new("ollama-local", "http://127.0.0.1:11434/v1", "", model)
+}
+
+/// Same as `ollama` but lets the caller pick the host:port (useful when running
+/// Ollama on a remote machine or non-default port).
+pub fn ollama_at(host: impl Into<String>, model: impl Into<String>) -> LlmConfig {
+    let host = host.into();
+    let url = if host.starts_with("http") {
+        format!("{}/v1", host.trim_end_matches('/'))
+    } else {
+        format!("http://{}/v1", host.trim_end_matches('/'))
+    };
+    LlmConfig::new("ollama", url, "", model)
 }
 
 /// Anthropic Sonnet 4.6 — production default for most coding tasks.
