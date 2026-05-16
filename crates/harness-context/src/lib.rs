@@ -61,13 +61,35 @@ impl ContextExt for Context {
 }
 
 /// Quick way to construct a `World` rooted at the given path with the default
-/// runtime impls (tokio process runner, system clock, in-memory kv).
+/// runtime impls (tokio process runner, system clock, in-memory kv) and an
+/// empty user profile.
+///
+/// `World.profile` defaults to `UserProfile::default()` — the framework does
+/// NOT decide where profiles come from. To populate it, do:
+///
+/// ```ignore
+/// let mut world = default_world(".");
+/// world.profile = UserProfile { name: Some("…".into()), tz: Some("…".into()), ..Default::default() };
+/// ```
+///
+/// or use [`with_profile`] as a shorthand.
 pub fn default_world(repo_root: impl Into<std::path::PathBuf>) -> World {
     use std::sync::Arc;
     World {
-        repo:   harness_core::RepoView { root: repo_root.into() },
-        runner: Arc::new(TokioRunner),
-        clock:  Arc::new(SystemClock),
-        kv:     Arc::new(InMemoryKv::new()),
+        repo:    harness_core::RepoView { root: repo_root.into() },
+        runner:  Arc::new(TokioRunner),
+        clock:   Arc::new(SystemClock),
+        kv:      Arc::new(InMemoryKv::new()),
+        profile: harness_core::UserProfile::default(),
     }
+}
+
+/// Builder shorthand: construct a default world and attach a profile in one go.
+pub fn with_profile(
+    repo_root: impl Into<std::path::PathBuf>,
+    profile: harness_core::UserProfile,
+) -> World {
+    let mut w = default_world(repo_root);
+    w.profile = profile;
+    w
 }

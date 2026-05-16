@@ -11,6 +11,10 @@ description = "HookBus for harness-rs. Dispatches 27 lifecycle events with Allow
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_hooks"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 inventory    = { workspace = true }

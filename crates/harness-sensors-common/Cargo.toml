@@ -11,6 +11,10 @@ description = "Shared sensor scaffolding (git, LSP helpers) for harness-rs."
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_sensors_common"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }

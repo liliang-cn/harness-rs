@@ -170,6 +170,7 @@ impl Sandbox for WorktreeSandbox {
             runner: Arc::new(harness_context::TokioRunner),
             clock:  Arc::new(harness_context::SystemClock),
             kv:     Arc::new(harness_context::InMemoryKv::new()),
+            profile: harness_core::UserProfile::default(),
         };
 
         let cleanup_source = self.source.clone();
@@ -309,6 +310,7 @@ impl Sandbox for ContainerSandbox {
             runner,
             clock:  Arc::new(harness_context::SystemClock),
             kv:     Arc::new(harness_context::InMemoryKv::new()),
+            profile: harness_core::UserProfile::default(),
         };
 
         let kill_name = name.clone();
@@ -451,6 +453,7 @@ impl Sandbox for NullSandbox {
             runner: Arc::new(harness_context::TokioRunner),
             clock:  Arc::new(harness_context::SystemClock),
             kv:     Arc::new(harness_context::InMemoryKv::new()),
+            profile: harness_core::UserProfile::default(),
         };
         Ok(SandboxHandle {
             world,

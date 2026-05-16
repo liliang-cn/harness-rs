@@ -1,0 +1,32 @@
+[package]
+name = "harness-rs-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Optional standalone scheduler for the harness-rs agent framework. Runs declarative TOML-configured jobs (daily / weekly / interval / cron) that invoke any shell command — typically a harness-rs-built agent binary."
+
+keywords     = ["agent", "ai", "scheduler", "harness"]
+categories   = ["asynchronous", "development-tools", "command-line-utilities"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "harness-daemon"
+path = "src/bin/harness-daemon.rs"
+
+[dependencies]
+chrono       = { workspace = true }
+serde        = { workspace = true }
+toml         = "0.9"
+thiserror    = { workspace = true }
+tokio        = { workspace = true, features = ["signal"] }
+tracing      = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap         = { workspace = true }
+anyhow       = { workspace = true }

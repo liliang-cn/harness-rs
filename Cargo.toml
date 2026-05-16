@@ -18,13 +18,15 @@ members = [
     "crates/harness-models",
     "crates/harness-templates",
     "crates/harness-mcp",
+    "crates/harness-daemon",
     "crates/harness-cli",
     "examples/crate-keeper",
     "examples/deepseek-hello",
+    "examples/personal-assistant",
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
@@ -35,24 +37,24 @@ authors = ["liliang"]
 # internal — alias keys keep the in-source `use harness_core::*` style;
 # `package = ...` selects the on-crates.io name (`harness` is taken by an
 # unrelated benchmarking crate, so we publish as `harness-rs-*`).
-harness            = { package = "harness-rs",            path = "crates/harness",            version = "0.0.1" }
-harness-core       = { package = "harness-rs-core",       path = "crates/harness-core",       version = "0.0.1" }
-harness-macros     = { package = "harness-rs-macros",     path = "crates/harness-macros",     version = "0.0.1" }
-harness-context    = { package = "harness-rs-context",    path = "crates/harness-context",    version = "0.0.1" }
-harness-compactor  = { package = "harness-rs-compactor",  path = "crates/harness-compactor",  version = "0.0.1" }
-harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness-hooks",      version = "0.0.1" }
-harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.1" }
-harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.1" }
-harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.1" }
-harness-skills     = { package = "harness-rs-skills",     path = "crates/harness-skills",     version = "0.0.1" }
-harness-tools-fs   = { package = "harness-rs-tools-fs",   path = "crates/harness-tools-fs",   version = "0.0.1" }
-harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness-tools-shell",version = "0.0.1" }
-harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.1" }
-harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.1" }
-harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.1" }
-harness-templates  = { package = "harness-rs-templates",  path = "crates/harness-templates",  version = "0.0.1" }
-harness-mcp        = { package = "harness-rs-mcp",        path = "crates/harness-mcp",        version = "0.0.1" }
-harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.1" }
+harness            = { package = "harness-rs",            path = "crates/harness",            version = "0.0.2" }
+harness-core       = { package = "harness-rs-core",       path = "crates/harness-core",       version = "0.0.2" }
+harness-macros     = { package = "harness-rs-macros",     path = "crates/harness-macros",     version = "0.0.2" }
+harness-context    = { package = "harness-rs-context",    path = "crates/harness-context",    version = "0.0.2" }
+harness-compactor  = { package = "harness-rs-compactor",  path = "crates/harness-compactor",  version = "0.0.2" }
+harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness-hooks",      version = "0.0.2" }
+harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.2" }
+harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.2" }
+harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.2" }
+harness-skills     = { package = "harness-rs-skills",     path = "crates/harness-skills",     version = "0.0.2" }
+harness-tools-fs   = { package = "harness-rs-tools-fs",   path = "crates/harness-tools-fs",   version = "0.0.2" }
+harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness-tools-shell",version = "0.0.2" }
+harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.2" }
+harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.2" }
+harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.2" }
+harness-templates  = { package = "harness-rs-templates",  path = "crates/harness-templates",  version = "0.0.2" }
+harness-mcp        = { package = "harness-rs-mcp",        path = "crates/harness-mcp",        version = "0.0.2" }
+harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.2" }
 
 # external
 async-trait = "0.1"
@@ -73,6 +75,7 @@ walkdir     = "2"
 clap        = { version = "4", features = ["derive"] }
 once_cell   = "1"
 reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chrono      = { version = "0.4", features = ["serde"] }
 
 [profile.release]
 lto = "thin"

@@ -11,6 +11,10 @@ description = "Sandbox tiers for harness-rs — git Worktree, Docker Container, 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_sandbox"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core    = { workspace = true }
 harness-context = { workspace = true }

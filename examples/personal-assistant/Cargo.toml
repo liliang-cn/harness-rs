@@ -1,0 +1,29 @@
+[package]
+name = "personal-assistant"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Example: a personal-assistant agent with calendar tools (current_time, list/add/cancel/find events)."
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+
+[dependencies]
+harness         = { workspace = true }
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-models  = { workspace = true }
+harness-context = { workspace = true }
+tokio           = { workspace = true, features = ["io-std"] }
+anyhow          = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+clap            = { workspace = true }
+async-trait     = { workspace = true }
+chrono          = { version = "0.4", features = ["serde"] }
+chrono-tz       = "0.10"
+uuid            = { version = "1", features = ["v4"] }

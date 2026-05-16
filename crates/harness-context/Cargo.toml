@@ -11,6 +11,10 @@ description = "Default World runtime (Tokio process runner, system clock, in-mem
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_context"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 serde        = { workspace = true }

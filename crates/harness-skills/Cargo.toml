@@ -11,6 +11,10 @@ description = "agentskills.io-compliant SKILL.md loader, validator, linter, expo
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_skills"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core    = { workspace = true }
 async-trait     = { workspace = true }

@@ -11,6 +11,10 @@ description = "cargo-check and clippy feedback sensors for harness-rs. Emits LLM
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+[lib]
+name = "harness_sensors_rust"
+path = "src/lib.rs"
+
 [dependencies]
 harness-core = { workspace = true }
 async-trait  = { workspace = true }
