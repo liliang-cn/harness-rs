@@ -337,16 +337,19 @@ mod tests {
 
     mod tempdir {
         use std::path::PathBuf;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         pub struct TestDir(pub PathBuf);
         impl TestDir {
             pub fn new() -> Self {
-                let p = std::env::temp_dir().join(format!(
-                    "harness-tools-fs-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos()
-                ));
+                let pid = std::process::id();
+                let n = SEQ.fetch_add(1, Ordering::SeqCst);
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                let p = std::env::temp_dir()
+                    .join(format!("harness-tools-fs-{pid}-{nanos}-{n}"));
                 std::fs::create_dir_all(&p).unwrap();
                 TestDir(p)
             }
