@@ -1,0 +1,14 @@
+[package]
+name = "harness-compactor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "5-stage progressive context compaction"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }

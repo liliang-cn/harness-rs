@@ -1,0 +1,32 @@
+//! Pre-built [`LlmConfig`] constructors for common providers.
+//!
+//! These set sensible defaults for `base_url` and a recommended `model`. They
+//! return a `LlmConfig` so the caller is free to wrap it in any adapter (today
+//! `OpenAiCompat`; future: Anthropic-native, local-llama, etc.).
+
+use crate::LlmConfig;
+
+/// DeepSeek's fast/cheap tier.
+pub fn deepseek_flash(api_key: impl Into<String>) -> LlmConfig {
+    LlmConfig::new(
+        "deepseek-flash",
+        "https://api.deepseek.com",
+        api_key,
+        "deepseek-v4-flash",
+    )
+}
+
+/// DeepSeek's high-quality tier.
+pub fn deepseek_pro(api_key: impl Into<String>) -> LlmConfig {
+    LlmConfig::new(
+        "deepseek-pro",
+        "https://api.deepseek.com",
+        api_key,
+        "deepseek-v4-pro",
+    )
+}
+
+/// Local Ollama (or any OpenAI-compatible self-hosted) endpoint.
+pub fn ollama(model: impl Into<String>) -> LlmConfig {
+    LlmConfig::new("ollama-local", "http://127.0.0.1:43511/v1", "", model)
+}
