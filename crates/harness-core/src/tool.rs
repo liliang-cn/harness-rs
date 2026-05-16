@@ -1,6 +1,7 @@
 use crate::{World, error::ToolError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Risk class for a tool — drives sandbox / permission decisions.
 ///
@@ -44,4 +45,15 @@ pub trait Tool: Send + Sync + 'static {
         args: serde_json::Value,
         world: &mut World,
     ) -> Result<ToolResult, ToolError>;
+}
+
+/// `inventory` slot for compile-time tool registration via `#[tool]`.
+pub struct ToolEntry {
+    pub factory: fn() -> Arc<dyn Tool>,
+}
+
+inventory::collect!(ToolEntry);
+
+pub fn iter_macro_tools() -> impl Iterator<Item = Arc<dyn Tool>> {
+    inventory::iter::<ToolEntry>().map(|e| (e.factory)())
 }

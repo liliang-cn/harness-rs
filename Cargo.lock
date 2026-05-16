@@ -369,10 +369,13 @@ dependencies = [
 name = "harness"
 version = "0.0.1"
 dependencies = [
+ "harness-context",
  "harness-core",
  "harness-macros",
  "harness-skills",
  "inventory",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -464,6 +467,7 @@ version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde_json",
  "serde_yaml",
  "syn",
 ]

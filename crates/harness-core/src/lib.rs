@@ -9,6 +9,7 @@
 /// the stable public API — users should never need to reference these directly.
 #[doc(hidden)]
 pub mod __export {
+    pub use async_trait::async_trait;
     pub use inventory;
     pub use serde_json;
     pub use futures;
