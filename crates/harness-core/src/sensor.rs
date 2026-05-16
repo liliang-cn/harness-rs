@@ -1,6 +1,7 @@
 use crate::{Action, Execution, Signal, World, error::SensorError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// When in the change lifecycle a sensor runs (DESIGN.md §3, lifecycle distribution).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -26,4 +27,14 @@ pub trait Sensor: Send + Sync + 'static {
     fn kind(&self) -> Execution;
     fn stage(&self) -> Stage;
     async fn observe(&self, action: &Action, world: &World) -> Result<Vec<Signal>, SensorError>;
+}
+
+pub struct SensorEntry {
+    pub factory: fn() -> Arc<dyn Sensor>,
+}
+
+inventory::collect!(SensorEntry);
+
+pub fn iter_macro_sensors() -> impl Iterator<Item = Arc<dyn Sensor>> {
+    inventory::iter::<SensorEntry>().map(|e| (e.factory)())
 }
