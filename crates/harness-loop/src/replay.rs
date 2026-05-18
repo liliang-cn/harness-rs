@@ -267,6 +267,121 @@ impl SessionStats {
     }
 }
 
+/// Multi-line, content-rich version of [`format_event_short`].
+///
+/// Surfaces what `format_event_short` hides: model text, full tool args,
+/// tool result preview, and failure reasons. Used by `harness trace --verbose`
+/// and by [`LiveProgressHook`] so operators can actually see what their agent
+/// is doing instead of guessing from `ok=false`.
+pub fn format_event_verbose(e: &SessionEvent) -> String {
+    match e {
+        SessionEvent::Start { source, .. } => format!("session start ({source})"),
+        SessionEvent::Heartbeat { iter, .. } => format!("iter {iter}"),
+        SessionEvent::PreModel {
+            history_len,
+            tools_count,
+            ..
+        } => format!("→ model (history={history_len}, tools={tools_count})"),
+        SessionEvent::PostModel { output, .. } => {
+            let mut out = format!(
+                "← model: {} tool_call(s) [{}/{} tok, stop={:?}]",
+                output.tool_calls.len(),
+                output.usage.input_tokens,
+                output.usage.output_tokens,
+                output.stop_reason,
+            );
+            if let Some(text) = output.text.as_deref().filter(|s| !s.is_empty()) {
+                out.push_str("\n  text: ");
+                out.push_str(&truncate(text, 400));
+            }
+            if let Some(reasoning) = output.reasoning.as_deref().filter(|s| !s.is_empty()) {
+                out.push_str("\n  reasoning: ");
+                out.push_str(&truncate(reasoning, 200));
+            }
+            out
+        }
+        SessionEvent::PreTool { action, .. } => {
+            let args = action.args.to_string();
+            format!("  → tool {} args={}", action.tool, truncate(&args, 240))
+        }
+        SessionEvent::PostTool {
+            call_id, result, ..
+        } => {
+            let preview = preview_tool_result(result);
+            format!(
+                "  ← tool {} ok={} {}",
+                call_id,
+                result.ok,
+                if preview.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n      {preview}")
+                }
+            )
+        }
+        SessionEvent::Sensor { id, signals, .. } => {
+            format!("  ⚑ sensor {id}: {signals} signal(s)")
+        }
+        SessionEvent::PreCompact { stage, .. } => format!("  ⇩ pre-compact {stage:?}"),
+        SessionEvent::PostCompact { stage, .. } => format!("  ⇧ post-compact {stage:?}"),
+        SessionEvent::End { .. } => "session end".into(),
+    }
+}
+
+/// Pull the most actionable text out of a [`ToolResult`] for human display.
+///
+/// For failures, prefer `errors`/`hint`/`message` keys if the tool returned a
+/// structured JSON payload (the multi-engine search tool in `investor-bot`
+/// follows this convention). Falls back to a truncated JSON dump.
+fn preview_tool_result(r: &ToolResult) -> String {
+    let v = &r.content;
+    if !r.ok {
+        // Try the common error-shape conventions first.
+        if let Some(errors) = v.get("errors").and_then(|x| x.as_array()) {
+            let joined: Vec<String> = errors
+                .iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect();
+            if !joined.is_empty() {
+                let hint = v
+                    .get("hint")
+                    .and_then(|x| x.as_str())
+                    .map(|h| format!(" | hint: {h}"))
+                    .unwrap_or_default();
+                return format!("errors=[{}]{hint}", truncate(&joined.join("; "), 240));
+            }
+        }
+        if let Some(msg) = v.get("message").and_then(|x| x.as_str()) {
+            return format!("message={}", truncate(msg, 240));
+        }
+        if let Some(err) = v.get("error").and_then(|x| x.as_str()) {
+            return format!("error={}", truncate(err, 240));
+        }
+    }
+    // Generic preview: serialize, trim, truncate.
+    let s = v.to_string();
+    if s == "null" || s == "{}" {
+        String::new()
+    } else {
+        format!("preview={}", truncate(&s, 240))
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    // Char-wise truncation so we don't bisect a multibyte sequence.
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.replace('\n', " ⏎ ")
+    } else {
+        let head: String = chars[..max].iter().collect();
+        format!(
+            "{}… ({} chars total)",
+            head.replace('\n', " ⏎ "),
+            chars.len()
+        )
+    }
+}
+
 /// Tiny helper used by the CLI: convert a single event to a single line of
 /// pretty-printed text (does NOT include the timestamp prefix).
 pub fn format_event_short(e: &SessionEvent) -> String {
@@ -313,6 +428,89 @@ pub fn format_event_short(e: &SessionEvent) -> String {
         SessionEvent::PreCompact { stage, .. } => format!("  ⇩ pre-compact {stage:?}"),
         SessionEvent::PostCompact { stage, .. } => format!("  ⇧ post-compact {stage:?}"),
         SessionEvent::End { .. } => "session end".into(),
+    }
+}
+
+/// `Hook` that prints a verbose progress trace to stderr in real time.
+///
+/// Pair with `AgentLoop::with_hook(Arc::new(LiveProgressHook::default()))` to
+/// see model calls, tool calls, and tool results as they happen — instead of
+/// staring at a silent terminal for 60 seconds and then post-mortem'ing a JSONL
+/// file. Independent of `SessionRecorder`; both can be installed together.
+///
+/// Output is structured to be greppable: `[iter=N]` prefix on every line, and
+/// each line is one event. Writes go to stderr, so stdout stays clean for
+/// the final answer.
+#[derive(Default)]
+pub struct LiveProgressHook {
+    iter: std::sync::atomic::AtomicU32,
+}
+
+impl LiveProgressHook {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Hook for LiveProgressHook {
+    fn name(&self) -> &str {
+        "live-progress"
+    }
+    fn matches(&self, _ev: &Event<'_>) -> bool {
+        true
+    }
+    fn fire(&self, ev: &Event<'_>, world: &mut World) -> HookOutcome {
+        let ts = world.clock.now_ms();
+        let iter = self.iter.load(std::sync::atomic::Ordering::Relaxed);
+        // Reuse the recorder's projection + the verbose formatter so the
+        // live output is the same format you'd see post-mortem.
+        let session_ev = match ev {
+            Event::SessionStart { source } => Some(SessionEvent::Start {
+                ts_ms: ts,
+                source: format!("{source:?}"),
+            }),
+            Event::PreModel { ctx } => Some(SessionEvent::PreModel {
+                ts_ms: ts,
+                history_len: ctx.history.len(),
+                tools_count: ctx.tools.len(),
+            }),
+            Event::PostModel { out } => Some(SessionEvent::PostModel {
+                ts_ms: ts,
+                output: (*out).clone(),
+            }),
+            Event::PreToolUse { action } => Some(SessionEvent::PreTool {
+                ts_ms: ts,
+                action: (*action).clone(),
+            }),
+            Event::PostToolUse { action, result } => Some(SessionEvent::PostTool {
+                ts_ms: ts,
+                call_id: action.call_id.clone(),
+                result: (*result).clone(),
+            }),
+            Event::Heartbeat { iter: i } => {
+                self.iter.store(*i, std::sync::atomic::Ordering::Relaxed);
+                Some(SessionEvent::Heartbeat {
+                    ts_ms: ts,
+                    iter: *i,
+                })
+            }
+            Event::PreCompact { stage } => Some(SessionEvent::PreCompact {
+                ts_ms: ts,
+                stage: *stage,
+            }),
+            Event::PostCompact { stage } => Some(SessionEvent::PostCompact {
+                ts_ms: ts,
+                stage: *stage,
+            }),
+            Event::SessionEnd => Some(SessionEvent::End { ts_ms: ts }),
+            _ => None,
+        };
+        if let Some(e) = session_ev {
+            for line in format_event_verbose(&e).lines() {
+                eprintln!("[iter={iter}] {line}");
+            }
+        }
+        HookOutcome::Allow
     }
 }
 
