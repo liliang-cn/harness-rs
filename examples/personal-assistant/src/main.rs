@@ -630,6 +630,19 @@ struct Cli {
     /// post-mortem analysis via `harness trace --verbose`.
     #[arg(long)]
     record: Option<PathBuf>,
+
+    /// Path to a JSONL long-term memory file. When set, the agent recalls
+    /// matching prior facts at session start (`MemoryGuide`) and a
+    /// synthesizer model distils each session into 1-3 durable facts at
+    /// the end (`MemorySynthesizer`).
+    #[arg(long)]
+    memory: Option<PathBuf>,
+
+    /// Cheap model id used by `MemorySynthesizer`. Defaults to
+    /// `deepseek-v4-flash` or `HARNESS_SYNTH_MODEL` env. Uses the same
+    /// `HARNESS_BASE_URL` / `HARNESS_API_KEY` as the main model.
+    #[arg(long)]
+    synth_model: Option<String>,
 }
 
 /// App-side policy for "where does the user profile come from?"
@@ -753,6 +766,20 @@ async fn main() -> anyhow::Result<()> {
     if let Some(p) = &cli.record {
         println!("  recording: {}", p.display());
     }
+    let memory: Option<Arc<dyn harness_core::Memory>> = match &cli.memory {
+        Some(p) => Some(Arc::new(
+            harness_context::FileMemory::open(p).map_err(|e| anyhow::anyhow!("memory: {e}"))?,
+        )),
+        None => None,
+    };
+    let synth_model_id = cli
+        .synth_model
+        .clone()
+        .or_else(|| std::env::var("HARNESS_SYNTH_MODEL").ok())
+        .unwrap_or_else(|| "deepseek-v4-flash".into());
+    if let Some(p) = &cli.memory {
+        println!("  memory:    {} (synth: {})", p.display(), synth_model_id);
+    }
     println!();
 
     if cli.repl {
@@ -765,6 +792,8 @@ async fn main() -> anyhow::Result<()> {
             cli.max_iters,
             progress,
             cli.record,
+            memory,
+            synth_model_id,
         )
         .await
     } else {
@@ -783,6 +812,8 @@ async fn main() -> anyhow::Result<()> {
             user_request,
             progress,
             cli.record,
+            memory,
+            synth_model_id,
         )
         .await
     }
@@ -799,11 +830,31 @@ async fn run_once(
     user_request: String,
     progress: bool,
     record: Option<PathBuf>,
+    memory: Option<Arc<dyn harness_core::Memory>>,
+    synth_model_id: String,
 ) -> anyhow::Result<()> {
-    let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key);
+    let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key.clone());
     let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
     for t in tools {
         loop_ = loop_.with_tool(t);
+    }
+    let mut synth_handle: Option<Arc<harness_loop::MemorySynthesizer>> = None;
+    if let Some(mem) = &memory {
+        loop_ = loop_.with_guide(Arc::new(
+            harness_loop::MemoryGuide::new(mem.clone()).with_top_k(5),
+        ));
+        let synth_model: Arc<dyn harness_core::Model> = Arc::new(OpenAiCompat::with_key(
+            base_url.to_string(),
+            synth_model_id.clone(),
+            api_key.clone(),
+        ));
+        let synth = Arc::new(
+            harness_loop::MemorySynthesizer::new(mem.clone(), synth_model)
+                .with_source("personal-assistant")
+                .with_max_facts(3),
+        );
+        loop_ = loop_.with_hook(synth.clone() as Arc<dyn harness_core::Hook>);
+        synth_handle = Some(synth);
     }
     if progress {
         loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
@@ -836,8 +887,14 @@ async fn run_once(
             if let Some(t) = last_text {
                 eprintln!("\n— forced-synthesis answer (tool-less) —\n{t}");
             }
+            if let Some(s) = &synth_handle {
+                s.flush_pending().await;
+            }
             std::process::exit(2);
         }
+    }
+    if let Some(s) = synth_handle {
+        s.flush_pending().await;
     }
     Ok(())
 }
@@ -852,6 +909,8 @@ async fn run_repl(
     max_iters: u32,
     progress: bool,
     record: Option<PathBuf>,
+    memory: Option<Arc<dyn harness_core::Memory>>,
+    synth_model_id: String,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
@@ -891,6 +950,24 @@ async fn run_repl(
         for t in tools.iter().cloned() {
             loop_ = loop_.with_tool(t);
         }
+        let mut turn_synth: Option<Arc<harness_loop::MemorySynthesizer>> = None;
+        if let Some(mem) = &memory {
+            loop_ = loop_.with_guide(Arc::new(
+                harness_loop::MemoryGuide::new(mem.clone()).with_top_k(5),
+            ));
+            let synth_model: Arc<dyn harness_core::Model> = Arc::new(OpenAiCompat::with_key(
+                base_url.to_string(),
+                synth_model_id.clone(),
+                api_key.clone(),
+            ));
+            let synth = Arc::new(
+                harness_loop::MemorySynthesizer::new(mem.clone(), synth_model)
+                    .with_source("personal-assistant")
+                    .with_max_facts(3),
+            );
+            loop_ = loop_.with_hook(synth.clone() as Arc<dyn harness_core::Hook>);
+            turn_synth = Some(synth);
+        }
         if progress {
             loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
         }
@@ -923,6 +1000,9 @@ async fn run_repl(
                 }
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),
+        }
+        if let Some(s) = &turn_synth {
+            s.flush_pending().await;
         }
     }
     Ok(())
