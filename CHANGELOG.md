@@ -3,9 +3,12 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## [Unreleased]
+## 0.0.4
 
-### Added
+Observability and open long-term memory. No breaking source changes; pure
+additions on top of 0.0.3.
+
+### Added — observability
 
 - **`harness_loop::LiveProgressHook`** — `Hook` that streams every model call,
   tool call, and tool result to stderr in real time. Pair with
@@ -18,26 +21,78 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   by `harness trace --verbose`.
 - **`harness trace --verbose`** (alias `-v`) — selects the verbose formatter
   when pretty-printing a recorded JSONL session.
+- **`Event::BudgetWarning { ratio }`** is now fired (was defined but unused).
+  Currently emitted exactly once, with `ratio = 1.0`, immediately before the
+  forced final-synthesis pass — so observers can clearly label that boundary.
+  `SessionEvent::BudgetWarning` mirrors it for replay.
+
+### Added — loop completeness
+
 - **Forced final-synthesis on budget exhaustion** — when `run_with_max_iters`
   would otherwise return `Outcome::BudgetExhausted { last_text: None, .. }`,
-  the loop now makes one extra tool-less model call asking for the
-  best-effort conclusion. The result lands in `last_text`. Closes the "agent
-  burned all iterations on tool calls, returned no answer" failure mode.
-  See regression test
-  `tests/agent_loop.rs::budget_exhausted_forces_final_synthesis_into_last_text`.
-- **`examples/investor-bot`** + **`examples/personal-assistant`**:
-  `--progress` flag (and `HARNESS_PROGRESS=1` env) installs
-  `LiveProgressHook` on the loop. `HARNESS_BASE_URL` / `HARNESS_MODEL` /
-  `HARNESS_API_KEY` env vars let the same binaries drive any
-  OpenAI-compatible endpoint without code edits (DeepSeek defaults
-  preserved). Both `BudgetExhausted` print sites now surface `last_text`.
-- **investor-bot SYSTEM_PROMPT** strengthened with explicit budget rules:
-  stop retrying after 2 empty searches; abandon URLs returning 401/403/503;
-  commit to a partial answer marking unverified facts as UNKNOWN.
+  the loop makes one extra tool-less model call asking for the best-effort
+  conclusion. The result lands in `last_text`. Closes the "agent burned all
+  iterations on tool calls, returned no answer" failure mode. Regression
+  test: `budget_exhausted_forces_final_synthesis_into_last_text`.
+
+### Added — long-term, open memory
+
+The piece Harrison Chase ("your harness, your memory") and Viv Trivedi
+("distil traces into higher-level memory primitives") call out as the
+moat against provider lock-in. All on the user's disk; nothing on a
+third-party server.
+
+- **`harness_core::Memory`** trait + **`MemoryEntry`** + `MemoryError`.
+- **`harness_context::FileMemory`** — append-only JSONL backend with
+  keyword-overlap recall (ties broken by recency). No embedding deps;
+  swap-in a vector backend by implementing the trait.
+- **`harness_loop::MemoryGuide`** — Guide::Always; at session start calls
+  `recall(task.description, top_k)` and injects the hits into `ctx.guides`
+  as a single `Block::Text` so the model sees them in the system prompt.
+- **`harness_loop::MemoryWriter`** — Hook that persists the verbatim final
+  assistant text on `TaskCompleted` (skips `BudgetExhausted`).
+- **`harness_loop::MemorySynthesizer`** — smarter alternative: uses a cheap
+  separate "synth model" (e.g. `deepseek-v4-flash`, `gpt-5-nano`) to
+  distil each session into 1-3 atomic durable facts tagged for retrieval.
+  Markdown fences tolerated; unparseable model output falls back to a
+  `"synth-raw"` entry rather than silent drop. `flush_pending()` awaits
+  spawned writes so callers can guarantee persistence before `main()`
+  returns (otherwise tokio runtime drop cancels in-flight commits).
+
+### Examples
+
+- `--progress` / `HARNESS_PROGRESS=1` installs `LiveProgressHook` on
+  `personal-assistant` and `investor-bot`.
+- `--record <path>` writes a JSONL session log (parity between both
+  examples).
+- `--memory <path>` + `--synth-model <id>` (env: `HARNESS_SYNTH_MODEL`)
+  installs `MemoryGuide` + `MemorySynthesizer` on both examples. Synth
+  model defaults to `deepseek-v4-flash`.
+- `HARNESS_BASE_URL` / `HARNESS_MODEL` / `HARNESS_API_KEY` env vars let
+  the same binaries drive any OpenAI-compatible endpoint without code
+  edits; DeepSeek defaults preserved.
+- Both `BudgetExhausted` print sites now surface `last_text` (the
+  forced-synthesis answer).
+- investor-bot SYSTEM_PROMPT strengthened with explicit budget rules:
+  stop retrying after 2 empty searches; abandon URLs returning
+  401/403/503; commit to a partial answer marking unverified facts as
+  UNKNOWN.
+
+### Fixed
+
+- `harness new` scaffold was pinning `0.0.1` deps (pre-publish; would
+  never build) and using the wrong package names in `[patch.crates-io]`
+  (`harness = ...` instead of `harness-rs = ...`, so `--local` never
+  actually patched). Now pins `0.0.4`, correct published names, and a
+  `main.rs` that demonstrates the env-var endpoint config and
+  `HARNESS_PROGRESS` opt-in.
 
 ### Tests
 
-- 124 passing (was 123 + 1 new for forced-synthesis fallback).
+- 133 passing (was 123). 10 new tests cover live progress, forced
+  synthesis, budget-warning emission, file memory round-trips,
+  memory-writer persistence, memory-synth JSON parsing + fence stripping
+  + raw-fallback, and the cross-session end-to-end recall.
 
 ## 0.0.3
 
@@ -195,7 +250,8 @@ mechanism, daemon, retry, or any of the audit fixes above. Prefer 0.0.2.
   `mcp serve`.
 - 92 unit / integration tests passing.
 
-[Unreleased]: https://github.com/liliang-cn/harness-rs/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/liliang-cn/harness-rs/compare/v0.0.4...HEAD
+[0.0.4]:      https://github.com/liliang-cn/harness-rs/compare/v0.0.3...v0.0.4
 [0.0.3]:      https://github.com/liliang-cn/harness-rs/compare/v0.0.2...v0.0.3
 [0.0.2]:      https://github.com/liliang-cn/harness-rs/compare/v0.0.1...v0.0.2
 [0.0.1]:      https://github.com/liliang-cn/harness-rs/releases/tag/v0.0.1
