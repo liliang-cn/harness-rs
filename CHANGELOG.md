@@ -3,6 +3,42 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## [Unreleased]
+
+### Added
+
+- **`harness_loop::LiveProgressHook`** — `Hook` that streams every model call,
+  tool call, and tool result to stderr in real time. Pair with
+  `AgentLoop::with_hook` to watch what the agent is doing instead of staring
+  at a silent terminal. Independent of `SessionRecorder`; both can be
+  installed together.
+- **`harness_loop::format_event_verbose`** — multi-line formatter that surfaces
+  model text, reasoning, full tool args, tool result preview, and failure
+  reasons (errors / hint / message / error keys). Used by the live hook and
+  by `harness trace --verbose`.
+- **`harness trace --verbose`** (alias `-v`) — selects the verbose formatter
+  when pretty-printing a recorded JSONL session.
+- **Forced final-synthesis on budget exhaustion** — when `run_with_max_iters`
+  would otherwise return `Outcome::BudgetExhausted { last_text: None, .. }`,
+  the loop now makes one extra tool-less model call asking for the
+  best-effort conclusion. The result lands in `last_text`. Closes the "agent
+  burned all iterations on tool calls, returned no answer" failure mode.
+  See regression test
+  `tests/agent_loop.rs::budget_exhausted_forces_final_synthesis_into_last_text`.
+- **`examples/investor-bot`** + **`examples/personal-assistant`**:
+  `--progress` flag (and `HARNESS_PROGRESS=1` env) installs
+  `LiveProgressHook` on the loop. `HARNESS_BASE_URL` / `HARNESS_MODEL` /
+  `HARNESS_API_KEY` env vars let the same binaries drive any
+  OpenAI-compatible endpoint without code edits (DeepSeek defaults
+  preserved). Both `BudgetExhausted` print sites now surface `last_text`.
+- **investor-bot SYSTEM_PROMPT** strengthened with explicit budget rules:
+  stop retrying after 2 empty searches; abandon URLs returning 401/403/503;
+  commit to a partial answer marking unverified facts as UNKNOWN.
+
+### Tests
+
+- 124 passing (was 123 + 1 new for forced-synthesis fallback).
+
 ## 0.0.3
 
 Re-publish of the 0.0.2 feature set so that every workspace crate ships

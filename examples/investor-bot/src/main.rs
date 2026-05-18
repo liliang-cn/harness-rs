@@ -79,7 +79,11 @@ fn save_notes(notes: &[Note]) -> Result<(), ToolError> {
 
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent("investor-bot/0.0.2 (research agent; harness-rs example)")
+        .user_agent(concat!(
+            "investor-bot/",
+            env!("CARGO_PKG_VERSION"),
+            " (research agent; harness-rs example)"
+        ))
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
