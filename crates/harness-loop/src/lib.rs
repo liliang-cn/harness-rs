@@ -363,6 +363,12 @@ impl<M: Model> AgentLoop<M> {
             request more tools. Mark facts you could not verify as UNKNOWN. \
             Include source URLs for every claim that is not UNKNOWN.";
 
+        // Signal to any observer (LiveProgressHook, SessionRecorder, custom
+        // hooks) that we've used 100% of the budget and are about to force
+        // synthesis. Pre-existing `BudgetWarning` event was unused; this is
+        // its natural home.
+        self.hooks.fire(&Event::BudgetWarning { ratio: 1.0 }, world);
+
         // Snapshot + clear tool schemas so the model has no choice but text.
         let saved_tools = std::mem::take(&mut ctx.tools);
         ctx.history.push(Turn {

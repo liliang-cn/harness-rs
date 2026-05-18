@@ -61,6 +61,13 @@ pub enum SessionEvent {
         ts_ms: i64,
         iter: u32,
     },
+    /// Budget ratio crossed a high-water threshold. Currently the loop only
+    /// fires this once, at the moment the iteration budget is exhausted and
+    /// the forced final-synthesis pass is about to run.
+    BudgetWarning {
+        ts_ms: i64,
+        ratio: f32,
+    },
     End {
         ts_ms: i64,
     },
@@ -152,6 +159,10 @@ impl Hook for SessionRecorder {
                 ts_ms: ts,
                 iter: *iter,
             }),
+            Event::BudgetWarning { ratio } => Some(SessionEvent::BudgetWarning {
+                ts_ms: ts,
+                ratio: *ratio,
+            }),
             Event::SessionEnd => Some(SessionEvent::End { ts_ms: ts }),
             _ => None,
         };
@@ -240,6 +251,7 @@ impl SessionStats {
                 | SessionEvent::PreCompact { ts_ms, .. }
                 | SessionEvent::PostCompact { ts_ms, .. }
                 | SessionEvent::Heartbeat { ts_ms, .. }
+                | SessionEvent::BudgetWarning { ts_ms, .. }
                 | SessionEvent::End { ts_ms } => *ts_ms,
             };
             if first_ts.is_none() {
@@ -324,6 +336,13 @@ pub fn format_event_verbose(e: &SessionEvent) -> String {
         }
         SessionEvent::PreCompact { stage, .. } => format!("  ⇩ pre-compact {stage:?}"),
         SessionEvent::PostCompact { stage, .. } => format!("  ⇧ post-compact {stage:?}"),
+        SessionEvent::BudgetWarning { ratio, .. } => {
+            if *ratio >= 1.0 {
+                "≫ budget exhausted — forcing tool-less final-synthesis pass".into()
+            } else {
+                format!("≫ budget warning (used {:.0}%)", ratio * 100.0)
+            }
+        }
         SessionEvent::End { .. } => "session end".into(),
     }
 }
@@ -427,6 +446,9 @@ pub fn format_event_short(e: &SessionEvent) -> String {
         SessionEvent::Sensor { id, signals, .. } => format!("  ⚑ sensor {id}: {signals} signal(s)"),
         SessionEvent::PreCompact { stage, .. } => format!("  ⇩ pre-compact {stage:?}"),
         SessionEvent::PostCompact { stage, .. } => format!("  ⇧ post-compact {stage:?}"),
+        SessionEvent::BudgetWarning { ratio, .. } => {
+            format!("≫ budget warning (used {:.0}%)", ratio * 100.0)
+        }
         SessionEvent::End { .. } => "session end".into(),
     }
 }
@@ -501,6 +523,10 @@ impl Hook for LiveProgressHook {
             Event::PostCompact { stage } => Some(SessionEvent::PostCompact {
                 ts_ms: ts,
                 stage: *stage,
+            }),
+            Event::BudgetWarning { ratio } => Some(SessionEvent::BudgetWarning {
+                ts_ms: ts,
+                ratio: *ratio,
             }),
             Event::SessionEnd => Some(SessionEvent::End { ts_ms: ts }),
             _ => None,
