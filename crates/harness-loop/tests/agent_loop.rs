@@ -404,6 +404,27 @@ async fn budget_exhausted_forces_final_synthesis_into_last_text() {
     let (_td, mut world) = tmp_workspace();
     std::fs::write(world.repo.root.join("a.txt"), "x").unwrap();
 
+    // Hook that counts BudgetWarning events with their ratio. The forced
+    // synthesis pass MUST fire this exactly once with ratio == 1.0, otherwise
+    // downstream observers (LiveProgressHook, SessionRecorder, OtelHook)
+    // wouldn't be able to label the synthesis pass.
+    struct BudgetWarnings(Arc<Mutex<Vec<f32>>>);
+    impl harness_core::Hook for BudgetWarnings {
+        fn name(&self) -> &str {
+            "test-budget-warnings"
+        }
+        fn matches(&self, ev: &Event<'_>) -> bool {
+            matches!(ev, Event::BudgetWarning { .. })
+        }
+        fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+            if let Event::BudgetWarning { ratio } = ev {
+                self.0.lock().unwrap().push(*ratio);
+            }
+            HookOutcome::Allow
+        }
+    }
+    let warnings = Arc::new(Mutex::new(Vec::<f32>::new()));
+
     let mut model = MockModel::new();
     // 3 tool calls → fills the iteration budget (max_iters = 3)
     for _ in 0..3 {
@@ -417,6 +438,7 @@ async fn budget_exhausted_forces_final_synthesis_into_last_text() {
 
     let outcome = AgentLoop::new(model)
         .with_tool(Arc::new(ReadFile))
+        .with_hook(Arc::new(BudgetWarnings(warnings.clone())))
         .run_with_max_iters(task("force synthesis"), &mut world, 3)
         .await
         .unwrap();
@@ -438,6 +460,13 @@ async fn budget_exhausted_forces_final_synthesis_into_last_text() {
         }
         other => panic!("expected BudgetExhausted, got {other:?}"),
     }
+
+    let ws = warnings.lock().unwrap().clone();
+    assert_eq!(
+        ws,
+        vec![1.0_f32],
+        "BudgetWarning(ratio=1.0) must fire exactly once before forced synthesis"
+    );
 }
 
 // ============================================================
