@@ -639,3 +639,101 @@ async fn skill_registry_catalogue_is_readable_at_session_start() {
     let pos_b = cat.find("- beta:").unwrap();
     assert!(pos_a < pos_b, "catalogue should be alphabetical");
 }
+
+// ============================================================
+// 10. Long-term memory round-trip: session A writes a fact, session B
+//     recalls it via MemoryGuide and the model sees it in ctx.guides on
+//     its very first PreModel call.
+// ============================================================
+
+#[tokio::test]
+async fn long_term_memory_round_trips_across_sessions() {
+    use harness_context::FileMemory;
+    use harness_core::Memory;
+    use harness_loop::{MemoryGuide, MemoryWriter};
+
+    let (_td, _) = tmp_workspace();
+    let mem_path = std::env::temp_dir().join(format!(
+        "harness-mem-rt-{}-{}.jsonl",
+        std::process::id(),
+        TD_SEQ.fetch_add(1, Ordering::SeqCst)
+    ));
+    // Clean slate.
+    let _ = std::fs::remove_file(&mem_path);
+    let mem: Arc<dyn Memory> = Arc::new(FileMemory::open(&mem_path).unwrap());
+
+    // ─── Session A: produce an answer and let MemoryWriter persist it ───
+    let model_a = MockModel::new().script(MockResponse::text(
+        "User prefers dark roast coffee, no sugar.",
+    ));
+    let mut world_a = default_world(std::env::temp_dir());
+    let outcome_a = AgentLoop::new(model_a)
+        .with_hook(Arc::new(MemoryWriter::new(mem.clone()).with_source("test")))
+        .run_with_max_iters(task("what does the user like?"), &mut world_a, 3)
+        .await
+        .unwrap();
+    assert!(matches!(outcome_a, Outcome::Done { .. }));
+
+    // The writer spawns; give it a tick to land on disk before reading.
+    for _ in 0..20 {
+        if !mem.recall("coffee", 5).await.unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let recalled = mem.recall("coffee", 5).await.unwrap();
+    assert_eq!(recalled.len(), 1, "session A's answer should be on disk");
+
+    // ─── Session B: spy on PreModel ctx, ensure MemoryGuide injected ────
+    let seen_ctx_guides: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    struct GuideSnap(Arc<Mutex<Vec<String>>>);
+    impl harness_core::Hook for GuideSnap {
+        fn name(&self) -> &str {
+            "guide-snap"
+        }
+        fn matches(&self, ev: &Event<'_>) -> bool {
+            matches!(ev, Event::PreModel { .. })
+        }
+        fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+            if let Event::PreModel { ctx } = ev {
+                let snap = ctx
+                    .guides
+                    .iter()
+                    .filter_map(|b| match b {
+                        harness_core::Block::Text(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.0.lock().unwrap().push(snap);
+            }
+            HookOutcome::Allow
+        }
+    }
+
+    let model_b = MockModel::new().script(MockResponse::text("ok"));
+    let mut world_b = default_world(std::env::temp_dir());
+    let _ = AgentLoop::new(model_b)
+        .with_guide(Arc::new(MemoryGuide::new(mem.clone()).with_top_k(5)))
+        .with_hook(Arc::new(GuideSnap(seen_ctx_guides.clone())))
+        .run_with_max_iters(
+            task("remind me what the user likes regarding coffee"),
+            &mut world_b,
+            3,
+        )
+        .await
+        .unwrap();
+
+    let snaps = seen_ctx_guides.lock().unwrap().clone();
+    assert!(
+        !snaps.is_empty(),
+        "PreModel should have fired at least once"
+    );
+    let first = &snaps[0];
+    assert!(
+        first.contains("dark roast"),
+        "first PreModel ctx.guides must contain the recalled memory; got:\n{first}"
+    );
+
+    let _ = std::fs::remove_file(&mem_path);
+}
