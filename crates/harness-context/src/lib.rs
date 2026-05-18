@@ -4,8 +4,10 @@
 //! traits; this crate provides the concrete implementations the framework
 //! actually runs on.
 
+pub mod memory_file;
 pub mod runtime;
 
+pub use memory_file::*;
 pub use runtime::*;
 
 use harness_core::{Action, Block, Context, Task, ToolResult, Turn, TurnRole, World};

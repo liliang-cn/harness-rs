@@ -8,11 +8,13 @@
 //!   applied directly to the world, blocking signals are fed back to the model.
 //! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
 
+pub mod memory_layer;
 pub mod profile_guide;
 pub mod registry;
 pub mod replay;
 pub mod subagent;
 
+pub use memory_layer::*;
 pub use profile_guide::*;
 pub use registry::*;
 pub use replay::*;
