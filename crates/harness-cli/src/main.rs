@@ -299,23 +299,23 @@ fn scaffold_new_project(
         format!(
             r#"
 [patch.crates-io]
-harness            = {{ path = "{root}/crates/harness" }}
-harness-core       = {{ path = "{root}/crates/harness-core" }}
-harness-loop       = {{ path = "{root}/crates/harness-loop" }}
-harness-models     = {{ path = "{root}/crates/harness-models" }}
-harness-tools-fs   = {{ path = "{root}/crates/harness-tools-fs" }}
-harness-tools-shell= {{ path = "{root}/crates/harness-tools-shell" }}
-harness-context    = {{ path = "{root}/crates/harness-context" }}
-harness-skills     = {{ path = "{root}/crates/harness-skills" }}
-harness-macros     = {{ path = "{root}/crates/harness-macros" }}
-harness-hooks      = {{ path = "{root}/crates/harness-hooks" }}
-harness-compactor  = {{ path = "{root}/crates/harness-compactor" }}
-harness-blueprint  = {{ path = "{root}/crates/harness-blueprint" }}
-harness-sandbox    = {{ path = "{root}/crates/harness-sandbox" }}
-harness-sensors-rust   = {{ path = "{root}/crates/harness-sensors-rust" }}
-harness-sensors-common = {{ path = "{root}/crates/harness-sensors-common" }}
-harness-templates  = {{ path = "{root}/crates/harness-templates" }}
-harness-mcp        = {{ path = "{root}/crates/harness-mcp" }}
+harness-rs                = {{ path = "{root}/crates/harness" }}
+harness-rs-core           = {{ path = "{root}/crates/harness-core" }}
+harness-rs-loop           = {{ path = "{root}/crates/harness-loop" }}
+harness-rs-models         = {{ path = "{root}/crates/harness-models" }}
+harness-rs-tools-fs       = {{ path = "{root}/crates/harness-tools-fs" }}
+harness-rs-tools-shell    = {{ path = "{root}/crates/harness-tools-shell" }}
+harness-rs-context        = {{ path = "{root}/crates/harness-context" }}
+harness-rs-skills         = {{ path = "{root}/crates/harness-skills" }}
+harness-rs-macros         = {{ path = "{root}/crates/harness-macros" }}
+harness-rs-hooks          = {{ path = "{root}/crates/harness-hooks" }}
+harness-rs-compactor      = {{ path = "{root}/crates/harness-compactor" }}
+harness-rs-blueprint      = {{ path = "{root}/crates/harness-blueprint" }}
+harness-rs-sandbox        = {{ path = "{root}/crates/harness-sandbox" }}
+harness-rs-sensors-rust   = {{ path = "{root}/crates/harness-sensors-rust" }}
+harness-rs-sensors-common = {{ path = "{root}/crates/harness-sensors-common" }}
+harness-rs-templates      = {{ path = "{root}/crates/harness-templates" }}
+harness-rs-mcp            = {{ path = "{root}/crates/harness-mcp" }}
 "#,
             root = root.display()
         )
@@ -335,25 +335,32 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-harness        = "0.0.1"
-harness-core   = "0.0.1"
-harness-loop   = "0.0.1"
-harness-models = "0.0.1"
-harness-tools-fs = "0.0.1"
-harness-context = "0.0.1"
-tokio          = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
-anyhow         = "1"
-serde_json     = "1"
+harness-rs           = "0.0.3"
+harness-rs-core      = "0.0.3"
+harness-rs-loop      = "0.0.3"
+harness-rs-models    = "0.0.3"
+harness-rs-tools-fs  = "0.0.3"
+harness-rs-context   = "0.0.3"
+tokio                = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
+anyhow               = "1"
+serde_json           = "1"
 {patch_section}"#
     );
     std::fs::write(dir.join("Cargo.toml"), cargo_toml)?;
 
-    let main_rs = r###"//! Minimal harness agent. Reads a file the model asks for, then summarises.
+    let main_rs = r###"//! Minimal harness-rs agent. Lists the current directory, then summarises.
+//!
+//! Run:
+//!   DEEPSEEK_API_KEY=sk-…              cargo run    # default DeepSeek
+//!   HARNESS_BASE_URL=https://… \
+//!   HARNESS_MODEL=gpt-5.4 \
+//!   HARNESS_API_KEY=sk-…                cargo run    # any OpenAI-compatible
+//!   HARNESS_PROGRESS=1 cargo run                     # live stderr trace
 
 use harness::prelude::*;
 use harness_context::default_world;
-use harness_loop::AgentLoop;
-use harness_models::{OpenAiCompat, providers};
+use harness_loop::{AgentLoop, LiveProgressHook};
+use harness_models::{providers::DEEPSEEK, OpenAiCompat};
 use harness_tools_fs::{ListDir, ReadFile};
 use std::sync::Arc;
 
@@ -386,10 +393,26 @@ async fn reverse(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let key = std::env::var("DEEPSEEK_API_KEY")
-        .map_err(|_| anyhow::anyhow!("set DEEPSEEK_API_KEY first"))?;
-    let model = OpenAiCompat::with_key(providers::DEEPSEEK, "deepseek-v4-flash", key);
+    // Env-var-driven endpoint config (works with any OpenAI-compatible API).
+    let key = std::env::var("HARNESS_API_KEY")
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+        .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY or DEEPSEEK_API_KEY"))?;
+    let base_url =
+        std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| DEEPSEEK.to_string());
+    let model_id =
+        std::env::var("HARNESS_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
+
+    let model = OpenAiCompat::with_key(base_url, model_id, key);
     let mut world = default_world(".");
+
+    let mut loop_ = AgentLoop::new(model)
+        .with_tool(Arc::new(ListDir))
+        .with_tool(Arc::new(ReadFile));
+
+    // Optional: live progress to stderr.
+    if std::env::var("HARNESS_PROGRESS").is_ok() {
+        loop_ = loop_.with_hook(Arc::new(LiveProgressHook::new()));
+    }
 
     let task = Task {
         description: "List the top-level files here, then describe what you find in one sentence.".into(),
@@ -397,12 +420,7 @@ async fn main() -> anyhow::Result<()> {
         deadline: None,
     };
 
-    let outcome = AgentLoop::new(model)
-        .with_tool(Arc::new(ListDir))
-        .with_tool(Arc::new(ReadFile))
-        .run_with_max_iters(task, &mut world, 6)
-        .await?;
-
+    let outcome = loop_.run_with_max_iters(task, &mut world, 6).await?;
     println!("{outcome:?}");
     Ok(())
 }
