@@ -335,12 +335,12 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-harness-rs           = "0.0.3"
-harness-rs-core      = "0.0.3"
-harness-rs-loop      = "0.0.3"
-harness-rs-models    = "0.0.3"
-harness-rs-tools-fs  = "0.0.3"
-harness-rs-context   = "0.0.3"
+harness-rs           = "0.0.4"
+harness-rs-core      = "0.0.4"
+harness-rs-loop      = "0.0.4"
+harness-rs-models    = "0.0.4"
+harness-rs-tools-fs  = "0.0.4"
+harness-rs-context   = "0.0.4"
 tokio                = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 anyhow               = "1"
 serde_json           = "1"
