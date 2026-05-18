@@ -19,10 +19,12 @@ architectural rationale.
 | **Guides** | feedforward Markdown context, scoped by task | `#[guide]` + `harness-templates` |
 | **Hooks** | 27-event lifecycle bus with deny/inject/mutate | `harness-hooks` + `#[hook]` |
 | **Compactor** | 5-stage progressive compaction (auto-triggered by budget) | `harness-compactor` |
-| **Loop** | ReAct + tool-call dispatch + sensor feedback + auto-fix | `harness-loop` |
+| **Loop** | ReAct + tool-call dispatch + sensor feedback + auto-fix + forced final-synthesis on budget exhaustion | `harness-loop` |
+| **Memory** | Open `Memory` trait + JSONL `FileMemory` + `MemoryGuide` (recall) + `MemorySynthesizer` (cheap-model distillation into atomic facts) | `harness-core`, `harness-context`, `harness-loop` |
+| **Observability** | `SessionRecorder` JSONL traces, `LiveProgressHook` live stderr stream, `harness trace --verbose` | `harness-loop` + `harness-cli` |
 | **Blueprint** | deterministic + agent state machine with retry/fallback | `harness-blueprint` |
 | **Sandbox** | git worktree isolation (container/VM in v0.2) | `harness-sandbox` |
-| **CLI** | `harness skills validate / list / export`, `harness new` | `harness-cli` |
+| **CLI** | `harness skills validate / list / export`, `harness new`, `harness trace` | `harness-cli` |
 
 ## 60-second tour
 
@@ -130,11 +132,68 @@ $ harness new my-agent
   └─ src/main.rs   # minimal agent with one tool and one skill
 ```
 
+### 6. Open long-term memory (your harness, your memory)
+
+Persist durable facts across sessions, recall them automatically on the
+next run, all on the user's disk — no provider-side state.
+
+```rust
+use harness_context::FileMemory;
+use harness_loop::{MemoryGuide, MemorySynthesizer};
+use std::sync::Arc;
+
+let mem: Arc<dyn harness::Memory> =
+    Arc::new(FileMemory::open("~/.my-agent/memory.jsonl")?);
+
+// Cheap "synth" model distils each session into 1-3 atomic facts.
+let synth_model: Arc<dyn harness::Model> = Arc::new(OpenAiCompat::with_key(
+    DEEPSEEK, "deepseek-v4-flash", key.clone(),
+));
+let synth = Arc::new(
+    MemorySynthesizer::new(mem.clone(), synth_model)
+        .with_source("my-agent")
+        .with_max_facts(3),
+);
+
+let loop_ = AgentLoop::new(model)
+    .with_guide(Arc::new(MemoryGuide::new(mem.clone()).with_top_k(5)))
+    .with_hook(synth.clone() as Arc<dyn harness::Hook>);
+
+// ... run sessions ...
+
+synth.flush_pending().await; // before main() exits
+```
+
+What you get:
+- `MemoryGuide` calls `recall()` with the current task description on every
+  session start and injects the top-K hits into the model's system prompt.
+- `MemorySynthesizer` asks the cheap synth model to extract durable facts
+  from each completed session, parses them as JSON, persists each as an
+  independent `MemoryEntry`. Markdown fences tolerated; unparseable output
+  falls back to a `"synth-raw"` entry rather than silent drop.
+- File format is plain JSONL — `cat`, `grep`, version-controllable,
+  transferable. Swap to a vector store by implementing the `Memory` trait;
+  nothing else in the framework needs to change.
+
+The `examples/personal-assistant` and `examples/investor-bot` binaries
+expose this via `--memory <path>` + `--synth-model <id>` flags.
+
+### 7. Observe what the agent is doing
+
+```bash
+# Live stderr stream of every model call, tool call, and tool result:
+HARNESS_PROGRESS=1 cargo run -p investor-bot -- "..."
+
+# Or with a recorded session log + post-mortem inspection:
+cargo run -p investor-bot -- --record /tmp/run.jsonl "..."
+harness trace /tmp/run.jsonl --verbose
+```
+
 ## Testing & verification
 
 ```
 $ cargo test --workspace
-... 123 tests passing
+... 133 tests passing
 ```
 
 Three layers of verification:
@@ -164,14 +223,22 @@ of increasing surface area:
 
 ## Status
 
-- **v0.0.1** — ✅ initial publish (15 of 18 crates).
-- **v0.0.2** — ✅ shipped. `UserProfile` + `ProfileGuide`, optional
-  `harness-rs-daemon` scheduler, retry/backoff in model adapters, MCP server
-  with resources + prompts, session record/replay, multi-engine search,
-  `#[non_exhaustive]` sweep, security gates on `FixPatch::RunCommand` +
-  `shell_read`. See [CHANGELOG](CHANGELOG.md).
+- **v0.0.1** — initial publish (15 of 18 crates).
+- **v0.0.2** — `UserProfile` + `ProfileGuide`, optional `harness-rs-daemon`
+  scheduler, retry/backoff in model adapters, MCP server with resources +
+  prompts, session record/replay, multi-engine search, `#[non_exhaustive]`
+  sweep, security gates on `FixPatch::RunCommand` + `shell_read`. (Shipped
+  in stages; superseded by 0.0.3.)
+- **v0.0.3** — Re-publish of the 0.0.2 feature set as a single consistent
+  snapshot. No new features.
+- **v0.0.4** — ✅ **current**. Observability (`LiveProgressHook`,
+  `harness trace --verbose`), forced final-synthesis on budget exhaustion,
+  and **open long-term memory** (`Memory` trait, `FileMemory` JSONL,
+  `MemoryGuide`, `MemorySynthesizer` cheap-model distillation). Examples
+  ship `--memory` / `--synth-model` / `--progress` / `--record` /
+  `HARNESS_*` env vars. See [CHANGELOG](CHANGELOG.md).
 - **v0.1+** — `ContainerSandbox` / `VmSandbox` / first-class blueprint
-  `Node::Agent` are on the road.
+  `Node::Agent` / semantic memory backends are on the road.
 
 ## License
 
