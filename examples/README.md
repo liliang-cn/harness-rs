@@ -13,11 +13,20 @@ real use cases. Each is a standalone Cargo binary in its own subdirectory.
 
 ## Running
 
-All live-LLM examples read `DEEPSEEK_API_KEY` from the environment. Get one at
-<https://platform.deepseek.com/>.
+The default endpoint is DeepSeek — set `DEEPSEEK_API_KEY` (get one at
+<https://platform.deepseek.com/>). To drive any other OpenAI-compatible
+endpoint (Groq, Together, OpenAI itself, a corporate proxy, a local
+Ollama, …), set `HARNESS_BASE_URL` + `HARNESS_MODEL` + `HARNESS_API_KEY`
+— `personal-assistant` and `investor-bot` will pick those up automatically:
 
 ```bash
+# DeepSeek default
 export DEEPSEEK_API_KEY=sk-...
+
+# Or: any OpenAI-compatible endpoint
+export HARNESS_BASE_URL=https://api.example.com/v1
+export HARNESS_MODEL=gpt-5.4
+export HARNESS_API_KEY=sk-...
 
 # Smallest test that the wiring works.
 cargo run -p deepseek-hello
@@ -26,16 +35,31 @@ cargo run -p deepseek-hello
 cargo run -p crate-keeper
 
 # Scheduling assistant — REPL mode.
-cargo run -p personal-assistant -- repl
+cargo run -p personal-assistant -- --repl
 
 # Scheduling assistant — single brief.
-cargo run -p personal-assistant -- brief
+cargo run -p personal-assistant -- --brief
 
 # Investor research bot — one-shot research task.
 cargo run -p investor-bot -- "What is SpaceX's current valuation and when might it IPO?"
 
 # Investor research bot — REPL mode.
-cargo run -p investor-bot -- repl
+cargo run -p investor-bot -- --repl
+```
+
+### Observability flags (both examples)
+
+```bash
+# Stream model calls + tool calls + tool results to stderr while it runs:
+cargo run -p investor-bot -- --progress "..."
+# or via env:
+HARNESS_PROGRESS=1 cargo run -p investor-bot -- "..."
+
+# Record a JSONL trace for replay/debugging (investor-bot only):
+cargo run -p investor-bot -- --record /tmp/run.jsonl "..."
+
+# Pretty-print the trace afterwards with errors / model text / args visible:
+harness trace /tmp/run.jsonl --verbose
 ```
 
 ## What each example demonstrates
