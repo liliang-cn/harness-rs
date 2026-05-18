@@ -813,8 +813,13 @@ async fn run_once(
                 println!("{t}");
             }
         }
-        Outcome::BudgetExhausted { iters, .. } => {
+        Outcome::BudgetExhausted {
+            iters, last_text, ..
+        } => {
             eprintln!("✗ budget exhausted after {iters} iteration(s)");
+            if let Some(t) = last_text {
+                eprintln!("\n— forced-synthesis answer (tool-less) —\n{t}");
+            }
             std::process::exit(2);
         }
     }
@@ -886,8 +891,13 @@ async fn run_repl(
                 history.push(("user".into(), input.to_string()));
                 history.push(("asst".into(), response));
             }
-            Ok(Outcome::BudgetExhausted { iters, .. }) => {
+            Ok(Outcome::BudgetExhausted {
+                iters, last_text, ..
+            }) => {
                 eprintln!("\nasst> ✗ ran out of budget after {iters} iterations.");
+                if let Some(t) = last_text {
+                    println!("\nasst (forced-synthesis)> {t}");
+                }
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),
         }
