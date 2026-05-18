@@ -625,6 +625,11 @@ struct Cli {
     /// while the agent runs. Also enabled via `HARNESS_PROGRESS=1`.
     #[arg(long)]
     progress: bool,
+
+    /// Record a JSONL session log to this path for offline replay /
+    /// post-mortem analysis via `harness trace --verbose`.
+    #[arg(long)]
+    record: Option<PathBuf>,
 }
 
 /// App-side policy for "where does the user profile come from?"
@@ -745,6 +750,9 @@ async fn main() -> anyhow::Result<()> {
     if progress {
         println!("  progress:  live (stderr)");
     }
+    if let Some(p) = &cli.record {
+        println!("  recording: {}", p.display());
+    }
     println!();
 
     if cli.repl {
@@ -756,6 +764,7 @@ async fn main() -> anyhow::Result<()> {
             profile,
             cli.max_iters,
             progress,
+            cli.record,
         )
         .await
     } else {
@@ -773,6 +782,7 @@ async fn main() -> anyhow::Result<()> {
             cli.max_iters,
             user_request,
             progress,
+            cli.record,
         )
         .await
     }
@@ -788,6 +798,7 @@ async fn run_once(
     max_iters: u32,
     user_request: String,
     progress: bool,
+    record: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key);
     let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
@@ -796,6 +807,11 @@ async fn run_once(
     }
     if progress {
         loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
+    }
+    if let Some(p) = record {
+        let rec =
+            harness_loop::SessionRecorder::new(&p).map_err(|e| anyhow::anyhow!("recorder: {e}"))?;
+        loop_ = loop_.with_hook(Arc::new(rec));
     }
     let mut world = with_profile(".", profile);
     let task = Task {
@@ -826,6 +842,7 @@ async fn run_once(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_repl(
     base_url: &str,
     model_id: &str,
@@ -834,6 +851,7 @@ async fn run_repl(
     profile: UserProfile,
     max_iters: u32,
     progress: bool,
+    record: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
@@ -875,6 +893,11 @@ async fn run_repl(
         }
         if progress {
             loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
+        }
+        if let Some(p) = &record {
+            let rec = harness_loop::SessionRecorder::new(p)
+                .map_err(|e| anyhow::anyhow!("recorder: {e}"))?;
+            loop_ = loop_.with_hook(Arc::new(rec));
         }
         let mut world = with_profile(".", profile.clone());
 
