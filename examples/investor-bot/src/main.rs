@@ -742,6 +742,11 @@ struct Cli {
     /// Record a session log for replay/debugging.
     #[arg(long)]
     record: Option<PathBuf>,
+
+    /// Stream live progress (model calls, tool calls, tool results) to stderr
+    /// while the agent runs. Also enabled via `HARNESS_PROGRESS=1`.
+    #[arg(long)]
+    progress: bool,
 }
 
 fn build_profile(cli: &Cli) -> UserProfile {
@@ -810,14 +815,19 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let api_key =
-        std::env::var("DEEPSEEK_API_KEY").map_err(|_| anyhow::anyhow!("set DEEPSEEK_API_KEY"))?;
-
-    let model_id = match cli.tier.as_str() {
+    // Env-var driven overrides — fall back to DeepSeek defaults.
+    let api_key = std::env::var("HARNESS_API_KEY")
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+        .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY or DEEPSEEK_API_KEY"))?;
+    let base_url = std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| DEEPSEEK.to_string());
+    let default_model_id = match cli.tier.as_str() {
         "flash" => "deepseek-v4-flash",
         _ => "deepseek-v4-pro",
     };
-    let info_model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key.clone());
+    let model_id_owned =
+        std::env::var("HARNESS_MODEL").unwrap_or_else(|_| default_model_id.to_string());
+    let model_id: &str = &model_id_owned;
+    let info_model = OpenAiCompat::with_key(base_url.clone(), model_id, api_key.clone());
     let info = info_model.info();
     drop(info_model);
 
@@ -838,12 +848,30 @@ async fn main() -> anyhow::Result<()> {
     if let Some(p) = &cli.record {
         println!("  recording: {}", p.display());
     }
+    let progress = cli.progress
+        || std::env::var("HARNESS_PROGRESS")
+            .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(false);
+    if progress {
+        println!("  progress:  live (stderr)");
+    }
     println!();
 
     if cli.repl {
-        run_repl(model_id, api_key, tools, profile, cli.max_iters, cli.record).await
+        run_repl(
+            &base_url,
+            model_id,
+            api_key,
+            tools,
+            profile,
+            cli.max_iters,
+            cli.record,
+            progress,
+        )
+        .await
     } else {
         run_once(
+            &base_url,
             model_id,
             api_key,
             tools,
@@ -851,12 +879,15 @@ async fn main() -> anyhow::Result<()> {
             cli.max_iters,
             cli.task.join(" "),
             cli.record,
+            progress,
         )
         .await
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_once(
+    base_url: &str,
     model_id: &str,
     api_key: String,
     tools: Vec<Arc<dyn Tool>>,
@@ -864,9 +895,13 @@ async fn run_once(
     max_iters: u32,
     user_request: String,
     record: Option<PathBuf>,
+    progress: bool,
 ) -> anyhow::Result<()> {
-    let model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key);
+    let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key);
     let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
+    if progress {
+        loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
+    }
     for t in tools {
         loop_ = loop_.with_tool(t);
     }
@@ -916,13 +951,16 @@ async fn run_once(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_repl(
+    base_url: &str,
     model_id: &str,
     api_key: String,
     tools: Vec<Arc<dyn Tool>>,
     profile: UserProfile,
     max_iters: u32,
     record: Option<PathBuf>,
+    progress: bool,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
@@ -964,10 +1002,13 @@ async fn run_repl(
             })
             .collect();
 
-        let model = OpenAiCompat::with_key(DEEPSEEK, model_id, api_key.clone());
+        let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key.clone());
         let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
         for t in tools.iter().cloned() {
             loop_ = loop_.with_tool(t);
+        }
+        if progress {
+            loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
         }
         if let Some(p) = &record {
             let rec = harness_loop::SessionRecorder::new(p)

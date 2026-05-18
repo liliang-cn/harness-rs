@@ -44,6 +44,10 @@ enum Cmd {
         /// Just print the SessionStats summary; skip per-event lines.
         #[arg(long)]
         summary: bool,
+        /// Multi-line verbose format: include model text, full tool args,
+        /// tool result preview, and failure reasons (errors / hint / message).
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Run an MCP server over stdio. Exposes the framework's built-in tool
     /// registry (read_file, write_file, edit_file, list_dir, shell_read) to
@@ -185,7 +189,11 @@ async fn main() -> anyhow::Result<()> {
             workspace,
             local,
         } => scaffold_new_project(name, path, workspace, local),
-        Cmd::Trace { file, summary } => print_session_trace(file, summary),
+        Cmd::Trace {
+            file,
+            summary,
+            verbose,
+        } => print_session_trace(file, summary, verbose),
         Cmd::Mcp {
             cmd: McpCmd::Serve { workspace, skills },
         } => run_mcp_server(workspace, skills).await,
@@ -220,14 +228,19 @@ async fn run_mcp_server(workspace: Option<PathBuf>, skills: Option<PathBuf>) -> 
     Ok(())
 }
 
-fn print_session_trace(file: PathBuf, summary_only: bool) -> anyhow::Result<()> {
+fn print_session_trace(file: PathBuf, summary_only: bool, verbose: bool) -> anyhow::Result<()> {
     let events = harness_loop::read_session(&file)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
     let stats = harness_loop::SessionStats::from(&events);
 
     if !summary_only {
         for e in &events {
-            println!("{}", harness_loop::format_event_short(e));
+            let formatted = if verbose {
+                harness_loop::format_event_verbose(e)
+            } else {
+                harness_loop::format_event_short(e)
+            };
+            println!("{formatted}");
         }
         println!();
     }
