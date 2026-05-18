@@ -393,6 +393,54 @@ async fn budget_exhausted_when_model_loops_on_tool_calls() {
 }
 
 // ============================================================
+// 7b. Forced final-synthesis: when the model would otherwise burn the
+//     budget without ever emitting text, the loop makes ONE extra
+//     tool-less call so the caller gets a written conclusion in
+//     `BudgetExhausted::last_text`.
+// ============================================================
+
+#[tokio::test]
+async fn budget_exhausted_forces_final_synthesis_into_last_text() {
+    let (_td, mut world) = tmp_workspace();
+    std::fs::write(world.repo.root.join("a.txt"), "x").unwrap();
+
+    let mut model = MockModel::new();
+    // 3 tool calls → fills the iteration budget (max_iters = 3)
+    for _ in 0..3 {
+        model = model.script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "a.txt"}),
+        ));
+    }
+    // The synthesis call (4th model invocation) gets a text response.
+    model = model.script(MockResponse::text("best-effort conclusion: file said 'x'"));
+
+    let outcome = AgentLoop::new(model)
+        .with_tool(Arc::new(ReadFile))
+        .run_with_max_iters(task("force synthesis"), &mut world, 3)
+        .await
+        .unwrap();
+
+    match outcome {
+        Outcome::BudgetExhausted {
+            iters,
+            last_text,
+            tools_called,
+            ..
+        } => {
+            assert_eq!(iters, 3);
+            assert_eq!(tools_called, 3);
+            assert_eq!(
+                last_text.as_deref(),
+                Some("best-effort conclusion: file said 'x'"),
+                "the synthesis call's text must land in last_text",
+            );
+        }
+        other => panic!("expected BudgetExhausted, got {other:?}"),
+    }
+}
+
+// ============================================================
 // 8. Auto-fix patch (ReplaceFile) is actually applied
 // ============================================================
 
