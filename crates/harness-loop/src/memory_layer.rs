@@ -28,7 +28,7 @@
 use async_trait::async_trait;
 use harness_core::{
     Block, Context, Event, Execution, Guide, GuideError, GuideId, GuideScope, Hook, HookOutcome,
-    Memory, MemoryEntry, World,
+    Memory, MemoryEntry, Model, Task, Turn, TurnRole, World,
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -174,6 +174,240 @@ impl Hook for MemoryWriter {
     }
 }
 
+/// Smarter alternative to [`MemoryWriter`] — distil the session's assistant
+/// turns into 1..=`max_facts` atomic durable facts using a cheap
+/// "synthesizer" model, instead of persisting the verbatim final answer.
+///
+/// Wire either `MemoryWriter` **or** `MemorySynthesizer`, not both —
+/// `MemorySynthesizer` is a superset of the writer's behaviour with the
+/// extra distillation step.
+///
+/// Behaviour:
+/// - On `PostModel`, appends `out.text` (when present, non-empty) to an
+///   internal buffer.
+/// - On `TaskCompleted`, `tokio::spawn`s a synthesis task: calls
+///   `synth_model.complete()` with a fixed prompt that asks for a JSON
+///   array of `{content, tags}` objects, parses the response, and writes
+///   each one via `Memory::write`.
+/// - Model errors / parse failures fall back to saving the raw response
+///   as a single entry tagged `"synth-raw"` so the session's information
+///   isn't lost entirely.
+/// - On `BudgetExhausted` (no `TaskCompleted` fires), nothing is written.
+///
+/// The synth model should be cheap (`deepseek-v4-flash`, `gpt-5-nano`, etc.).
+/// Constructed independently from the main model so you can use a small
+/// summariser even when the reasoning model is large.
+pub struct MemorySynthesizer {
+    memory: Arc<dyn Memory>,
+    synth_model: Arc<dyn Model>,
+    transcripts: Mutex<Vec<String>>,
+    source: String,
+    base_tags: Vec<String>,
+    max_facts: usize,
+    // JoinHandles of spawned synthesis tasks. The agent loop's owner can
+    // `await flush_pending()` before exiting to guarantee that synth
+    // completes before the process tears down its tokio runtime.
+    pending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl MemorySynthesizer {
+    /// Construct a synthesizer that uses `synth_model` to distil the
+    /// session into at most 3 facts.
+    pub fn new(memory: Arc<dyn Memory>, synth_model: Arc<dyn Model>) -> Self {
+        Self {
+            memory,
+            synth_model,
+            transcripts: Mutex::new(Vec::new()),
+            source: "session".into(),
+            base_tags: Vec::new(),
+            max_facts: 3,
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Await all background synthesis tasks that have been kicked off so
+    /// far. Call this before your process exits if you want to guarantee
+    /// the last session's memory is on disk — otherwise the tokio runtime
+    /// may be dropped while the spawn is mid-flight.
+    pub async fn flush_pending(&self) {
+        let handles: Vec<tokio::task::JoinHandle<()>> = match self.pending.lock() {
+            Ok(mut g) => std::mem::take(&mut *g),
+            Err(_) => return,
+        };
+        for h in handles {
+            let _ = h.await;
+        }
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = source.into();
+        self
+    }
+
+    pub fn with_base_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.base_tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Cap how many facts the synthesizer is allowed to emit. Default 3.
+    pub fn with_max_facts(mut self, n: usize) -> Self {
+        self.max_facts = n.max(1);
+        self
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SynthFact {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// Best-effort JSON-array extractor: tolerates markdown code fences and
+/// leading/trailing prose around the JSON body.
+fn extract_facts(raw: &str) -> Option<Vec<SynthFact>> {
+    // Strip ```json ... ``` or ``` ... ``` fences if present.
+    let stripped = raw.trim();
+    let body = if let Some(rest) = stripped.strip_prefix("```json") {
+        rest.trim_start_matches('\n')
+            .rsplit_once("```")
+            .map(|(b, _)| b)
+            .unwrap_or(rest)
+    } else if let Some(rest) = stripped.strip_prefix("```") {
+        rest.trim_start_matches('\n')
+            .rsplit_once("```")
+            .map(|(b, _)| b)
+            .unwrap_or(rest)
+    } else {
+        stripped
+    };
+    // Find first '[' and last ']' — JSON array.
+    let start = body.find('[')?;
+    let end = body.rfind(']')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str::<Vec<SynthFact>>(&body[start..=end]).ok()
+}
+
+impl Hook for MemorySynthesizer {
+    fn name(&self) -> &str {
+        "memory-synthesizer"
+    }
+    fn matches(&self, ev: &Event<'_>) -> bool {
+        matches!(ev, Event::PostModel { .. } | Event::TaskCompleted)
+    }
+    fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+        match ev {
+            Event::PostModel { out } => {
+                if let Some(text) = &out.text
+                    && !text.trim().is_empty()
+                    && let Ok(mut buf) = self.transcripts.lock()
+                {
+                    buf.push(text.clone());
+                }
+            }
+            Event::TaskCompleted => {
+                let transcript = match self.transcripts.lock() {
+                    Ok(mut g) => std::mem::take(&mut *g).join("\n\n---\n\n"),
+                    Err(_) => return HookOutcome::Allow,
+                };
+                if transcript.trim().is_empty() {
+                    return HookOutcome::Allow;
+                }
+                let mem = self.memory.clone();
+                let model = self.synth_model.clone();
+                let source = self.source.clone();
+                let base_tags = self.base_tags.clone();
+                let max_facts = self.max_facts;
+                let handle = tokio::spawn(async move {
+                    distil_and_write(mem, model, source, base_tags, max_facts, transcript).await;
+                });
+                if let Ok(mut g) = self.pending.lock() {
+                    g.push(handle);
+                }
+            }
+            _ => {}
+        }
+        HookOutcome::Allow
+    }
+}
+
+async fn distil_and_write(
+    memory: Arc<dyn Memory>,
+    model: Arc<dyn Model>,
+    source: String,
+    base_tags: Vec<String>,
+    max_facts: usize,
+    transcript: String,
+) {
+    let prompt = format!(
+        "Below is the assistant's turns from a completed agent session. \
+         Extract 1 to {max_facts} DURABLE FACTS worth remembering for future sessions \
+         (user preferences, decisions made, key findings, learned constraints — NOT \
+         transient details like timestamps or one-off answers). \
+         \n\nReturn ONLY a JSON array (no prose, no markdown fences) where each item is \
+         {{\"content\": \"<one durable fact, 1-2 sentences>\", \"tags\": [\"<keyword>\", ...]}}. \
+         Use 2-5 lowercase keyword tags per fact for retrieval. \
+         If the session produced nothing durable, return [].\
+         \n\n--- SESSION TRANSCRIPT ---\n{transcript}\n--- END TRANSCRIPT ---"
+    );
+
+    let mut ctx = Context::new(Task {
+        description: prompt.clone(),
+        source: None,
+        deadline: None,
+    });
+    ctx.history.push(Turn {
+        role: TurnRole::User,
+        blocks: vec![Block::Text(prompt)],
+    });
+
+    let out = match model.complete(&ctx).await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(error = %e, "memory synth model call failed; nothing persisted");
+            return;
+        }
+    };
+    let raw = out.text.unwrap_or_default();
+
+    let mut wrote_any = false;
+    if let Some(facts) = extract_facts(&raw) {
+        for f in facts.into_iter().take(max_facts) {
+            let content = f.content.trim().to_string();
+            if content.is_empty() {
+                continue;
+            }
+            let mut tags = base_tags.clone();
+            tags.extend(f.tags);
+            let entry = MemoryEntry::new(content)
+                .with_source(source.clone())
+                .with_tags(tags);
+            if let Err(e) = memory.write(entry).await {
+                tracing::warn!(error = %e, "memory synth write failed");
+            } else {
+                wrote_any = true;
+            }
+        }
+    }
+
+    if !wrote_any && !raw.trim().is_empty() {
+        // Fallback: model returned something but we couldn't parse it.
+        // Persist verbatim with a "synth-raw" tag so the operator can
+        // grep it later, rather than silently dropping the session.
+        let mut tags = base_tags;
+        tags.push("synth-raw".into());
+        let entry = MemoryEntry::new(raw.trim().to_string())
+            .with_source(source)
+            .with_tags(tags);
+        if let Err(e) = memory.write(entry).await {
+            tracing::warn!(error = %e, "memory synth-raw write failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +498,124 @@ mod tests {
         // No TaskCompleted ⇒ nothing should be written.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert!(mem.store.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn synthesizer_parses_clean_json_and_writes_atomic_facts() {
+        use harness_models::{MockModel, MockResponse};
+
+        let mem = Arc::new(VecMemory::default());
+        let synth: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text(
+            r#"[
+              {"content": "user prefers dark roast coffee, no sugar", "tags": ["coffee", "preferences"]},
+              {"content": "user lives in Beijing (Asia/Shanghai tz)", "tags": ["location", "timezone"]}
+            ]"#,
+        )));
+        let s = MemorySynthesizer::new(mem.clone(), synth).with_source("test");
+        let mut world = harness_context::default_world(std::env::temp_dir().join(format!(
+            "harness-ms-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        )));
+
+        let out_a = ModelOutput {
+            text: Some("I'll remember your coffee preference.".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            stop_reason: StopReason::ToolUse,
+            reasoning: None,
+        };
+        let out_b = ModelOutput {
+            text: Some("Setting Beijing as your timezone.".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            stop_reason: StopReason::EndTurn,
+            reasoning: None,
+        };
+        let _ = s.fire(&Event::PostModel { out: &out_a }, &mut world);
+        let _ = s.fire(&Event::PostModel { out: &out_b }, &mut world);
+        let _ = s.fire(&Event::TaskCompleted, &mut world);
+
+        for _ in 0..50 {
+            if mem.store.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let stored = mem.store.lock().unwrap().clone();
+        assert_eq!(stored.len(), 2, "expected 2 atomic facts, got {stored:#?}");
+        assert!(stored.iter().any(|e| e.content.contains("dark roast")));
+        assert!(stored.iter().any(|e| e.content.contains("Beijing")));
+        let coffee = stored
+            .iter()
+            .find(|e| e.content.contains("dark roast"))
+            .unwrap();
+        assert!(coffee.tags.contains(&"coffee".to_string()));
+        assert_eq!(coffee.source.as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn synthesizer_strips_markdown_fences_around_json() {
+        use harness_models::{MockModel, MockResponse};
+
+        let mem = Arc::new(VecMemory::default());
+        let synth: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text(
+            "Here are the facts:\n```json\n[{\"content\":\"fact one\",\"tags\":[\"x\"]}]\n```\n",
+        )));
+        let s = MemorySynthesizer::new(mem.clone(), synth);
+        let mut world = harness_context::default_world(std::env::temp_dir());
+
+        let out = ModelOutput {
+            text: Some("some chat".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            stop_reason: StopReason::EndTurn,
+            reasoning: None,
+        };
+        let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
+        let _ = s.fire(&Event::TaskCompleted, &mut world);
+
+        for _ in 0..50 {
+            if !mem.store.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let stored = mem.store.lock().unwrap().clone();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].content, "fact one");
+    }
+
+    #[tokio::test]
+    async fn synthesizer_falls_back_to_synth_raw_when_json_unparseable() {
+        use harness_models::{MockModel, MockResponse};
+
+        let mem = Arc::new(VecMemory::default());
+        let synth: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text(
+            "The user said they like coffee. I think that's important.",
+        )));
+        let s = MemorySynthesizer::new(mem.clone(), synth);
+        let mut world = harness_context::default_world(std::env::temp_dir());
+
+        let out = ModelOutput {
+            text: Some("session chat".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            stop_reason: StopReason::EndTurn,
+            reasoning: None,
+        };
+        let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
+        let _ = s.fire(&Event::TaskCompleted, &mut world);
+
+        for _ in 0..50 {
+            if !mem.store.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let stored = mem.store.lock().unwrap().clone();
+        assert_eq!(stored.len(), 1);
+        assert!(stored[0].tags.contains(&"synth-raw".to_string()));
+        assert!(stored[0].content.contains("coffee"));
     }
 }

@@ -760,6 +760,20 @@ struct Cli {
     /// while the agent runs. Also enabled via `HARNESS_PROGRESS=1`.
     #[arg(long)]
     progress: bool,
+
+    /// Path to a JSONL long-term memory file. When set, the agent recalls
+    /// matching prior facts at session start (`MemoryGuide`) and a
+    /// synthesizer model distils each session into 1-3 durable facts at
+    /// the end (`MemorySynthesizer`).
+    #[arg(long)]
+    memory: Option<PathBuf>,
+
+    /// Cheap model id used by `MemorySynthesizer` to distil sessions.
+    /// Defaults to `deepseek-v4-flash` (or `HARNESS_SYNTH_MODEL` env var
+    /// when set). Routed against the same `HARNESS_BASE_URL` /
+    /// `HARNESS_API_KEY` as the main model.
+    #[arg(long)]
+    synth_model: Option<String>,
 }
 
 fn build_profile(cli: &Cli) -> UserProfile {
@@ -868,6 +882,24 @@ async fn main() -> anyhow::Result<()> {
     if progress {
         println!("  progress:  live (stderr)");
     }
+
+    // Memory layer (opt-in). When --memory is set, install MemoryGuide (recall
+    // at session start) + MemorySynthesizer (distil session into ≤3 atomic
+    // facts at end). Synth model is intentionally a separate, cheaper one.
+    let memory: Option<Arc<dyn harness_core::Memory>> = match &cli.memory {
+        Some(p) => Some(Arc::new(
+            harness_context::FileMemory::open(p).map_err(|e| anyhow::anyhow!("memory: {e}"))?,
+        )),
+        None => None,
+    };
+    let synth_model_id = cli
+        .synth_model
+        .clone()
+        .or_else(|| std::env::var("HARNESS_SYNTH_MODEL").ok())
+        .unwrap_or_else(|| "deepseek-v4-flash".into());
+    if let Some(p) = &cli.memory {
+        println!("  memory:    {} (synth: {})", p.display(), synth_model_id);
+    }
     println!();
 
     if cli.repl {
@@ -880,6 +912,8 @@ async fn main() -> anyhow::Result<()> {
             cli.max_iters,
             cli.record,
             progress,
+            memory,
+            synth_model_id,
         )
         .await
     } else {
@@ -893,6 +927,8 @@ async fn main() -> anyhow::Result<()> {
             cli.task.join(" "),
             cli.record,
             progress,
+            memory,
+            synth_model_id,
         )
         .await
     }
@@ -909,9 +945,29 @@ async fn run_once(
     user_request: String,
     record: Option<PathBuf>,
     progress: bool,
+    memory: Option<Arc<dyn harness_core::Memory>>,
+    synth_model_id: String,
 ) -> anyhow::Result<()> {
-    let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key);
+    let model = OpenAiCompat::with_key(base_url.to_string(), model_id, api_key.clone());
     let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
+    let mut synth_handle: Option<Arc<harness_loop::MemorySynthesizer>> = None;
+    if let Some(mem) = &memory {
+        loop_ = loop_.with_guide(Arc::new(
+            harness_loop::MemoryGuide::new(mem.clone()).with_top_k(5),
+        ));
+        let synth_model: Arc<dyn harness_core::Model> = Arc::new(OpenAiCompat::with_key(
+            base_url.to_string(),
+            synth_model_id.clone(),
+            api_key.clone(),
+        ));
+        let synth = Arc::new(
+            harness_loop::MemorySynthesizer::new(mem.clone(), synth_model)
+                .with_source("investor-bot")
+                .with_max_facts(3),
+        );
+        loop_ = loop_.with_hook(synth.clone() as Arc<dyn harness_core::Hook>);
+        synth_handle = Some(synth);
+    }
     if progress {
         loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
     }
@@ -958,8 +1014,14 @@ async fn run_once(
                 "\n→ partial findings preserved in {}. `investor --list` to recall.",
                 notes_path().display()
             );
+            if let Some(s) = &synth_handle {
+                s.flush_pending().await;
+            }
             std::process::exit(2);
         }
+    }
+    if let Some(s) = synth_handle {
+        s.flush_pending().await;
     }
     Ok(())
 }
@@ -974,6 +1036,8 @@ async fn run_repl(
     max_iters: u32,
     record: Option<PathBuf>,
     progress: bool,
+    memory: Option<Arc<dyn harness_core::Memory>>,
+    synth_model_id: String,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
@@ -1020,6 +1084,24 @@ async fn run_repl(
         for t in tools.iter().cloned() {
             loop_ = loop_.with_tool(t);
         }
+        let mut synth_handle: Option<Arc<harness_loop::MemorySynthesizer>> = None;
+        if let Some(mem) = &memory {
+            loop_ = loop_.with_guide(Arc::new(
+                harness_loop::MemoryGuide::new(mem.clone()).with_top_k(5),
+            ));
+            let synth_model: Arc<dyn harness_core::Model> = Arc::new(OpenAiCompat::with_key(
+                base_url.to_string(),
+                synth_model_id.clone(),
+                api_key.clone(),
+            ));
+            let synth = Arc::new(
+                harness_loop::MemorySynthesizer::new(mem.clone(), synth_model)
+                    .with_source("investor-bot")
+                    .with_max_facts(3),
+            );
+            loop_ = loop_.with_hook(synth.clone() as Arc<dyn harness_core::Hook>);
+            synth_handle = Some(synth);
+        }
         if progress {
             loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
         }
@@ -1064,6 +1146,11 @@ async fn run_repl(
                 }
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),
+        }
+        // After every REPL turn, await any spawned synth tasks so memory
+        // is on disk before the next turn could try to recall.
+        if let Some(s) = &synth_handle {
+            s.flush_pending().await;
         }
     }
     Ok(())
