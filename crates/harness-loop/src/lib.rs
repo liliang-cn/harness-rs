@@ -320,6 +320,22 @@ impl<M: Model> AgentLoop<M> {
                 }
             }
         }
+        // ── Budget exhausted ─────────────────────────────────────────
+        // Force a final synthesis pass with tools DISABLED. Otherwise the
+        // model often spins on tool calls right up to the budget cap and
+        // never emits a text conclusion, leaving the caller with nothing
+        // but `last_text` from some earlier intermediate turn (or None).
+        //
+        // The synthesis call is "free" — it costs one extra model call
+        // beyond max_iters but doesn't count toward `iters`. The result
+        // lands in `last_text` so callers display it as the answer.
+        let synthesised = self
+            .force_final_synthesis(&mut ctx, world, &mut total_usage)
+            .await;
+        if let Some(t) = synthesised {
+            last_text = Some(t);
+        }
+
         self.hooks.fire(&Event::SessionEnd, world);
         Ok(Outcome::BudgetExhausted {
             iters: ctx.policy.max_iters,
@@ -327,6 +343,48 @@ impl<M: Model> AgentLoop<M> {
             tools_called,
             usage: total_usage,
         })
+    }
+
+    /// One final model call with tools removed, asking it to write the
+    /// best-effort conclusion from whatever it has already gathered.
+    ///
+    /// Errors from the model are swallowed — observability is best-effort
+    /// here, and a transport blip during synthesis should not turn a
+    /// near-complete run into a hard failure.
+    async fn force_final_synthesis(
+        &self,
+        ctx: &mut Context,
+        world: &mut World,
+        total_usage: &mut harness_core::Usage,
+    ) -> Option<String> {
+        const SYNTHESIS_PROMPT: &str = "[system: iteration budget exhausted] \
+            You have run out of tool-calling iterations. Write your final answer \
+            NOW using only the tool results already in this conversation. Do not \
+            request more tools. Mark facts you could not verify as UNKNOWN. \
+            Include source URLs for every claim that is not UNKNOWN.";
+
+        // Snapshot + clear tool schemas so the model has no choice but text.
+        let saved_tools = std::mem::take(&mut ctx.tools);
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text(SYNTHESIS_PROMPT.into())],
+        });
+
+        self.hooks.fire(&Event::PreModel { ctx }, world);
+        let result = self.model.complete(ctx).await;
+        ctx.tools = saved_tools;
+
+        match result {
+            Ok(out) => {
+                self.hooks.fire(&Event::PostModel { out: &out }, world);
+                total_usage.input_tokens += out.usage.input_tokens;
+                total_usage.output_tokens += out.usage.output_tokens;
+                total_usage.cached_input_tokens += out.usage.cached_input_tokens;
+                ctx.push_model_output(&out);
+                out.text
+            }
+            Err(_) => None,
+        }
     }
 }
 
