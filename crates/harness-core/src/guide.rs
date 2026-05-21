@@ -35,7 +35,27 @@ pub trait Guide: Send + Sync + 'static {
     fn id(&self) -> &GuideId;
     fn kind(&self) -> Execution;
     fn scope(&self) -> &GuideScope;
+    /// Called ONCE per session, at the start, before the first model call.
+    /// Use for content that doesn't change across iterations (profile,
+    /// skills catalogue, static instructions).
     async fn apply(&self, ctx: &mut Context, world: &World) -> Result<(), GuideError>;
+    /// Called BEFORE every `model.complete()` call within a session
+    /// (default: no-op). Override to inject content that should adapt to
+    /// the current conversation state — most useful for recall-style guides
+    /// that want to re-query an external store based on the last user
+    /// message.
+    ///
+    /// Implementations are responsible for cleaning up their previous
+    /// injection (typically by tagging their `Block::Text` with a unique
+    /// marker prefix and removing it before pushing a fresh one) — the
+    /// framework doesn't auto-roll-back between iterations.
+    async fn apply_before_iter(
+        &self,
+        _ctx: &mut Context,
+        _world: &World,
+    ) -> Result<(), GuideError> {
+        Ok(())
+    }
 }
 
 pub struct GuideEntry {

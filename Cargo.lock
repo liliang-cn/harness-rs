@@ -54,6 +54,7 @@ dependencies = [
  "harness-rs-models",
  "harness-rs-permissions",
  "harness-rs-skills",
+ "harness-rs-tools-memory",
  "harness-rs-tools-tasks",
  "harness-rs-tools-web",
  "hex",
@@ -866,6 +867,7 @@ version = "0.0.4"
 dependencies = [
  "async-trait",
  "harness-rs-core",
+ "regex",
  "serde",
  "serde_json",
  "tokio",
@@ -1064,6 +1066,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "harness-rs-tools-memory"
+version = "0.0.4"
+dependencies = [
+ "async-trait",
+ "harness-rs-context",
+ "harness-rs-core",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

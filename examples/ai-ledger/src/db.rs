@@ -1,6 +1,6 @@
 use crate::model::*;
 use crate::portfolio::model::{Asset, AssetClass, PriceQuote, Trade, TradeKind};
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Result as SqlResult, params};
 use rust_decimal::Decimal;
 use std::path::Path;
@@ -45,7 +45,8 @@ impl Db {
                 tier            TEXT NOT NULL DEFAULT 'trial',  -- 'trial' | 'paid' | 'admin'
                 invited_by      TEXT,
                 invite_code_used TEXT,
-                created_at      TEXT NOT NULL
+                created_at      TEXT NOT NULL,
+                preferred_model TEXT
             );
 
             CREATE TABLE IF NOT EXISTS invites (
@@ -153,8 +154,82 @@ impl Db {
                 source      TEXT NOT NULL,
                 fetched_at  TEXT NOT NULL
             );
+
+            -- Recurring expenses (SaaS subscriptions, rent, gym, ...).
+            -- `next_charge_date` is YYYY-MM-DD; on each charge it advances by
+            -- `frequency`. Status flips to 'cancelled' on user cancel — we
+            -- keep the row + history rather than deleting.
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id                TEXT PRIMARY KEY,
+                user_id           TEXT NOT NULL,
+                name              TEXT NOT NULL,
+                amount            TEXT NOT NULL,
+                currency          TEXT NOT NULL,
+                frequency         TEXT NOT NULL, -- weekly|monthly|quarterly|yearly
+                next_charge_date  TEXT NOT NULL, -- YYYY-MM-DD
+                account_id        TEXT NOT NULL,
+                category          TEXT,
+                pay_channel       TEXT,          -- "Android/Google Play" etc.
+                note              TEXT,
+                status            TEXT NOT NULL DEFAULT 'active', -- active|cancelled
+                created_at        TEXT NOT NULL,
+                cancelled_at      TEXT,
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_subs_user_next
+                ON subscriptions(user_id, next_charge_date)
+                WHERE status = 'active';
+
+            -- Server-side persisted chat sessions + messages. The UI's FAB
+            -- modal binds to one session at a time; the 我的 → 聊天记录 page
+            -- lists every session for the user. Messages survive across
+            -- browsers / reloads / devices.
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                title           TEXT,
+                model_id        TEXT,
+                message_count   INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
+                ON chat_sessions(user_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id          TEXT PRIMARY KEY,
+                session_id  TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                role        TEXT NOT NULL, -- 'user' | 'asst'
+                text        TEXT NOT NULL,
+                iters       INTEGER,
+                created_at  TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+                ON chat_messages(session_id, created_at);
             "#,
         )?;
+        // Idempotent column adds — keeps already-migrated databases working
+        // without a separate migration framework (no rusqlite_migration).
+        self.ensure_column("users", "preferred_model", "TEXT")?;
+        Ok(())
+    }
+
+    /// Add `col` of `typ` to `table` if it doesn't already exist. Safe to
+    /// call on every startup — no-op when the column is present.
+    fn ensure_column(&self, table: &str, col: &str, typ: &str) -> SqlResult<()> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let existing: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<SqlResult<Vec<_>>>()?;
+        drop(stmt);
+        if !existing.iter().any(|c| c == col) {
+            self.conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {col} {typ}"),
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -205,8 +280,10 @@ impl Db {
 
     pub fn insert_user(&self, u: &crate::auth::User) -> SqlResult<()> {
         self.conn.execute(
-            "INSERT INTO users(id, email, password_hash, tier, invited_by, invite_code_used, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO users(
+                id, email, password_hash, tier, invited_by, invite_code_used,
+                created_at, preferred_model
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 u.id,
                 u.email,
@@ -215,6 +292,7 @@ impl Db {
                 u.invited_by,
                 u.invite_code_used,
                 u.created_at.to_rfc3339(),
+                u.preferred_model,
             ],
         )?;
         Ok(())
@@ -232,12 +310,14 @@ impl Db {
             created_at: DateTime::parse_from_rfc3339(&created_s)
                 .map(|d| d.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
+            preferred_model: r.get(7).ok().flatten(),
         })
     }
 
     pub fn get_user_by_email(&self, email: &str) -> SqlResult<Option<crate::auth::User>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, email, password_hash, tier, invited_by, invite_code_used, created_at
+            "SELECT id, email, password_hash, tier, invited_by, invite_code_used,
+                    created_at, preferred_model
              FROM users WHERE email = ?1 COLLATE NOCASE",
         )?;
         stmt.query_row(params![email], Self::row_to_user).optional()
@@ -245,10 +325,24 @@ impl Db {
 
     pub fn get_user_by_id(&self, id: &str) -> SqlResult<Option<crate::auth::User>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, email, password_hash, tier, invited_by, invite_code_used, created_at
+            "SELECT id, email, password_hash, tier, invited_by, invite_code_used,
+                    created_at, preferred_model
              FROM users WHERE id = ?1",
         )?;
         stmt.query_row(params![id], Self::row_to_user).optional()
+    }
+
+    /// Set the user's preferred model (or clear it with `None`). Paid/admin
+    /// tier check happens in the HTTP handler, not here.
+    pub fn set_user_preferred_model(
+        &self,
+        user_id: &str,
+        model_id: Option<&str>,
+    ) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE users SET preferred_model = ?1 WHERE id = ?2",
+            params![model_id, user_id],
+        )? as u32)
     }
 
     pub fn update_user_password(&self, user_id: &str, new_hash: &str) -> SqlResult<u32> {
@@ -925,6 +1019,352 @@ impl Db {
         )?;
         let rows = stmt.query_map(params![user_id], |r| r.get::<_, String>(0))?;
         rows.collect()
+    }
+
+    // ───── subscriptions ─────
+
+    pub fn insert_subscription(&self, user_id: &str, s: &Subscription) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO subscriptions(
+                id, user_id, name, amount, currency, frequency, next_charge_date,
+                account_id, category, pay_channel, note, status, created_at, cancelled_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                s.id,
+                user_id,
+                s.name,
+                s.amount.to_string(),
+                s.currency,
+                s.frequency.as_str(),
+                s.next_charge_date.format("%Y-%m-%d").to_string(),
+                s.account_id,
+                s.category,
+                s.pay_channel,
+                s.note,
+                s.status,
+                s.created_at.to_rfc3339(),
+                s.cancelled_at.map(|d| d.to_rfc3339()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_subscription(r: &rusqlite::Row<'_>) -> SqlResult<Subscription> {
+        let amount_s: String = r.get(2)?;
+        let freq_s: String = r.get(4)?;
+        let next_s: String = r.get(5)?;
+        let created_s: String = r.get(11)?;
+        let cancelled_s: Option<String> = r.get(12)?;
+        Ok(Subscription {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            amount: Decimal::from_str(&amount_s).unwrap_or(Decimal::ZERO),
+            currency: r.get(3)?,
+            frequency: Frequency::parse(&freq_s).unwrap_or(Frequency::Monthly),
+            next_charge_date: NaiveDate::parse_from_str(&next_s, "%Y-%m-%d")
+                .unwrap_or_else(|_| Utc::now().date_naive()),
+            account_id: r.get(6)?,
+            category: r.get(7)?,
+            pay_channel: r.get(8)?,
+            note: r.get(9)?,
+            status: r.get(10)?,
+            created_at: parse_rfc3339(&created_s),
+            cancelled_at: cancelled_s.map(|s| parse_rfc3339(&s)),
+        })
+    }
+
+    pub fn list_subscriptions(
+        &self,
+        user_id: &str,
+        only_active: bool,
+    ) -> SqlResult<Vec<Subscription>> {
+        let sql = if only_active {
+            "SELECT id, name, amount, currency, frequency, next_charge_date,
+                    account_id, category, pay_channel, note, status,
+                    created_at, cancelled_at
+             FROM subscriptions
+             WHERE user_id = ?1 AND status = 'active'
+             ORDER BY next_charge_date ASC"
+        } else {
+            "SELECT id, name, amount, currency, frequency, next_charge_date,
+                    account_id, category, pay_channel, note, status,
+                    created_at, cancelled_at
+             FROM subscriptions
+             WHERE user_id = ?1
+             ORDER BY status ASC, next_charge_date ASC"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![user_id], Self::row_to_subscription)?;
+        rows.collect()
+    }
+
+    pub fn get_subscription(&self, user_id: &str, id: &str) -> SqlResult<Option<Subscription>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, amount, currency, frequency, next_charge_date,
+                    account_id, category, pay_channel, note, status,
+                    created_at, cancelled_at
+             FROM subscriptions WHERE user_id = ?1 AND id = ?2",
+        )?;
+        stmt.query_row(params![user_id, id], Self::row_to_subscription)
+            .optional()
+    }
+
+    pub fn cancel_subscription(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE subscriptions
+             SET status = 'cancelled', cancelled_at = ?3
+             WHERE user_id = ?1 AND id = ?2 AND status = 'active'",
+            params![user_id, id, Utc::now().to_rfc3339()],
+        )? as u32)
+    }
+
+    /// Set the next-charge date explicitly. Used by `--auto-charge-subs`
+    /// after catching up multiple missed cycles in one shot.
+    pub fn conn_update_subscription_next_date(
+        &self,
+        user_id: &str,
+        id: &str,
+        next: NaiveDate,
+    ) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE subscriptions SET next_charge_date = ?3
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, next.format("%Y-%m-%d").to_string()],
+        )? as u32)
+    }
+
+    /// Advance the next-charge date by one period. Caller decides when to
+    /// call this (typically: right after `insert_transaction` for the charge).
+    pub fn advance_subscription(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        let sub = match self.get_subscription(user_id, id)? {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+        let next = sub.frequency.advance(sub.next_charge_date);
+        Ok(self.conn.execute(
+            "UPDATE subscriptions
+             SET next_charge_date = ?3
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, next.format("%Y-%m-%d").to_string()],
+        )? as u32)
+    }
+
+    /// Active subscriptions whose `next_charge_date <= as_of` — drive the
+    /// daily `--auto-charge-subs` runner.
+    pub fn due_subscriptions(
+        &self,
+        user_id: &str,
+        as_of: NaiveDate,
+    ) -> SqlResult<Vec<Subscription>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, amount, currency, frequency, next_charge_date,
+                    account_id, category, pay_channel, note, status,
+                    created_at, cancelled_at
+             FROM subscriptions
+             WHERE user_id = ?1 AND status = 'active' AND next_charge_date <= ?2
+             ORDER BY next_charge_date ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![user_id, as_of.format("%Y-%m-%d").to_string()],
+            Self::row_to_subscription,
+        )?;
+        rows.collect()
+    }
+
+    pub fn due_subscriptions_all_users(
+        &self,
+        as_of: NaiveDate,
+    ) -> SqlResult<Vec<(String, Subscription)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT user_id, id, name, amount, currency, frequency, next_charge_date,
+                    account_id, category, pay_channel, note, status,
+                    created_at, cancelled_at
+             FROM subscriptions
+             WHERE status = 'active' AND next_charge_date <= ?1
+             ORDER BY user_id, next_charge_date ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![as_of.format("%Y-%m-%d").to_string()],
+            |r| {
+                let user_id: String = r.get(0)?;
+                let amount_s: String = r.get(3)?;
+                let freq_s: String = r.get(5)?;
+                let next_s: String = r.get(6)?;
+                let created_s: String = r.get(12)?;
+                let cancelled_s: Option<String> = r.get(13)?;
+                let sub = Subscription {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    amount: Decimal::from_str(&amount_s).unwrap_or(Decimal::ZERO),
+                    currency: r.get(4)?,
+                    frequency: Frequency::parse(&freq_s).unwrap_or(Frequency::Monthly),
+                    next_charge_date: NaiveDate::parse_from_str(&next_s, "%Y-%m-%d")
+                        .unwrap_or_else(|_| Utc::now().date_naive()),
+                    account_id: r.get(7)?,
+                    category: r.get(8)?,
+                    pay_channel: r.get(9)?,
+                    note: r.get(10)?,
+                    status: r.get(11)?,
+                    created_at: parse_rfc3339(&created_s),
+                    cancelled_at: cancelled_s.map(|s| parse_rfc3339(&s)),
+                };
+                Ok((user_id, sub))
+            },
+        )?;
+        rows.collect()
+    }
+
+    // ───── chat sessions / messages ─────
+
+    pub fn create_chat_session(
+        &self,
+        user_id: &str,
+        id: &str,
+        model_id: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO chat_sessions(
+                id, user_id, title, model_id, message_count, created_at, updated_at
+             ) VALUES (?1, ?2, NULL, ?3, 0, ?4, ?4)",
+            params![id, user_id, model_id, now],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_chat_session(r: &rusqlite::Row<'_>) -> SqlResult<ChatSession> {
+        let created_s: String = r.get(4)?;
+        let updated_s: String = r.get(5)?;
+        Ok(ChatSession {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            model_id: r.get(2)?,
+            message_count: r.get::<_, i64>(3)? as u32,
+            created_at: parse_rfc3339(&created_s),
+            updated_at: parse_rfc3339(&updated_s),
+        })
+    }
+
+    pub fn list_chat_sessions(&self, user_id: &str) -> SqlResult<Vec<ChatSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, model_id, message_count, created_at, updated_at
+             FROM chat_sessions
+             WHERE user_id = ?1
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![user_id], Self::row_to_chat_session)?;
+        rows.collect()
+    }
+
+    pub fn get_chat_session(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> SqlResult<Option<ChatSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, model_id, message_count, created_at, updated_at
+             FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
+        )?;
+        stmt.query_row(params![user_id, id], Self::row_to_chat_session)
+            .optional()
+    }
+
+    pub fn get_chat_messages(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        limit: usize,
+    ) -> SqlResult<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, text, iters, created_at
+             FROM chat_messages
+             WHERE user_id = ?1 AND session_id = ?2
+             ORDER BY created_at ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![user_id, session_id, limit as i64],
+            |r| {
+                let created_s: String = r.get(5)?;
+                Ok(ChatMessage {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    role: r.get(2)?,
+                    text: r.get(3)?,
+                    iters: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
+                    created_at: parse_rfc3339(&created_s),
+                })
+            },
+        )?;
+        rows.collect()
+    }
+
+    /// Append a message and bump the session's `updated_at` + `message_count`
+    /// + (on first user message) `title`. Title is the first ~40 chars of
+    /// the first user message — purely cosmetic.
+    pub fn append_chat_message(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        role: &str,
+        text: &str,
+        iters: Option<u32>,
+    ) -> SqlResult<String> {
+        use uuid::Uuid;
+        let id = Uuid::new_v4().to_string()[..8].to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO chat_messages(
+                id, session_id, user_id, role, text, iters, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now],
+        )?;
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET updated_at = ?3,
+                 message_count = message_count + 1,
+                 title = COALESCE(title, CASE WHEN ?4 = 'user'
+                                              THEN substr(?5, 1, 40)
+                                              ELSE NULL END)
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, session_id, now, role, text],
+        )?;
+        Ok(id)
+    }
+
+    pub fn update_chat_session_model(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        model_id: &str,
+    ) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE chat_sessions SET model_id = ?3
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, session_id, model_id],
+        )? as u32)
+    }
+
+    /// Cascade-deletes messages too.
+    pub fn delete_chat_session(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        self.conn.execute(
+            "DELETE FROM chat_messages WHERE user_id = ?1 AND session_id = ?2",
+            params![user_id, id],
+        )?;
+        Ok(self.conn.execute(
+            "DELETE FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
+        )? as u32)
+    }
+
+    pub fn count_user_subscriptions(&self, user_id: &str) -> SqlResult<u32> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM subscriptions WHERE user_id = ?1 AND status = 'active'",
+                params![user_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as u32)
     }
 }
 

@@ -51,6 +51,16 @@ pub struct MemoryEntry {
     pub source: Option<String>,
     /// Milliseconds since unix epoch.
     pub created_ms: i64,
+    /// Optional expiry time as milliseconds since unix epoch. `None` =
+    /// retain indefinitely. Backends MUST filter expired entries out of
+    /// `recall` and MAY drop them on a background compact pass.
+    ///
+    /// Use `with_ttl_days(N)` to set this relative to now. Use `None` for
+    /// stable preferences / identity / long-term project context; use a
+    /// finite TTL for ephemeral state (current task params, session-scoped
+    /// preferences, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_ms: Option<i64>,
 }
 
 impl MemoryEntry {
@@ -62,6 +72,7 @@ impl MemoryEntry {
             tags: Vec::new(),
             source: None,
             created_ms: 0,
+            expires_ms: None,
         }
     }
 
@@ -73,6 +84,24 @@ impl MemoryEntry {
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
         self
+    }
+
+    /// Set `expires_ms` to "now + `days` days" using the system clock. For
+    /// tests that need a fixed clock, set `expires_ms` directly.
+    pub fn with_ttl_days(mut self, days: u32) -> Self {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.expires_ms = Some(now_ms + (days as i64) * 86_400_000);
+        self
+    }
+
+    /// Returns `true` if this entry has an `expires_ms` set and that
+    /// timestamp is now in the past. Backends call this from `recall` and
+    /// `compact` to skip stale entries.
+    pub fn is_expired(&self, now_ms: i64) -> bool {
+        matches!(self.expires_ms, Some(t) if t <= now_ms)
     }
 }
 

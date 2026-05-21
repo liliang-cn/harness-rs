@@ -5,9 +5,11 @@
 //! actually runs on.
 
 pub mod memory_file;
+pub mod memory_guard;
 pub mod runtime;
 
 pub use memory_file::*;
+pub use memory_guard::*;
 pub use runtime::*;
 
 use harness_core::{Action, Block, Context, Task, ToolResult, Turn, TurnRole, World};
