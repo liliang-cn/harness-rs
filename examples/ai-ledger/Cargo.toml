@@ -22,6 +22,7 @@ harness-skills  = { workspace = true }
 harness-tools-web = { workspace = true }
 harness-permissions = { workspace = true }
 harness-tools-tasks = { workspace = true }
+harness-tools-memory = { workspace = true }
 argon2          = "0.5"
 rand            = "0.8"
 hex             = "0.4"

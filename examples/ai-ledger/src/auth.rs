@@ -26,6 +26,11 @@ pub struct User {
     pub invited_by: Option<String>,
     pub invite_code_used: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Per-user model preference; `None` falls back to the server's default.
+    /// Trial users can't set this — the field stays None and they always get
+    /// the default. Paid/admin users may pick from `AppState.available_models`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

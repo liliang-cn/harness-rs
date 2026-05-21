@@ -45,7 +45,9 @@ body {
   color: var(--ink);
   background: var(--bg);
   display: grid;
-  grid-template-columns: minmax(380px, 5fr) minmax(420px, 7fr);
+  /* Single column — chat is no longer a static left column, it floats
+     in via the FAB-toggled modal (#chatCol position:fixed). */
+  grid-template-columns: 1fr;
   grid-template-rows: 100vh;
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
@@ -63,6 +65,60 @@ body {
   padding: 0 8px; min-height: 44px;
 }
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* ─── Chat FAB + floating modal ─── */
+.chat-fab {
+  position: fixed; right: 18px; bottom: 18px; z-index: 9000;
+  width: 56px; height: 56px; border-radius: 50%; border: 0;
+  background: var(--accent); color: #fff; font-size: 24px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-fab:hover { transform: scale(1.05); }
+.chat-fab.hidden { display: none; }
+
+#chatCol {
+  position: fixed; right: 18px; bottom: 84px; z-index: 9001;
+  width: 420px; height: min(640px, 75vh);
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel); box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  display: none; flex-direction: column;
+}
+#chatCol.open { display: flex; }
+#chatCol .col-title { border-radius: 14px 14px 0 0; }
+.chat-close-btn, .chat-back-btn {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 18px; padding: 4px 8px; min-height: auto;
+}
+.chat-back-btn { font-size: 20px; padding: 0 6px; }
+.chat-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 160px;
+}
+.chat-sessions-list {
+  flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px;
+}
+.chat-session-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+  padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  background: var(--card-alt, rgba(0,0,0,.03));
+}
+.chat-session-row:hover { background: rgba(0,0,0,.06); }
+.chat-session-row .sess-title { font-weight: 500; }
+.chat-session-row .sess-meta { font-size: 11px; color: var(--muted); }
+.chat-session-row .sess-del {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 14px; padding: 4px 8px;
+}
+.chat-session-row .sess-del:hover { color: var(--neg, #d33); }
+@media (max-width: 760px) {
+  #chatCol {
+    right: 0; left: 0; bottom: 0; top: 56px;
+    width: 100%; height: auto;
+    border-radius: 14px 14px 0 0; max-height: none;
+  }
+  .chat-fab { right: 12px; bottom: 12px; }
+}
 
 .col {
   border-right: 1px solid var(--line);
@@ -135,6 +191,43 @@ body {
 .msg.asst.md th, .msg.asst.md td { padding: 4px 8px; border: 1px solid rgba(0,0,0,.1); }
 .msg.asst.md th { background: rgba(0,0,0,.04); }
 .msg.asst.md del { color: var(--muted); }
+.sub-row { padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;
+           background: var(--card-alt, rgba(0,0,0,.03)); }
+.sub-row.due-soon { background: rgba(255, 170, 0, .12); }
+.sub-row.overdue  { background: rgba(255, 60, 60, .14); }
+.sub-row .btn-mini { padding: 2px 8px; font-size: 11px; }
+
+.chat-hist-row {
+  padding: 6px 10px; border-radius: 6px; font-size: 13px;
+  background: var(--card-alt, rgba(0,0,0,.03));
+  display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start;
+}
+.chat-hist-row .chat-hist-role { font-weight: 600; min-width: 32px; }
+.chat-hist-row .chat-hist-role.user { color: var(--accent); }
+.chat-hist-row .chat-hist-role.asst { color: var(--muted); }
+.chat-hist-row .chat-hist-text {
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 3; -webkit-box-orient: vertical; line-clamp: 3;
+}
+.chat-hist-row .chat-hist-ts { font-size: 11px; color: var(--muted); }
+
+.mem-row {
+  position: relative; padding: 8px 32px 8px 10px;
+  background: var(--card-alt, rgba(0,0,0,.03)); border-radius: 6px;
+  font-size: 13px;
+}
+.mem-row .mem-text { line-height: 1.45; }
+.mem-row .mem-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.mem-row .mem-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  background: rgba(0,0,0,.06); font-size: 11px;
+}
+.mem-row .mem-del {
+  position: absolute; right: 6px; top: 6px;
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--muted); font-size: 12px; padding: 4px;
+}
+.mem-row .mem-del:hover { color: var(--neg, #d33); }
 .msg.asst.streaming { position: relative; }
 .msg.asst.streaming::after {
   content: '▍'; color: var(--muted); margin-left: 2px;
@@ -333,7 +426,7 @@ table.tbl td.tx-transfer { color: var(--muted); }
   /* The dash-col mode toggle is redundant with the top tabs on mobile. */
   .mode-toggle { display: none; }
   .kbd-hint { display: none; }
-  #chatCol.hidden, #dashCol.hidden { display: none; }
+  #dashCol.hidden { display: none; }
   .portfolio-summary { grid-template-columns: 1fr; }
 }
 </style>
@@ -392,26 +485,42 @@ table.tbl td.tx-transfer { color: var(--muted); }
 </div>
 
 <nav class="tabs" id="tabs">
-  <button class="tab active" data-tab="chat">💬 Chat</button>
-  <button class="tab" data-tab="ledger">📊 记账</button>
+  <button class="tab active" data-tab="ledger">📊 记账</button>
   <button class="tab" data-tab="portfolio">📈 投资</button>
   <button class="tab" data-tab="profile">👤 我的</button>
 </nav>
 
-<section class="col" id="chatCol">
-  <div class="col-title">
-    <span class="col-label">💬 Chat</span>
-    <span class="badge" id="modelBadge">connecting…</span>
+<section id="chatCol">
+  <!-- ── List view: all sessions ── -->
+  <div class="col-title chat-view-list" id="chatViewList">
+    <span class="col-label">📜 聊天历史</span>
+    <span class="grow"></span>
+    <button class="btn-mini" id="chatNewBtn" style="margin-right:6px">+ 新对话</button>
+    <button class="chat-close-btn" id="chatCloseBtnA" title="关闭" aria-label="关闭">✖</button>
   </div>
-  <div class="messages" id="messages"></div>
-  <div class="kbd-hint">Enter 发送 · Shift+Enter 换行</div>
-  <div class="composer">
+  <div class="chat-sessions-list chat-view-list" id="chatSessionsList"></div>
+
+  <!-- ── Chat view: active conversation ── -->
+  <div class="col-title chat-view-chat" id="chatViewChatHeader" style="display:none">
+    <button class="chat-back-btn" id="chatBackBtn" title="返回列表" aria-label="返回列表">←</button>
+    <span class="col-label chat-title" id="chatActiveTitle">…</span>
+    <span class="grow"></span>
+    <select id="modelPicker" class="badge" style="font-size:11px; padding:2px 6px; border:1px solid var(--line); border-radius:4px; background:var(--bg); color:var(--ink); cursor:pointer; max-width:180px;" disabled>
+      <option>connecting…</option>
+    </select>
+    <button class="chat-close-btn" id="chatCloseBtnB" title="关闭" aria-label="关闭">✖</button>
+  </div>
+  <div class="messages chat-view-chat" id="messages" style="display:none"></div>
+  <div class="composer chat-view-chat" id="chatComposer" style="display:none">
     <textarea id="input" placeholder="例：刚火锅花了 188，微信扣的 / 今天买了100股AAPL 198.42" enterkeyhint="send"></textarea>
     <button id="send">发送</button>
   </div>
 </section>
 
-<section class="col hidden" id="dashCol">
+<!-- Floating chat button — always visible when authenticated; clicked → opens #chatCol. -->
+<button class="chat-fab hidden" id="chatFab" title="聊天" aria-label="打开聊天">💬</button>
+
+<section class="col" id="dashCol">
   <div class="col-title">
     <span class="badge" id="monthBadge"></span>
     <span class="grow"></span>
@@ -443,6 +552,12 @@ table.tbl td.tx-transfer { color: var(--muted); }
         <table class="tbl"><thead><tr>
           <th>分类</th><th>时间</th><th>账户</th><th style="text-align:right">金额</th>
         </tr></thead><tbody id="txns"></tbody></table>
+      </div>
+      <div class="card">
+        <h3>订阅 · 周期扣款 <span class="grow"></span>
+          <span id="subsMonthly" style="font-size:11px;color:var(--muted);font-weight:normal"></span>
+        </h3>
+        <div id="subsBox" class="empty">没有登记的订阅。试试 "我有个 Claude Code 订阅，每月 $250 USD，下次扣款 6-21"。</div>
       </div>
       <div class="card">
         <h3>AI 月度简报 <span class="grow"></span>
@@ -488,18 +603,14 @@ table.tbl td.tx-transfer { color: var(--muted); }
       </div>
 
       <div class="card">
-        <h3>修改密码</h3>
-        <form id="profPwForm" style="display:flex; flex-direction:column; gap:8px;">
-          <input id="profPwOld" type="password" required minlength="6" placeholder="当前密码"
-            style="padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; min-height:44px;">
-          <input id="profPwNew" type="password" required minlength="6" placeholder="新密码（至少 6 位）"
-            style="padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; min-height:44px;">
-          <input id="profPwNew2" type="password" required minlength="6" placeholder="再输一次"
-            style="padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); font:inherit; min-height:44px;">
-          <button type="submit" id="profPwSubmit"
-            style="padding:10px; border:0; border-radius:10px; background:var(--accent); color:white; font:inherit; font-weight:600; min-height:44px; cursor:pointer">提交</button>
-          <div id="profPwMsg" style="font-size:13px; min-height:18px; color:var(--neg)"></div>
-        </form>
+        <h3>密码</h3>
+        <button id="profPwOpenBtn"
+          style="width:100%; padding:10px; border:1px solid var(--line); border-radius:10px;
+                 background:var(--bg); color:var(--ink); font:inherit; font-weight:500;
+                 min-height:44px; cursor:pointer; text-align:left">🔒 修改密码…</button>
+        <div style="font-size:11px; color:var(--muted); margin-top:6px">
+          改完会自动登出**其他**已登录设备（本设备保持登录）。
+        </div>
       </div>
 
       <div class="card" id="profInvitesCard" style="display:none">
@@ -507,6 +618,30 @@ table.tbl td.tx-transfer { color: var(--muted); }
           <button class="btn-mini" id="profGenInvite">生成新邀请码</button>
         </h3>
         <div id="profInvites" style="display:flex; flex-direction:column; gap:6px; font-size:13px;"></div>
+      </div>
+
+      <div class="card">
+        <h3>聊天记录 <span class="grow"></span>
+          <span id="profChatCount" style="font-size:11px; color:var(--muted); font-weight:normal"></span>
+        </h3>
+        <button id="profChatOpenBtn"
+          style="width:100%; padding:10px; border:1px solid var(--line); border-radius:10px;
+                 background:var(--bg); color:var(--ink); font:inherit; font-weight:500;
+                 min-height:44px; cursor:pointer; text-align:left">📜 查看所有对话 →</button>
+        <div style="font-size:11px; color:var(--muted); margin-top:6px">
+          每个对话独立持久化在服务器上，可重新打开继续聊。
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>AI 记得我什么 <span class="grow"></span>
+          <span id="profMemCount" style="font-size:11px; color:var(--muted); font-weight:normal"></span>
+          <button class="btn-mini" id="profMemClearBtn" style="margin-left:6px">清空</button>
+        </h3>
+        <div id="profMemBox" style="display:flex; flex-direction:column; gap:6px; max-height:360px; overflow-y:auto;"></div>
+        <div style="font-size:11px; color:var(--muted); margin-top:6px">
+          聊天结束后会用 deepseek-v4-flash 把会话 distill 成 1–3 条 atomic fact（带 TTL）；不对的可以一条条删，或一键清空。直接说"记住 X"会立刻进记忆。金额 / 邮箱 / 卡号会被 framework 层挡掉。
+        </div>
       </div>
 
       <div class="card">
@@ -627,13 +762,23 @@ const positionsBody = $('positions');
 const tradesBody = $('trades');
 const portfolioSummary = $('portfolioSummary');
 const refreshBtn = $('refreshBtn');
-const modelBadge = $('modelBadge');
+const modelPicker = $('modelPicker');
 const monthBadge = $('monthBadge');
 const monthBadge2 = $('monthBadge2');
 const chatCol = $('chatCol');
 const dashCol = $('dashCol');
 
-let chatHistory = [];
+// Server-persisted chat sessions replace the localStorage chatHistory.
+// localStorage just caches the last-opened session id so the FAB can drop
+// the user back into where they were.
+const ACTIVE_SESSION_KEY = 'ai-ledger-active-session';
+const getActiveSessionId = () => localStorage.getItem(ACTIVE_SESSION_KEY) || null;
+const setActiveSessionId = (id) => {
+  if (id) localStorage.setItem(ACTIVE_SESSION_KEY, id);
+  else localStorage.removeItem(ACTIVE_SESSION_KEY);
+};
+// One-shot cleanup: remove the obsolete pre-server-side history key.
+try { localStorage.removeItem('ai-ledger-chat-history'); } catch {}
 let accountById = {};
 
 const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
@@ -642,28 +787,236 @@ function setDashMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.dash-mode').forEach(d => d.classList.toggle('active', d.id === mode + 'Mode'));
   if (mode === 'portfolio') refreshPortfolio();
-  else if (mode === 'profile') { paintProfile(); refreshInvites(); }
+  else if (mode === 'profile') { paintProfile(); refreshInvites(); renderChatHistory(); renderMemories(); }
   else refreshLedger();
 }
 
+function fmtChatHistTs(t) {
+  if (!t) return '';
+  const d = new Date(t);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const isToday = d >= today;
+  const pad = n => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return isToday ? hm : `${d.getMonth()+1}-${pad(d.getDate())} ${hm}`;
+}
+
+async function renderChatHistory() {
+  const cnt = document.getElementById('profChatCount');
+  try {
+    const r = await fetch('/api/chat/sessions').then(r => r.json());
+    if (cnt) cnt.textContent = `${r.count || 0} 条`;
+  } catch { if (cnt) cnt.textContent = ''; }
+}
+
+document.getElementById('profChatOpenBtn')?.addEventListener('click', () => {
+  // Open modal in list mode regardless of current state.
+  openChatModal('list');
+});
+
+async function renderMemories() {
+  const box = document.getElementById('profMemBox');
+  const cnt = document.getElementById('profMemCount');
+  if (!box) return;
+  let r;
+  try { r = await fetch('/api/me/memories').then(r => r.json()); }
+  catch { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+  const mems = r.memories || [];
+  if (cnt) cnt.textContent = mems.length ? `${mems.length} 条` : '';
+  if (mems.length === 0) {
+    box.innerHTML = '<div class="empty">还没有沉淀的记忆。聊几次之后会自动出现。</div>';
+    return;
+  }
+  box.innerHTML = mems.map(m => {
+    const ts = m.created_ms ? new Date(m.created_ms) : null;
+    const tsStr = ts ? `${ts.getFullYear()}-${String(ts.getMonth()+1).padStart(2,'0')}-${String(ts.getDate()).padStart(2,'0')}` : '';
+    const tags = Array.isArray(m.tags) && m.tags.length ? m.tags.map(t => `<span class="mem-tag">${escapeHtml(t)}</span>`).join(' ') : '';
+    return `<div class="mem-row">
+      <button class="mem-del" data-id="${escapeHtml(m.id || '')}" title="删除这条记忆">✖</button>
+      <div class="mem-text">${escapeHtml(m.content || '')}</div>
+      <div class="mem-meta">${escapeHtml(tsStr)}${tags ? ' · ' + tags : ''}</div>
+    </div>`;
+  }).join('');
+  for (const btn of box.querySelectorAll('.mem-del')) {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-id');
+      if (!id || !confirm('删掉这条 AI 记忆？')) return;
+      const resp = await fetch(`/api/me/memories/${id}`, {method: 'DELETE'});
+      if (resp.ok) renderMemories();
+      else alert('删除失败');
+    });
+  }
+}
+
+document.getElementById('profMemClearBtn')?.addEventListener('click', async () => {
+  if (!confirm('清空我的全部 AI 记忆？不影响其他用户。')) return;
+  const r = await fetch('/api/me/memories', {method: 'DELETE'});
+  if (r.ok) {
+    const j = await r.json();
+    renderMemories();
+    addMeta && addMeta(`✓ 已清空 ${j.deleted || 0} 条记忆`);
+  } else {
+    alert('清空失败');
+  }
+});
+
 function switchTab(t) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
-  const showChat = t === 'chat';
-  if (isMobile()) {
-    chatCol.classList.toggle('hidden', !showChat);
-    dashCol.classList.toggle('hidden', showChat);
-    if (!showChat) setDashMode(t);
-  } else {
-    chatCol.classList.remove('hidden');
-    dashCol.classList.remove('hidden');
-    if (!showChat) setDashMode(t);
-  }
+  // Chat is no longer a tab — only ledger / portfolio / profile come through here.
+  setDashMode(t);
 }
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 document.querySelectorAll('.mode-btn').forEach(b => b.addEventListener('click', () => setDashMode(b.dataset.mode)));
-window.addEventListener('resize', () => {
-  if (!isMobile()) { chatCol.classList.remove('hidden'); dashCol.classList.remove('hidden'); }
+
+// ─── Floating chat modal: FAB + open/close + list ↔ chat modes ───
+const chatFab = $('chatFab');
+
+let currentSessionId = null;
+let currentSessionTitle = '';
+
+function setChatMode(mode /* 'list' | 'chat' */) {
+  for (const el of document.querySelectorAll('.chat-view-list')) {
+    el.style.display = mode === 'list' ? '' : 'none';
+  }
+  for (const el of document.querySelectorAll('.chat-view-chat')) {
+    el.style.display = mode === 'chat' ? '' : 'none';
+  }
+  // The list view's session list is a flex column; force flex when shown.
+  const list = document.getElementById('chatSessionsList');
+  if (list) list.style.display = mode === 'list' ? 'flex' : 'none';
+  const composer = document.getElementById('chatComposer');
+  if (composer) composer.style.display = mode === 'chat' ? 'flex' : 'none';
+  if (mode === 'chat') setTimeout(() => input?.focus(), 50);
+}
+
+async function openChatModal(initialMode) {
+  chatCol.classList.add('open');
+  chatFab.classList.add('hidden');
+  if (initialMode === 'list') {
+    setChatMode('list');
+    await refreshChatSessionsList();
+  } else if (currentSessionId) {
+    setChatMode('chat');
+    // Already in a chat — don't reload messages, they're still there.
+  } else {
+    // No active session: prefer last-used from localStorage; else go to list.
+    const last = getActiveSessionId();
+    if (last) {
+      const ok = await loadSession(last);
+      if (!ok) {
+        setActiveSessionId(null);
+        setChatMode('list');
+        await refreshChatSessionsList();
+      }
+    } else {
+      setChatMode('list');
+      await refreshChatSessionsList();
+    }
+  }
+}
+
+function closeChatModal() {
+  chatCol.classList.remove('open');
+  chatFab.classList.remove('hidden');
+}
+
+async function refreshChatSessionsList() {
+  const box = document.getElementById('chatSessionsList');
+  if (!box) return;
+  box.innerHTML = '<div class="empty" style="padding:14px">加载中…</div>';
+  let r;
+  try { r = await fetch('/api/chat/sessions').then(r => r.json()); }
+  catch { box.innerHTML = '<div class="empty" style="padding:14px">加载失败</div>'; return; }
+  const sessions = r.sessions || [];
+  if (sessions.length === 0) {
+    box.innerHTML = '<div class="empty" style="padding:14px">还没有对话。点右上"+ 新对话"开始。</div>';
+    return;
+  }
+  box.innerHTML = sessions.map(s => {
+    const updated = new Date(s.updated_at);
+    const pad = n => String(n).padStart(2, '0');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const isToday = updated >= today;
+    const updatedStr = isToday
+      ? `${pad(updated.getHours())}:${pad(updated.getMinutes())}`
+      : `${updated.getMonth()+1}-${pad(updated.getDate())}`;
+    const title = s.title || '(空对话)';
+    const modelLabel = s.model_id ? s.model_id.split('-').slice(0, 2).join('-') : '—';
+    return `<div class="chat-session-row" data-id="${escapeHtml(s.id)}">
+      <div>
+        <div class="sess-title">${escapeHtml(title)}</div>
+        <div class="sess-meta">${updatedStr} · ${s.message_count} 条 · ${escapeHtml(modelLabel)}</div>
+      </div>
+      <button class="sess-del" data-del="${escapeHtml(s.id)}" title="删除">🗑</button>
+    </div>`;
+  }).join('');
+  for (const row of box.querySelectorAll('.chat-session-row')) {
+    row.addEventListener('click', (e) => {
+      if (e.target.classList.contains('sess-del')) return;
+      const id = row.getAttribute('data-id');
+      loadSession(id);
+    });
+  }
+  for (const btn of box.querySelectorAll('.sess-del')) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-del');
+      if (!confirm('删除这个对话？历史不可恢复。')) return;
+      const resp = await fetch(`/api/chat/sessions/${id}`, {method: 'DELETE'});
+      if (resp.ok) {
+        if (currentSessionId === id) { currentSessionId = null; setActiveSessionId(null); }
+        refreshChatSessionsList();
+      }
+    });
+  }
+}
+
+async function loadSession(sessionId) {
+  let r;
+  try { r = await fetch(`/api/chat/sessions/${sessionId}`).then(r => r.json()); }
+  catch { return false; }
+  if (!r.session) return false;
+  currentSessionId = sessionId;
+  currentSessionTitle = r.session.title || '(空对话)';
+  setActiveSessionId(sessionId);
+  // Repaint header + messages
+  document.getElementById('chatActiveTitle').textContent = currentSessionTitle;
+  messages.innerHTML = '';
+  for (const m of (r.messages || [])) {
+    addMessage(m.role, m.text, m.role === 'asst' ? m.iters : undefined);
+  }
+  setChatMode('chat');
+  return true;
+}
+
+async function startNewSession() {
+  const resp = await fetch('/api/chat/sessions', {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'});
+  if (!resp.ok) { alert('新建对话失败'); return; }
+  const j = await resp.json();
+  const id = j.session?.id;
+  if (!id) return;
+  currentSessionId = id;
+  currentSessionTitle = '(新对话)';
+  setActiveSessionId(id);
+  document.getElementById('chatActiveTitle').textContent = currentSessionTitle;
+  messages.innerHTML = '';
+  setChatMode('chat');
+}
+
+document.getElementById('chatCloseBtnA')?.addEventListener('click', closeChatModal);
+document.getElementById('chatCloseBtnB')?.addEventListener('click', closeChatModal);
+document.getElementById('chatBackBtn')?.addEventListener('click', async () => {
+  setChatMode('list');
+  await refreshChatSessionsList();
 });
+document.getElementById('chatNewBtn')?.addEventListener('click', startNewSession);
+chatFab?.addEventListener('click', () => openChatModal(null));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && chatCol.classList.contains('open')) closeChatModal();
+});
+
+// Show the FAB only once the user is authenticated.
+if (getToken()) chatFab.classList.remove('hidden');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -947,7 +1300,61 @@ async function refreshTxns() {
 
 async function refreshLedger() {
   await refreshAccounts();
-  await Promise.all([refreshReport(), refreshBudgets(), refreshTxns()]);
+  await Promise.all([refreshReport(), refreshBudgets(), refreshTxns(), refreshSubscriptions()]);
+}
+
+const subsBox = $('subsBox');
+const subsMonthly = $('subsMonthly');
+
+async function refreshSubscriptions() {
+  if (!subsBox) return;
+  let r;
+  try { r = await fetch('/api/subscriptions').then(r => r.json()); }
+  catch (e) { subsBox.innerHTML = '<div class="empty">订阅加载失败</div>'; return; }
+  const subs = r.subscriptions || [];
+  if (subs.length === 0) {
+    subsBox.innerHTML = '<div class="empty">没有登记的订阅。试试 "我有个 Claude Code 订阅，每月 $250 USD，下次扣款 6-21"。</div>';
+    subsMonthly.textContent = '';
+    return;
+  }
+  const burn = r.monthly_burn_by_currency || {};
+  const burnLine = Object.entries(burn).length
+    ? '月均 ≈ ' + Object.entries(burn).map(([cur, amt]) => `${fmtAmount(amt, cur)} ${cur}`).join(' + ')
+    : '';
+  subsMonthly.textContent = burnLine;
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const rows = subs.map(s => {
+    const next = new Date(s.next_charge_date + 'T00:00:00');
+    const daysLeft = Math.round((next - today) / 86400000);
+    const dueClass = daysLeft <= 0 ? 'overdue' : (daysLeft <= 3 ? 'due-soon' : '');
+    const statusBadge = s.status === 'cancelled' ? '<span class="cat" style="color:var(--muted)"> · 已取消</span>' : '';
+    const dueText = s.status === 'cancelled' ? '—'
+      : daysLeft < 0 ? `逾期 ${-daysLeft} 天`
+      : daysLeft === 0 ? '今天'
+      : `${daysLeft} 天后`;
+    const channel = s.pay_channel ? ` · ${escapeHtml(s.pay_channel)}` : '';
+    const cancelBtn = s.status === 'cancelled' ? ''
+      : `<button class="btn-mini" data-cancel="${s.id}" style="float:right">取消</button>`;
+    return `<div class="sub-row ${dueClass}">
+      ${cancelBtn}
+      <div><strong>${escapeHtml(s.name)}</strong>${statusBadge}</div>
+      <div style="font-size:12px;color:var(--muted)">${fmtAmount(s.amount, s.currency)} ${s.currency} · ${s.frequency}${channel}</div>
+      <div style="font-size:12px">下次：${s.next_charge_date} <span class="cat">(${dueText})</span></div>
+    </div>`;
+  }).join('');
+  subsBox.classList.remove('empty');
+  subsBox.innerHTML = rows;
+  for (const btn of subsBox.querySelectorAll('button[data-cancel]')) {
+    btn.addEventListener('click', async (e) => {
+      const id = btn.getAttribute('data-cancel');
+      if (!confirm('取消这个订阅？过往记录会保留。')) return;
+      btn.disabled = true;
+      const resp = await fetch(`/api/subscriptions/${id}/cancel`, {method: 'POST'});
+      if (resp.ok) await refreshSubscriptions();
+      else { btn.disabled = false; alert('取消失败'); }
+    });
+  }
 }
 
 const briefBtn = $('briefBtn');
@@ -1110,11 +1517,56 @@ refreshBtn?.addEventListener('click', async () => {
   refreshBtn.disabled = false;
 });
 
-async function fetchModelInfo() {
+/// Populate the chat-modal model picker from /api/info.available_models +
+/// /api/me.effective_model_id. Trial users see the dropdown disabled +
+/// title="trial 账户使用默认模型".
+async function setupModelPicker() {
+  if (!modelPicker) return;
+  let info, me;
   try {
-    const r = await fetch('/api/info').then(r => r.json());
-    modelBadge.textContent = `${r.provider}/${r.model}`;
-  } catch { modelBadge.textContent = 'offline'; }
+    [info, me] = await Promise.all([
+      fetch('/api/info').then(r => r.json()),
+      fetch('/api/me').then(r => r.ok ? r.json() : null),
+    ]);
+  } catch {
+    modelPicker.innerHTML = '<option>offline</option>';
+    return;
+  }
+  const opts = info.available_models || [];
+  const effective = me?.effective_model_id || info.default_model_id;
+  modelPicker.innerHTML = '';
+  for (const o of opts) {
+    const el = document.createElement('option');
+    el.value = o.id;
+    el.textContent = o.available ? o.label : `${o.label} (未配置)`;
+    if (!o.available) el.disabled = true;
+    if (o.id === effective) el.selected = true;
+    modelPicker.appendChild(el);
+  }
+  const tier = me?.user?.tier || 'trial';
+  if (tier === 'trial') {
+    modelPicker.disabled = true;
+    modelPicker.title = 'trial 账户使用默认模型；升级 paid 后可自选';
+  } else {
+    modelPicker.disabled = false;
+    modelPicker.title = '切换会话使用的 LLM';
+  }
+  modelPicker.onchange = async () => {
+    const want = modelPicker.value;
+    const r = await fetch('/api/me/model', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ model: want }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      addMeta('✗ 切换模型失败: ' + (j.error || r.status));
+      // Roll back the visible selection.
+      await setupModelPicker();
+      return;
+    }
+    addMeta(`✓ 已切换到 ${want}（下一条消息生效）`);
+  };
 }
 
 // ─── 👤 我的 (profile mode) ───
@@ -1136,20 +1588,43 @@ function paintProfile() {
   invCard.style.display = (me.tier === 'paid' || me.tier === 'admin') ? '' : 'none';
 }
 
-// Change-password form (inline in profile)
-document.getElementById('profPwForm').addEventListener('submit', async (e) => {
+// ── Change-password modal ──
+const pwOverlay = document.getElementById('pwOverlay');
+const pwForm    = document.getElementById('pwForm');
+const pwMsg     = document.getElementById('pwMsg');
+
+function openPwModal() {
+  pwOverlay.style.display = 'flex';
+  pwMsg.textContent = '';
+  pwForm.reset();
+  setTimeout(() => document.getElementById('pwOld')?.focus(), 50);
+}
+function closePwModal() {
+  pwOverlay.style.display = 'none';
+  pwForm.reset();
+  pwMsg.textContent = '';
+}
+
+document.getElementById('profPwOpenBtn')?.addEventListener('click', openPwModal);
+document.getElementById('pwCancel')?.addEventListener('click', closePwModal);
+// Click on dim backdrop closes; clicks inside the dialog don't bubble.
+pwOverlay.addEventListener('click', (e) => { if (e.target === pwOverlay) closePwModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && pwOverlay.style.display !== 'none') closePwModal();
+});
+
+pwForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const msg = document.getElementById('profPwMsg');
-  const oldPw = document.getElementById('profPwOld').value;
-  const newPw = document.getElementById('profPwNew').value;
-  const newPw2 = document.getElementById('profPwNew2').value;
+  const oldPw  = document.getElementById('pwOld').value;
+  const newPw  = document.getElementById('pwNew').value;
+  const newPw2 = document.getElementById('pwNew2').value;
   if (newPw !== newPw2) {
-    msg.style.color = 'var(--neg)';
-    msg.textContent = '两次新密码不一致';
+    pwMsg.style.color = 'var(--neg)';
+    pwMsg.textContent = '两次新密码不一致';
     return;
   }
-  msg.style.color = 'var(--muted)';
-  msg.textContent = '提交中…';
+  pwMsg.style.color = 'var(--muted)';
+  pwMsg.textContent = '提交中…';
   try {
     const r = await fetch('/api/me/password', {
       method: 'POST',
@@ -1158,17 +1633,18 @@ document.getElementById('profPwForm').addEventListener('submit', async (e) => {
     });
     const j = await r.json();
     if (!r.ok) {
-      msg.style.color = 'var(--neg)';
-      msg.textContent = j.error || '失败';
+      pwMsg.style.color = 'var(--neg)';
+      pwMsg.textContent = j.error || '失败';
       return;
     }
-    msg.style.color = 'var(--pos)';
+    pwMsg.style.color = 'var(--pos)';
     const dropped = j.other_sessions_dropped || 0;
-    msg.textContent = `✓ 已修改${dropped > 0 ? `；其他 ${dropped} 个设备已登出` : ''}`;
-    document.getElementById('profPwForm').reset();
+    pwMsg.textContent = `✓ 已修改${dropped > 0 ? `；其他 ${dropped} 个设备已登出` : ''}`;
+    // Auto-close after a brief moment so the success message is visible.
+    setTimeout(closePwModal, 1500);
   } catch (e) {
-    msg.style.color = 'var(--neg)';
-    msg.textContent = e.message || '网络错误';
+    pwMsg.style.color = 'var(--neg)';
+    pwMsg.textContent = e.message || '网络错误';
   }
 });
 
@@ -1224,18 +1700,23 @@ function trimPreview(p) {
 async function submitMessage() {
   const text = input.value.trim();
   if (!text) return;
+  // Lazily create a session if none active (e.g. user opened modal in list
+  // mode then started typing directly via the textarea, or first-time use).
+  if (!currentSessionId) {
+    await startNewSession();
+    if (!currentSessionId) return;
+  }
   input.value = '';
   send.disabled = true;
   addMessage('user', text);
   const trace = newTrace();
   appendTrace(trace, '<span class="spinner"></span><span class="label">connecting</span>');
-  chatHistory.push({ role: 'user', text });
 
   try {
-    const resp = await fetch('/api/chat/stream', {
+    const resp = await fetch(`/api/chat/sessions/${currentSessionId}/stream`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: text, history: chatHistory.slice(0, -1) }),
+      body: JSON.stringify({ message: text }),
     });
     // Clear the "connecting…" row but keep the <summary> + <div.trace-body> shells.
     if (trace.body) trace.body.innerHTML = '';
@@ -1351,8 +1832,7 @@ async function submitMessage() {
         dropLive();
         addMessage('asst', finalReply, finalIters);
       }
-      chatHistory.push({ role: 'asst', text: finalReply });
-      if (chatHistory.length > 40) chatHistory = chatHistory.slice(-40);
+      // The server persists this turn — no client-side history to push.
     } else {
       dropLive();
     }
@@ -1381,10 +1861,12 @@ input.addEventListener('keydown', (e) => {
 });
 send.addEventListener('click', submitMessage);
 
-fetchModelInfo();
+setupModelPicker();
 refreshLedger();
 refreshPortfolio();
-if (isMobile()) switchTab('chat');
+// Default tab on first load — chat is no longer a tab (floats in via FAB),
+// so just kick off the ledger dashboard.
+switchTab('ledger');
 addMeta('记账或炒股都行。试试："刚火锅花了 188，微信扣的" / "今天买了 100 股 AAPL 198.42"');
 </script>
 </body>

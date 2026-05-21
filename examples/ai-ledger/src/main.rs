@@ -18,6 +18,7 @@ mod model;
 mod portfolio;
 mod server;
 mod skills;
+mod subscription;
 mod tools;
 
 use async_trait::async_trait;
@@ -63,6 +64,11 @@ pub(crate) const TOOL_NAMES: &[&str] = &[
     "cny_gold_price",
     "delete_asset",
     "delete_trade",
+    // ─── subscriptions (recurring expenses) ───
+    "add_subscription",
+    "list_subscriptions",
+    "cancel_subscription",
+    "record_subscription_charge",
     // ─── web access (from harness-rs-tools-web) ───
     "web_search",
     "web_fetch",
@@ -280,10 +286,39 @@ Hard rules:\n\
    `tasks_get` fetches one, `tasks_cancel` stops it. argv is the command for the runner \
    to execute — typically [\"ledger\", \"--brief\"] or similar. Don't claim a task is \
    running unless you successfully called `tasks_create`.\n\
-11. CRITICAL HONESTY RULE: Never claim a write happened unless you actually called \
+10b. **Long-term memory** — you have access to per-user memory tools:\n\
+   • `list_memories(query?, k?)` — see what's already stored about this user. Call \
+     this whenever you're about to *guess* a user preference (\"我猜你喜欢…\") instead \
+     of just guessing. If the recall returned something, use it; if not, ask.\n\
+   • `remember_this(content, tags?, ttl_days?)` — call this when the user says \"记住 X\" \
+     / \"以后 \" / \"默认\" / \"my preference is …\". DO NOT call this on routine \
+     transactions (those go to `log_transaction`) or specific amounts (the framework \
+     blocks them anyway). Good: \"用户偏好按月订阅 SaaS 而不是买断\". Bad: \"用户火锅花了 ¥199\".\n\
+   • `forget_memory(id)` — when the user says \"忘掉 X\" / \"that's wrong\" / \"删掉那条\"; \
+     first `list_memories` to find the id.\n\
+   Per-iteration memory recall is automatic via the framework — the relevant prior \
+   context appears at the top of your system prompt. If you don't see what you need, \
+   call `list_memories` explicitly with a different query.\n\
+11. **Subscriptions (recurring expenses)** — for anything that auto-charges on a fixed \
+   cadence (Claude Code $250/月, Netflix, 房租, gym, 域名 yearly, …) use `add_subscription` \
+   NOT `log_transaction`. This stores a SCHEDULE (amount + frequency + next charge date) \
+   so the daily auto-charger can record each real charge as a transaction automatically.\n\
+   Phrases that mean \"add a subscription\": \"我有个 X 订阅，每月/每年 Y 元\", \"包月\", \
+   \"按月扣 / 按年付\", \"每月扣 / 每年扣\".\n\
+   Phrases that mean \"a known subscription just got charged\": \"X 这个月扣款了\", \
+   \"Netflix 刚扣了\", \"yearly renewal hit\" → first `list_subscriptions`, find the id, \
+   then `record_subscription_charge(subscription_id=<id>, occurred_at=<date>)`. This \
+   creates the transaction AND advances next_charge_date in one shot — do NOT also call \
+   `log_transaction`.\n\
+   When adding: `currency` is required (USD / CNY / EUR …) — DO NOT guess. `next_charge_date` \
+   is required (YYYY-MM-DD). If the user says \"每月 X 元\" without a date, ASK \"下次扣款是哪一天？\".\
+   `pay_channel` is optional but valuable for the user — \"Android/Google Play\", \"信用卡 ****1234\", \
+   etc. If user mentions one (\"通过 Android 扣的\"), set it.\n\
+12. CRITICAL HONESTY RULE: Never claim a write happened unless you actually called \
    one of the write tools (`add_account`, `log_transaction`, `record_transfer`, \
    `set_budget`, `add_asset`, `record_trade`, `update_price`, `refresh_prices`, \
-   `apply_category_merge`, `delete_asset`, `delete_trade`, `delete_transaction`) \
+   `apply_category_merge`, `delete_asset`, `delete_trade`, `delete_transaction`, \
+   `add_subscription`, `cancel_subscription`, `record_subscription_charge`) \
    in the CURRENT session. Read-only tools (`current_time`, \
    `list_*`, `monthly_report`, `check_budgets`) do NOT count as writes. If the \
    user described a spend / income / transfer / budget change, you MUST emit at \
@@ -348,6 +383,14 @@ struct Cli {
     #[arg(long)]
     serve: bool,
 
+    /// Scan all users' subscriptions; for every active one whose
+    /// `next_charge_date <= today` (local), record a transaction and advance
+    /// the date. Idempotent across re-runs within the same day (won't
+    /// double-charge unless the date is genuinely overdue twice). Suitable
+    /// as a daily cron via `harness-rs-daemon` or system cron.
+    #[arg(long)]
+    auto_charge_subs: bool,
+
     /// Port for --serve (default: 6743).
     #[arg(long, default_value_t = 6743)]
     port: u16,
@@ -357,6 +400,89 @@ struct Cli {
     /// this behind a reverse proxy or on a private network.
     #[arg(long, default_value = "127.0.0.1")]
     bind: String,
+}
+
+/// Run by `--auto-charge-subs`. Scans every user's active subscriptions; for
+/// each one whose `next_charge_date <= today (local)`, inserts a transaction
+/// and advances the date by the subscription's frequency. Catches up if a
+/// charge was missed for multiple periods (loops until next_charge > today).
+///
+/// Designed to be invoked by cron / `harness-rs-daemon` daily. Safe to run
+/// multiple times per day — once `next_charge_date > today` we stop touching
+/// it, so re-runs are no-ops.
+async fn run_auto_charge_subs() -> anyhow::Result<()> {
+    use chrono::{Local, TimeZone, Utc};
+    use rust_decimal::Decimal;
+    use uuid::Uuid;
+
+    let db = db::Db::open(&tools::ledger_path())?;
+    let today = Local::now().date_naive();
+    let due = db.due_subscriptions_all_users(today)?;
+    if due.is_empty() {
+        println!("→ auto-charge-subs: no subscriptions due as of {today}");
+        return Ok(());
+    }
+    println!("→ auto-charge-subs: {} subscription(s) due as of {today}", due.len());
+    let mut charged = 0u32;
+    let mut skipped = 0u32;
+    for (user_id, sub) in due {
+        // Catch up on missed periods, one charge per overdue cycle.
+        let mut next = sub.next_charge_date;
+        let freq = sub.frequency;
+        let mut cycles = 0u32;
+        while next <= today && cycles < 12 {
+            let occurred_at = Local
+                .from_local_datetime(&next.and_hms_opt(15, 0, 0).unwrap())
+                .single()
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+            let note_prefix = format!("[订阅] {} (auto)", sub.name);
+            let note = match sub.note.as_deref() {
+                Some(n) if !n.is_empty() => format!("{note_prefix} · {n}"),
+                _ => note_prefix,
+            };
+            let txn = crate::model::Transaction {
+                id: Uuid::new_v4().to_string()[..8].to_string(),
+                kind: crate::model::TxnKind::Expense,
+                amount: sub.amount,
+                currency: sub.currency.clone(),
+                account_id: sub.account_id.clone(),
+                counter_account_id: None,
+                category: sub.category.clone(),
+                note: Some(note),
+                occurred_at,
+                created_at: Utc::now(),
+            };
+            if let Err(e) = db.insert_transaction(&user_id, &txn) {
+                eprintln!(
+                    "  ✗ user={user_id} sub={} (\"{}\"): insert_transaction failed: {e}",
+                    sub.id, sub.name
+                );
+                skipped += 1;
+                break;
+            }
+            charged += 1;
+            cycles += 1;
+            // Compute the next cycle WITHOUT calling advance_subscription
+            // yet (we batch a single update at the end of the catch-up).
+            next = freq.advance(next);
+            let _ = Decimal::ZERO; // suppress unused warning when Decimal isn't used in this path
+        }
+        // Persist the final next_charge_date once.
+        if cycles > 0 {
+            let _ = db
+                .conn_update_subscription_next_date(&user_id, &sub.id, next)
+                .map_err(|e| {
+                    eprintln!("  ✗ user={user_id} sub={}: date-advance failed: {e}", sub.id);
+                });
+        }
+        println!(
+            "  ✓ user={user_id} sub={} (\"{}\" {} {}): {} cycle(s) recorded, next={}",
+            sub.id, sub.name, sub.amount, sub.currency, cycles, next
+        );
+    }
+    println!("→ auto-charge-subs: {charged} charge(s) recorded, {skipped} skipped");
+    Ok(())
 }
 
 fn build_profile(cli: &Cli) -> UserProfile {
@@ -445,6 +571,10 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
+    if cli.auto_charge_subs {
+        return run_auto_charge_subs().await;
+    }
+
     if cli.serve {
         let ip: std::net::IpAddr = cli
             .bind
@@ -458,14 +588,68 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|| std::path::PathBuf::from("tasks.json"));
             std::sync::Arc::new(harness_tools_tasks::JsonFileStore::new(tasks_path))
         };
+        // Multi-provider keys. `HARNESS_API_KEY` is the legacy single-key
+        // env (used to live in qc-jp's /etc/ai-ledger.env pointing at Gemini)
+        // — if set without an explicit DEEPSEEK_API_KEY / GEMINI_API_KEY, we
+        // assume it matches the configured `HARNESS_MODEL_PROVIDER`.
+        let mut deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok();
+        let mut gemini_key = std::env::var("GEMINI_API_KEY").ok();
+        let provider_env = std::env::var("HARNESS_MODEL_PROVIDER")
+            .unwrap_or_default()
+            .to_lowercase();
+        if let Ok(legacy) = std::env::var("HARNESS_API_KEY") {
+            if provider_env == "gemini" && gemini_key.is_none() {
+                gemini_key = Some(legacy);
+            } else if deepseek_key.is_none() {
+                deepseek_key = Some(legacy);
+            }
+        }
+        let available_models = vec![
+            server::ModelOption {
+                id: "deepseek-v4-flash".into(),
+                label: "DeepSeek v4 Flash (快 / 便宜)".into(),
+                provider: "deepseek".into(),
+                available: deepseek_key.is_some(),
+            },
+            server::ModelOption {
+                id: "deepseek-v4-pro".into(),
+                label: "DeepSeek v4 Pro (推理强 / 慢一点)".into(),
+                provider: "deepseek".into(),
+                available: deepseek_key.is_some(),
+            },
+            server::ModelOption {
+                id: "gemini-3.5-flash".into(),
+                label: "Gemini 3.5 Flash (Google 搜索 grounding)".into(),
+                provider: "gemini".into(),
+                available: gemini_key.is_some(),
+            },
+        ];
+        // Default model: prefer HARNESS_MODEL if it's both known and
+        // available; otherwise pick the first available.
+        let want = model_id.to_string();
+        let default_model_id = if available_models
+            .iter()
+            .any(|m| m.id == want && m.available)
+        {
+            want
+        } else {
+            available_models
+                .iter()
+                .find(|m| m.available)
+                .map(|m| m.id.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no provider keys configured — set DEEPSEEK_API_KEY and/or GEMINI_API_KEY"
+                    )
+                })?
+        };
         let state = server::AppState {
-            base_url: base_url.clone(),
-            model_id: model_id.to_string(),
-            api_key: api_key.clone(),
+            default_model_id,
             profile: profile.clone(),
             max_iters: cli.max_iters,
-            provider_label: info.provider.clone(),
-            model_label: info.model.clone(),
+            available_models,
+            deepseek_key,
+            gemini_key,
             task_store,
         };
         return server::serve(state, addr).await;

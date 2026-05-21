@@ -331,6 +331,19 @@ impl<M: Model> AgentLoop<M> {
                 self.hooks.fire(&Event::PostCompact { stage }, world);
             }
 
+            // Per-iteration guides — recall-style adapters that want to
+            // refresh their injected context every turn (e.g. MemoryGuide
+            // re-recalling against the latest user message). Default
+            // `apply_before_iter` is a no-op, so this loop is cheap for
+            // guides that don't override it.
+            for g in &self.guides {
+                if g.scope().matches(&ctx.task)
+                    && let Err(e) = g.apply_before_iter(&mut ctx, world).await
+                {
+                    tracing::warn!(guide = %g.id(), error = %e, "apply_before_iter failed; continuing");
+                }
+            }
+
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
             let out = if self.streaming {
                 self.complete_via_stream(&ctx, world).await?

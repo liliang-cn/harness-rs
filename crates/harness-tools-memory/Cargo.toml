@@ -1,0 +1,24 @@
+[package]
+name = "harness-rs-tools-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "LLM-facing memory tools for harness-rs agents: `remember_this`, `forget_memory`, `list_memories`. Backed by any `Arc<dyn Memory>` — wire per-user via a factory closure for multi-tenant apps."
+
+keywords     = ["agent", "ai", "llm", "harness", "memory"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+[lib]
+name = "harness_tools_memory"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tracing         = { workspace = true }

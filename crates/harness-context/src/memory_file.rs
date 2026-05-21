@@ -55,6 +55,66 @@ impl FileMemory {
         &self.path
     }
 
+    /// Rewrite the file dropping every entry whose `expires_ms <= now`.
+    /// Use this as a periodic janitor (cron) to keep the file from
+    /// accumulating stale rows; recall already filters at read time, so
+    /// compact is purely a disk-space concern.
+    ///
+    /// Returns how many entries were removed.
+    pub fn compact(&self) -> Result<u32, MemoryError> {
+        let entries = self.read_all()?;
+        let now = now_ms();
+        let original_len = entries.len();
+        let kept: Vec<MemoryEntry> = entries.into_iter().filter(|e| !e.is_expired(now)).collect();
+        let removed = original_len - kept.len();
+        self.rewrite(&kept)?;
+        Ok(removed as u32)
+    }
+
+    /// Delete one entry by id. Reads the file, drops the matching row,
+    /// rewrites. Returns `true` if a row was actually removed.
+    pub fn delete_by_id(&self, id: &str) -> Result<bool, MemoryError> {
+        let entries = self.read_all()?;
+        let original_len = entries.len();
+        let kept: Vec<MemoryEntry> = entries.into_iter().filter(|e| e.id != id).collect();
+        if kept.len() == original_len {
+            return Ok(false);
+        }
+        self.rewrite(&kept)?;
+        Ok(true)
+    }
+
+    /// Drop every entry. Equivalent to `rm <path>; touch <path>` but holds
+    /// the write lock so no concurrent append races.
+    pub fn delete_all(&self) -> Result<u32, MemoryError> {
+        let entries = self.read_all()?;
+        let n = entries.len() as u32;
+        self.rewrite(&[])?;
+        Ok(n)
+    }
+
+    fn rewrite(&self, entries: &[MemoryEntry]) -> Result<(), MemoryError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|e| MemoryError::Backend(format!("poisoned mutex: {e}")))?;
+        let mut buf = String::new();
+        for e in entries {
+            let line =
+                serde_json::to_string(e).map_err(|e| MemoryError::Serde(e.to_string()))?;
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        // Atomic-ish: write to sibling tmp, fsync, rename. Avoids leaving
+        // a half-written JSONL if the process is killed mid-rewrite.
+        let tmp = self.path.with_extension("jsonl.tmp");
+        std::fs::write(&tmp, buf.as_bytes())
+            .map_err(|e| MemoryError::Io(format!("write tmp: {e}")))?;
+        std::fs::rename(&tmp, &self.path)
+            .map_err(|e| MemoryError::Io(format!("rename: {e}")))?;
+        Ok(())
+    }
+
     fn read_all(&self) -> Result<Vec<MemoryEntry>, MemoryError> {
         let content = std::fs::read_to_string(&self.path)
             .map_err(|e| MemoryError::Io(format!("read {}: {e}", self.path.display())))?;
@@ -83,6 +143,14 @@ impl Memory for FileMemory {
     async fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryEntry>, MemoryError> {
         let entries = self.read_all()?;
         if entries.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let now_ms = now_ms();
+        let entries: Vec<MemoryEntry> = entries
+            .into_iter()
+            .filter(|e| !e.is_expired(now_ms))
+            .collect();
+        if entries.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -144,6 +212,13 @@ impl Memory for FileMemory {
         writeln!(file, "{line}").map_err(|e| MemoryError::Io(format!("write: {e}")))?;
         Ok(())
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn tokenise(s: &str) -> HashSet<String> {

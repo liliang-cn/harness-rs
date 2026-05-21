@@ -32,12 +32,44 @@ use harness_core::{
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Guide that recalls relevant prior memories and injects them as a
-/// `Block::Text` into `ctx.guides` so the model sees them in the system
-/// prompt for every iteration of this run.
+/// Marker prefix used to identify the recall block in `ctx.guides`. We
+/// strip prior recall blocks on each `apply_before_iter` so the injected
+/// list reflects only the LATEST recall — otherwise ctx.guides grows
+/// unboundedly across iterations.
+const MEMORY_RECALL_MARKER: &str = "[memory-recall]\n";
+
+/// Guide that recalls relevant prior memories and injects them into
+/// `ctx.guides` as a `Block::Text` for the model to see.
+///
+/// Two recall points:
+///
+/// - `apply` (session start): one-shot recall using `ctx.task.description`
+///   as the query. Always fires.
+/// - `apply_before_iter` (every model turn): re-recalls using the **last
+///   user message** as query, replacing the previous recall block. Lets
+///   the recall track topic drift mid-session. No-op when there's no user
+///   message in history (the very first iteration uses the `apply` recall).
+///
+/// Filters (chainable builders, post-recall):
+///
+/// - `with_top_k(k)` — number of candidates to fetch from `Memory::recall`.
+///   Default 5.
+/// - `with_min_score(s)` — drop entries whose recomputed normalised
+///   keyword overlap with the query is below `s`. Default 0.0 (no filter).
+///   Score = `(query_tokens ∩ entry_tokens).len() / query_tokens.len()`.
+/// - `with_required_tags(tags)` — drop entries that don't have ALL these
+///   tags. Default empty (no filter).
+/// - `with_excluded_tags(tags)` — drop entries that have ANY of these
+///   tags. Default empty.
+///
+/// When filters are tight, we over-fetch `top_k * 3` candidates so there's
+/// room to drop without starving the output.
 pub struct MemoryGuide {
     memory: Arc<dyn Memory>,
     top_k: usize,
+    min_score: f32,
+    required_tags: Vec<String>,
+    excluded_tags: Vec<String>,
 }
 
 static MEMORY_GUIDE_ID: OnceLock<GuideId> = OnceLock::new();
@@ -46,7 +78,13 @@ static MEMORY_GUIDE_SCOPE: OnceLock<GuideScope> = OnceLock::new();
 impl MemoryGuide {
     /// Construct a guide that recalls up to 5 entries per session.
     pub fn new(memory: Arc<dyn Memory>) -> Self {
-        Self { memory, top_k: 5 }
+        Self {
+            memory,
+            top_k: 5,
+            min_score: 0.0,
+            required_tags: Vec::new(),
+            excluded_tags: Vec::new(),
+        }
     }
 
     /// Override the number of memories recalled per session. Pick small —
@@ -55,6 +93,135 @@ impl MemoryGuide {
         self.top_k = k;
         self
     }
+
+    /// Drop entries whose recomputed normalised keyword overlap with the
+    /// query is below `s` ∈ [0, 1]. Default 0.0 (= keep all top_k).
+    ///
+    /// Score formula:
+    /// `(distinct query tokens present in entry.content+tags) / (query token count)`
+    ///
+    /// So a query of 4 tokens needs ≥3 to land in the entry to score ≥ 0.75.
+    pub fn with_min_score(mut self, s: f32) -> Self {
+        self.min_score = s.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Only inject entries that have ALL of these tags. Empty = no filter.
+    pub fn with_required_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.required_tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Drop entries that have ANY of these tags. Empty = no filter.
+    pub fn with_excluded_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.excluded_tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Inner recall + filter + format pass. Returns the formatted block
+    /// text, or `None` if there's nothing to inject.
+    async fn recall_block(&self, query: &str) -> Option<String> {
+        if self.top_k == 0 || query.trim().is_empty() {
+            return None;
+        }
+        // Over-fetch when filters are active so the post-filter has room.
+        let fetch_k = if self.min_score > 0.0
+            || !self.required_tags.is_empty()
+            || !self.excluded_tags.is_empty()
+        {
+            self.top_k.saturating_mul(3).max(self.top_k)
+        } else {
+            self.top_k
+        };
+        let hits = match self.memory.recall(query, fetch_k).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "memory recall failed; proceeding without it");
+                return None;
+            }
+        };
+        let q_tokens = tokenise_for_score(query);
+        let q_len = q_tokens.len().max(1) as f32;
+
+        let mut kept: Vec<&MemoryEntry> = Vec::new();
+        for e in &hits {
+            // Tag filters first — cheaper than re-scoring.
+            if !self.required_tags.is_empty()
+                && !self.required_tags.iter().all(|t| e.tags.iter().any(|x| x == t))
+            {
+                continue;
+            }
+            if !self.excluded_tags.is_empty()
+                && self.excluded_tags.iter().any(|t| e.tags.iter().any(|x| x == t))
+            {
+                continue;
+            }
+            if self.min_score > 0.0 {
+                let score = recompute_score(&q_tokens, e);
+                if (score / q_len) < self.min_score {
+                    continue;
+                }
+            }
+            kept.push(e);
+            if kept.len() >= self.top_k {
+                break;
+            }
+        }
+        if kept.is_empty() {
+            return None;
+        }
+        let mut lines = String::from(MEMORY_RECALL_MARKER);
+        lines.push_str("Relevant prior context (from your long-term memory):");
+        for (i, e) in kept.iter().enumerate() {
+            lines.push_str(&format!("\n  {}. {}", i + 1, e.content.trim()));
+        }
+        Some(lines)
+    }
+
+    fn remove_previous_recall_block(ctx: &mut Context) {
+        ctx.guides.retain(|b| {
+            !matches!(b, Block::Text(t) if t.starts_with(MEMORY_RECALL_MARKER))
+        });
+    }
+}
+
+/// Pull out the most recent user-role text from `ctx.history`. Used by
+/// `apply_before_iter` to drive the per-turn recall query.
+fn last_user_text(ctx: &Context) -> Option<String> {
+    use harness_core::{Block as B, TurnRole};
+    for turn in ctx.history.iter().rev() {
+        if turn.role != TurnRole::User {
+            continue;
+        }
+        for block in turn.blocks.iter().rev() {
+            if let B::Text(t) = block
+                && !t.trim().is_empty()
+            {
+                return Some(t.clone());
+            }
+        }
+    }
+    None
+}
+
+fn tokenise_for_score(s: &str) -> std::collections::HashSet<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() >= 3)
+        .map(String::from)
+        .collect()
+}
+
+fn recompute_score(query_tokens: &std::collections::HashSet<String>, entry: &MemoryEntry) -> f32 {
+    let mut hay = entry.content.to_lowercase();
+    if !entry.tags.is_empty() {
+        hay.push(' ');
+        hay.push_str(&entry.tags.join(" ").to_lowercase());
+    }
+    query_tokens
+        .iter()
+        .filter(|t| hay.contains(t.as_str()))
+        .count() as f32
 }
 
 #[async_trait]
@@ -71,26 +238,25 @@ impl Guide for MemoryGuide {
         MEMORY_GUIDE_SCOPE.get_or_init(|| GuideScope::Always)
     }
     async fn apply(&self, ctx: &mut Context, _w: &World) -> Result<(), GuideError> {
-        if self.top_k == 0 {
-            return Ok(());
+        Self::remove_previous_recall_block(ctx);
+        if let Some(block) = self.recall_block(&ctx.task.description).await {
+            ctx.guides.push(Block::Text(block));
         }
-        let hits = match self.memory.recall(&ctx.task.description, self.top_k).await {
-            Ok(v) => v,
-            Err(e) => {
-                // Best-effort: a failing memory backend must not nuke the
-                // task. Log and proceed with no recall.
-                tracing::warn!(error = %e, "memory recall failed; proceeding without it");
-                return Ok(());
-            }
-        };
-        if hits.is_empty() {
-            return Ok(());
+        Ok(())
+    }
+    async fn apply_before_iter(
+        &self,
+        ctx: &mut Context,
+        _w: &World,
+    ) -> Result<(), GuideError> {
+        // Query = latest user message; fall back to task.description on
+        // turn 0 (before any user turn lands in history — though the loop
+        // pushes the task as a user turn before iter 0 so this is rare).
+        let query = last_user_text(ctx).unwrap_or_else(|| ctx.task.description.clone());
+        Self::remove_previous_recall_block(ctx);
+        if let Some(block) = self.recall_block(&query).await {
+            ctx.guides.push(Block::Text(block));
         }
-        let mut lines = String::from("Relevant prior context (from your long-term memory):");
-        for (i, e) in hits.iter().enumerate() {
-            lines.push_str(&format!("\n  {}. {}", i + 1, e.content.trim()));
-        }
-        ctx.guides.push(Block::Text(lines));
         Ok(())
     }
 }
@@ -204,6 +370,10 @@ pub struct MemorySynthesizer {
     source: String,
     base_tags: Vec<String>,
     max_facts: usize,
+    /// App-specific instructions prepended to the synth prompt. Used to
+    /// give the model domain context (e.g. "this is a personal accounting
+    /// app — transactions are already stored, don't repeat flows as facts").
+    extra_instructions: Option<String>,
     // JoinHandles of spawned synthesis tasks. The agent loop's owner can
     // `await flush_pending()` before exiting to guarantee that synth
     // completes before the process tears down its tokio runtime.
@@ -221,8 +391,30 @@ impl MemorySynthesizer {
             source: "session".into(),
             base_tags: Vec::new(),
             max_facts: 3,
+            extra_instructions: None,
             pending: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Prepend domain-specific guidance to the synthesizer's prompt. The
+    /// extra text shows up BEFORE the standard "extract durable facts"
+    /// instructions, so it sets context for what the model should consider
+    /// durable in this application.
+    ///
+    /// Example for a personal-accounting app:
+    /// ```ignore
+    /// .with_extra_instructions(
+    ///   "This is a personal-accounting agent. Transaction flows like \
+    ///    '¥199 火锅 microwave' are stored in the txns table — do NOT \
+    ///    re-store them as facts. ONLY record: stable user preferences \
+    ///    (payment habits, category conventions), repeated behaviour \
+    ///    patterns (≥2 mentions), or long-term decisions (subscription \
+    ///    cadences, investment policies). If unsure, prefer empty []."
+    /// )
+    /// ```
+    pub fn with_extra_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.extra_instructions = Some(instructions.into());
+        self
     }
 
     /// Await all background synthesis tasks that have been kicked off so
@@ -262,6 +454,11 @@ struct SynthFact {
     content: String,
     #[serde(default)]
     tags: Vec<String>,
+    /// Optional retention hint emitted by the synth model. `None` = keep
+    /// indefinitely (stable preferences, identity). Finite N = expire after
+    /// N days (one-off project state, session-scoped preferences).
+    #[serde(default)]
+    ttl_days: Option<u32>,
 }
 
 /// Best-effort JSON-array extractor: tolerates markdown code fences and
@@ -321,8 +518,10 @@ impl Hook for MemorySynthesizer {
                 let source = self.source.clone();
                 let base_tags = self.base_tags.clone();
                 let max_facts = self.max_facts;
+                let extra = self.extra_instructions.clone();
                 let handle = tokio::spawn(async move {
-                    distil_and_write(mem, model, source, base_tags, max_facts, transcript).await;
+                    distil_and_write(mem, model, source, base_tags, max_facts, extra, transcript)
+                        .await;
                 });
                 if let Ok(mut g) = self.pending.lock() {
                     g.push(handle);
@@ -340,15 +539,26 @@ async fn distil_and_write(
     source: String,
     base_tags: Vec<String>,
     max_facts: usize,
+    extra_instructions: Option<String>,
     transcript: String,
 ) {
+    let extra_block = match extra_instructions {
+        Some(s) if !s.trim().is_empty() => format!("\n\n[domain context]\n{s}\n"),
+        _ => String::new(),
+    };
     let prompt = format!(
         "Below is the assistant's turns from a completed agent session. \
          Extract 1 to {max_facts} DURABLE FACTS worth remembering for future sessions \
          (user preferences, decisions made, key findings, learned constraints — NOT \
-         transient details like timestamps or one-off answers). \
+         transient details like timestamps or one-off answers).{extra_block} \
          \n\nReturn ONLY a JSON array (no prose, no markdown fences) where each item is \
-         {{\"content\": \"<one durable fact, 1-2 sentences>\", \"tags\": [\"<keyword>\", ...]}}. \
+         {{\"content\": \"<one durable fact, 1-2 sentences>\", \"tags\": [\"<keyword>\", ...], \
+         \"ttl_days\": <integer or null>}}. \
+         `ttl_days` controls how long the fact stays in memory: \
+         `null` = permanent (use for stable preferences, identity, long-term decisions); \
+         `7` = one week (current task / sprint scope); \
+         `30`-`180` = project-scope context; \
+         `1` = ephemeral (rarely useful — prefer omitting facts that are this fleeting). \
          Use 2-5 lowercase keyword tags per fact for retrieval. \
          If the session produced nothing durable, return [].\
          \n\n--- SESSION TRANSCRIPT ---\n{transcript}\n--- END TRANSCRIPT ---"
@@ -382,9 +592,14 @@ async fn distil_and_write(
             }
             let mut tags = base_tags.clone();
             tags.extend(f.tags);
-            let entry = MemoryEntry::new(content)
+            let mut entry = MemoryEntry::new(content)
                 .with_source(source.clone())
                 .with_tags(tags);
+            if let Some(days) = f.ttl_days
+                && days > 0
+            {
+                entry = entry.with_ttl_days(days);
+            }
             if let Err(e) = memory.write(entry).await {
                 tracing::warn!(error = %e, "memory synth write failed");
             } else {
