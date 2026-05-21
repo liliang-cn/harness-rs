@@ -9,3 +9,7 @@
 .playwright-mcp/
 # Ad-hoc UI screenshots from manual testing
 /*.png
+# admin-ui: node_modules never in git; dist/ IS committed so `cargo build`
+# works without first running `npm run build` (the binary embeds dist via
+# include_dir!).
+examples/ai-ledger/admin-ui/node_modules/

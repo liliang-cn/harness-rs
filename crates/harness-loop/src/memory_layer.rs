@@ -583,15 +583,15 @@ async fn distil_and_write(
     };
     let raw = out.text.unwrap_or_default();
 
-    let mut wrote_any = false;
-    if let Some(facts) = extract_facts(&raw) {
-        for f in facts.into_iter().take(max_facts) {
+    let parsed = extract_facts(&raw);
+    if let Some(facts) = parsed.as_ref() {
+        for f in facts.iter().take(max_facts) {
             let content = f.content.trim().to_string();
             if content.is_empty() {
                 continue;
             }
             let mut tags = base_tags.clone();
-            tags.extend(f.tags);
+            tags.extend(f.tags.clone());
             let mut entry = MemoryEntry::new(content)
                 .with_source(source.clone())
                 .with_tags(tags);
@@ -602,16 +602,11 @@ async fn distil_and_write(
             }
             if let Err(e) = memory.write(entry).await {
                 tracing::warn!(error = %e, "memory synth write failed");
-            } else {
-                wrote_any = true;
             }
         }
-    }
-
-    if !wrote_any && !raw.trim().is_empty() {
-        // Fallback: model returned something but we couldn't parse it.
-        // Persist verbatim with a "synth-raw" tag so the operator can
-        // grep it later, rather than silently dropping the session.
+    } else if !raw.trim().is_empty() {
+        // Parse genuinely failed (not "model returned []"). Persist the raw
+        // payload tagged "synth-raw" so the operator can grep it later.
         let mut tags = base_tags;
         tags.push("synth-raw".into());
         let entry = MemoryEntry::new(raw.trim().to_string())
@@ -799,6 +794,34 @@ mod tests {
         let stored = mem.store.lock().unwrap().clone();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].content, "fact one");
+    }
+
+    #[tokio::test]
+    async fn synthesizer_empty_array_persists_nothing() {
+        // Regression: model correctly returns "[]" meaning "no durable
+        // facts to extract". This must NOT fall through to the synth-raw
+        // fallback (which would store the literal "[]" as a memory row).
+        use harness_models::{MockModel, MockResponse};
+
+        let mem = Arc::new(VecMemory::default());
+        let synth: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("[]")));
+        let s = MemorySynthesizer::new(mem.clone(), synth);
+        let mut world = harness_context::default_world(std::env::temp_dir());
+
+        let out = ModelOutput {
+            text: Some("fluff".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            stop_reason: StopReason::EndTurn,
+            reasoning: None,
+        };
+        let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
+        let _ = s.fire(&Event::TaskCompleted, &mut world);
+
+        // Give the spawned synth task time to run.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let stored = mem.store.lock().unwrap().clone();
+        assert!(stored.is_empty(), "expected nothing stored, got {stored:?}");
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@
 //! DEEPSEEK_API_KEY=sk-... ledger --repl
 //! ```
 
+mod admin;
 mod auth;
 mod db;
 mod model;
@@ -210,6 +211,11 @@ Hard rules:\n\
    category when nothing existing fits.\n\
 4. Amounts are positive numbers regardless of expense vs income — the `kind` field \
    carries the sign.\n\
+4b. **Capture specifics as `note`.** When the user mentions WHAT they bought / WHO / WHERE \
+   beyond the bare category, put it on `note` — e.g. \"火锅\" / \"冰粉\" / \"打车回家\" / \
+   \"星巴克\" / \"给妈妈的生日礼物\". Keep notes short (≤ 20 字). If the message has no \
+   detail beyond the category (\"今天吃饭 200\"), OMIT `note` — don't pad with the category \
+   name, that's redundant.\n\
 5. Transfers between the user's own accounts → `record_transfer`, NOT \
    `log_transaction`. Don't double-count.\n\
 6. For queries (\"本月吃饭花了多少\", \"剩多少预算\"), use `monthly_report` / \
@@ -607,19 +613,19 @@ async fn main() -> anyhow::Result<()> {
         let available_models = vec![
             server::ModelOption {
                 id: "deepseek-v4-flash".into(),
-                label: "DeepSeek v4 Flash (快 / 便宜)".into(),
+                label: "DeepSeek v4 Flash".into(),
                 provider: "deepseek".into(),
                 available: deepseek_key.is_some(),
             },
             server::ModelOption {
                 id: "deepseek-v4-pro".into(),
-                label: "DeepSeek v4 Pro (推理强 / 慢一点)".into(),
+                label: "DeepSeek v4 Pro".into(),
                 provider: "deepseek".into(),
                 available: deepseek_key.is_some(),
             },
             server::ModelOption {
                 id: "gemini-3.5-flash".into(),
-                label: "Gemini 3.5 Flash (Google 搜索 grounding)".into(),
+                label: "Gemini 3.5 Flash".into(),
                 provider: "gemini".into(),
                 available: gemini_key.is_some(),
             },
@@ -643,14 +649,35 @@ async fn main() -> anyhow::Result<()> {
                     )
                 })?
         };
+        // Seed admin-mutable bits from env → DB, then load whatever the DB
+        // ends up with (DB wins on subsequent restarts after admin edits).
+        let cfg_db = db::Db::open(&tools::ledger_path())?;
+        cfg_db.provider_config_seed_if_missing("default_model_id", &default_model_id)?;
+        if let Some(k) = &deepseek_key {
+            cfg_db.provider_config_seed_if_missing("deepseek_api_key", k)?;
+        }
+        if let Some(k) = &gemini_key {
+            cfg_db.provider_config_seed_if_missing("gemini_api_key", k)?;
+        }
+        let stored = cfg_db.provider_config_all()?;
+        drop(cfg_db);
+
+        let mut cfg = server::AppConfig {
+            default_model_id: stored
+                .get("default_model_id")
+                .cloned()
+                .unwrap_or(default_model_id),
+            available_models,
+            deepseek_key: stored.get("deepseek_api_key").cloned().or(deepseek_key),
+            gemini_key: stored.get("gemini_api_key").cloned().or(gemini_key),
+        };
+        cfg.refresh_availability();
+
         let state = server::AppState {
-            default_model_id,
             profile: profile.clone(),
             max_iters: cli.max_iters,
-            available_models,
-            deepseek_key,
-            gemini_key,
             task_store,
+            config: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
         };
         return server::serve(state, addr).await;
     }

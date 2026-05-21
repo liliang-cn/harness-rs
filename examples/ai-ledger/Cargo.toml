@@ -38,6 +38,7 @@ uuid            = { version = "1", features = ["v4"] }
 rusqlite        = { version = "0.32", features = ["bundled", "chrono"] }
 rust_decimal    = { version = "1", features = ["serde-with-str"] }
 axum            = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tower-http      = { version = "0.5", features = ["cors"] }
 tokio-stream    = "0.1"
 futures         = { workspace = true }
 reqwest         = { workspace = true }
@@ -45,3 +46,4 @@ thiserror       = { workspace = true }
 schemars        = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+include_dir     = "0.7"

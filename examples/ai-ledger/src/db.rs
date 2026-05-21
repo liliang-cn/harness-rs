@@ -208,6 +208,35 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session
                 ON chat_messages(session_id, created_at);
+
+            -- Admin audit log: who did what, when. user_id is nullable for
+            -- anonymous events (e.g. failed login by email). meta_json holds
+            -- a small JSON blob with extra context (actor email, before/after
+            -- on tier_change, etc).
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT,
+                kind        TEXT NOT NULL,
+                target_id   TEXT,
+                meta_json   TEXT,
+                tokens_in   INTEGER NOT NULL DEFAULT 0,
+                tokens_out  INTEGER NOT NULL DEFAULT 0,
+                created_ms  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_user_time
+                ON audit_events(user_id, created_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_kind_time
+                ON audit_events(kind, created_ms DESC);
+
+            -- KV table for admin-mutable provider config. Keys:
+            --   deepseek_api_key, gemini_api_key, model_for_trial, model_for_paid
+            -- On startup env vars seed missing rows; runtime reads from the
+            -- in-memory AppConfig that mirrors this table.
+            CREATE TABLE IF NOT EXISTS provider_config (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_ms  INTEGER NOT NULL
+            );
             "#,
         )?;
         // Idempotent column adds — keeps already-migrated databases working
@@ -459,10 +488,16 @@ impl Db {
         Ok(())
     }
 
+    /// Active (unused) invites only — used codes are excluded so the
+    /// caller's UI shows just what's still actionable. The code→user
+    /// relationship for consumed codes lives on the `users` row instead
+    /// (`invited_by`, `invite_code_used`).
     pub fn list_invites_by_creator(&self, user_id: &str) -> SqlResult<Vec<crate::auth::Invite>> {
         let mut stmt = self.conn.prepare(
             "SELECT code, created_by, uses_remaining, expires_at, created_at
-             FROM invites WHERE created_by = ?1 ORDER BY created_at DESC",
+             FROM invites
+             WHERE created_by = ?1 AND uses_remaining > 0
+             ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map(params![user_id], |r| {
             let exp_s: Option<String> = r.get(3)?;
@@ -1366,6 +1401,272 @@ impl Db {
             )
             .map(|n| n as u32)
     }
+
+    // ───── admin: audit events ─────
+
+    /// Insert an audit row. `id` is generated here; caller passes the rest.
+    /// `tokens_in/out` should be 0 for non-LLM events.
+    pub fn insert_audit(
+        &self,
+        user_id: Option<&str>,
+        kind: &str,
+        target_id: Option<&str>,
+        meta_json: Option<&str>,
+        tokens_in: i64,
+        tokens_out: i64,
+    ) -> SqlResult<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        // 8-byte hex id, no external crate needed.
+        let id = format!(
+            "{:016x}",
+            (now_ms as u64).wrapping_mul(2654435761u64) ^ rand_u64()
+        );
+        self.conn.execute(
+            "INSERT INTO audit_events(id, user_id, kind, target_id, meta_json,
+                                      tokens_in, tokens_out, created_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                user_id,
+                kind,
+                target_id,
+                meta_json,
+                tokens_in,
+                tokens_out,
+                now_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Paged audit-events query. `before_ms` is a cursor (rows strictly older
+    /// than that timestamp); pass `i64::MAX` on the first page.
+    pub fn list_audit(
+        &self,
+        user_id_filter: Option<&str>,
+        kind_filter: Option<&str>,
+        before_ms: i64,
+        limit: u32,
+    ) -> SqlResult<Vec<AuditEvent>> {
+        let mut sql = String::from(
+            "SELECT id, user_id, kind, target_id, meta_json, tokens_in, tokens_out, created_ms
+             FROM audit_events WHERE created_ms < ?1",
+        );
+        let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(before_ms)];
+        if let Some(uid) = user_id_filter {
+            sql.push_str(" AND user_id = ?");
+            sql.push_str(&(p.len() + 1).to_string());
+            p.push(Box::new(uid.to_string()));
+        }
+        if let Some(k) = kind_filter {
+            sql.push_str(" AND kind = ?");
+            sql.push_str(&(p.len() + 1).to_string());
+            p.push(Box::new(k.to_string()));
+        }
+        sql.push_str(" ORDER BY created_ms DESC LIMIT ?");
+        sql.push_str(&(p.len() + 1).to_string());
+        p.push(Box::new(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(refs), |r| {
+            Ok(AuditEvent {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                kind: r.get(2)?,
+                target_id: r.get(3)?,
+                meta_json: r.get(4)?,
+                tokens_in: r.get(5)?,
+                tokens_out: r.get(6)?,
+                created_ms: r.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    // ───── admin: users list with stats ─────
+
+    /// All users with aggregated activity counts. Single query with LEFT JOINs;
+    /// at the user counts we care about (<10k) this is fine.
+    pub fn list_users_with_stats(&self) -> SqlResult<Vec<UserStats>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                u.id, u.email, u.tier, u.created_at,
+                COALESCE((SELECT COUNT(*) FROM transactions  t WHERE t.user_id = u.id), 0) AS txn_count,
+                COALESCE((SELECT COUNT(*) FROM chat_sessions c WHERE c.user_id = u.id), 0) AS chat_count,
+                COALESCE((SELECT MAX(last_seen_at) FROM sessions s WHERE s.user_id = u.id), '') AS last_seen,
+                COALESCE((SELECT SUM(tokens_in)  FROM audit_events e WHERE e.user_id = u.id), 0) AS tokens_in,
+                COALESCE((SELECT SUM(tokens_out) FROM audit_events e WHERE e.user_id = u.id), 0) AS tokens_out,
+                u.invited_by, u.invite_code_used
+             FROM users u
+             ORDER BY u.created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let created_s: String = r.get(3)?;
+            let last_seen_s: String = r.get(6)?;
+            Ok(UserStats {
+                id: r.get(0)?,
+                email: r.get(1)?,
+                tier: r.get(2)?,
+                created_at: parse_rfc3339(&created_s),
+                txn_count: r.get::<_, i64>(4)? as u32,
+                chat_count: r.get::<_, i64>(5)? as u32,
+                last_seen_at: if last_seen_s.is_empty() {
+                    None
+                } else {
+                    Some(parse_rfc3339(&last_seen_s))
+                },
+                tokens_in: r.get::<_, i64>(7)?,
+                tokens_out: r.get::<_, i64>(8)?,
+                invited_by: r.get(9)?,
+                invite_code_used: r.get(10)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Update a user's tier. Returns rows affected (0 = user not found).
+    pub fn update_user_tier(&self, user_id: &str, new_tier: &str) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE users SET tier = ?1 WHERE id = ?2",
+            params![new_tier, user_id],
+        )? as u32)
+    }
+
+    /// Cascade-delete a user and EVERYTHING they own. Per-user memory JSONL
+    /// file is the caller's responsibility (lives outside SQLite).
+    pub fn delete_user_cascade(&self, user_id: &str) -> SqlResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        // Order matters where FKs are declared (transactions → accounts,
+        // trades → assets, chat_messages → chat_sessions). Delete children
+        // first.
+        tx.execute("DELETE FROM transactions   WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM trades         WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM prices         WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM assets         WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM accounts       WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM budgets        WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM subscriptions  WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM chat_messages  WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM chat_sessions  WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM sessions       WHERE user_id = ?1", params![user_id])?;
+        tx.execute("DELETE FROM invites        WHERE created_by = ?1", params![user_id])?;
+        // Leave audit_events behind (anonymise instead) so admin can still
+        // see the deletion trail — but null out the user_id link.
+        tx.execute(
+            "UPDATE audit_events SET user_id = NULL WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute("DELETE FROM users WHERE id = ?1", params![user_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    // ───── admin: provider config KV ─────
+
+    pub fn provider_config_all(&self) -> SqlResult<std::collections::HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT key, value FROM provider_config")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Insert key=value only if the key is not already present. Used at
+    /// startup to seed env-var-supplied defaults without overwriting any
+    /// admin edits.
+    pub fn provider_config_seed_if_missing(&self, key: &str, value: &str) -> SqlResult<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT OR IGNORE INTO provider_config(key, value, updated_ms)
+             VALUES (?1, ?2, ?3)",
+            params![key, value, now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Upsert. Used by admin PATCH /api/admin/config.
+    pub fn provider_config_set(&self, key: &str, value: &str) -> SqlResult<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO provider_config(key, value, updated_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ms = excluded.updated_ms",
+            params![key, value, now_ms],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuditEvent {
+    pub id: String,
+    pub user_id: Option<String>,
+    pub kind: String,
+    pub target_id: Option<String>,
+    pub meta_json: Option<String>,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub created_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserStats {
+    pub id: String,
+    pub email: String,
+    pub tier: String,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub created_at: DateTime<Utc>,
+    pub txn_count: u32,
+    pub chat_count: u32,
+    #[serde(serialize_with = "ser_rfc3339_opt")]
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    /// The user id of whoever's invite code was consumed to register this
+    /// user. `None` for the bootstrap admin or any future open-signup.
+    pub invited_by: Option<String>,
+    /// The exact code that was redeemed. Lets admin trace registrations
+    /// back to a specific invite link.
+    pub invite_code_used: Option<String>,
+}
+
+fn ser_rfc3339<S: serde::Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&t.to_rfc3339())
+}
+fn ser_rfc3339_opt<S: serde::Serializer>(
+    t: &Option<DateTime<Utc>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match t {
+        Some(t) => s.serialize_str(&t.to_rfc3339()),
+        None => s.serialize_none(),
+    }
+}
+
+/// Tiny non-crypto u64 — good enough for audit row ids when combined with
+/// the millisecond timestamp.
+fn rand_u64() -> u64 {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // Mix with std::process::id and a thread-local counter for non-zero entropy.
+    let pid = std::process::id() as u64;
+    let n = nanos as u64;
+    n ^ (pid.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
 pub(crate) fn parse_rfc3339(s: &str) -> DateTime<Utc> {

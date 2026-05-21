@@ -72,12 +72,25 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ToolDecl>,
     stream: bool,
+    /// Without `stream_options.include_usage: true`, OpenAI-compatible
+    /// providers (DeepSeek, OpenAI proper, Groq, Together…) DO NOT emit a
+    /// final usage chunk during streaming. We always want it so the agent
+    /// loop can populate `Outcome::Done.usage` and downstream consumers
+    /// (audit, billing, dashboards) get real token counts. Omitted when
+    /// `stream=false` since non-streaming responses always include usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     /// OpenAI-style structured output. `None` ⇒ free-form text.
     /// `{type: "json_object"}` ⇒ any-JSON mode (DeepSeek-compatible).
     /// `{type: "json_schema", json_schema: {name, schema, strict}}` ⇒ schema-
     /// constrained mode (OpenAI proper). See `build_response_format`.
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 /// Translate `Context.response_format` into the OpenAI request body. Returns
@@ -240,6 +253,7 @@ impl Model for OpenAiCompat {
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
             stream: false,
+            stream_options: None,
             response_format,
         };
 
@@ -373,6 +387,7 @@ impl Model for OpenAiCompat {
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
             stream: true,
+            stream_options: Some(StreamOptions { include_usage: true }),
             response_format,
         };
         let url = format!(
@@ -477,6 +492,24 @@ fn decode_delta(
     partial: &mut std::collections::HashMap<u32, ToolCallAccumPriv>,
 ) -> Option<ModelDelta> {
     use serde_json::Value;
+
+    // Usage chunk comes with `choices: []`. Handle it FIRST — otherwise the
+    // `choices.first()?` below short-circuits and we silently drop the usage.
+    // (Only fires when `stream_options.include_usage: true` was set on the
+    // request.)
+    if let Some(Value::Object(u)) = v.get("usage") {
+        let usage = Usage {
+            input_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as u32,
+            cached_input_tokens: 0,
+        };
+        if usage.input_tokens > 0 || usage.output_tokens > 0 {
+            return Some(ModelDelta::Usage(usage));
+        }
+    }
 
     let choices = v.get("choices")?.as_array()?;
     let first = choices.first()?;
