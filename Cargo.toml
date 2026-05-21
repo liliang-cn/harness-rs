@@ -10,9 +10,12 @@ members = [
     "crates/harness-loop",
     "crates/harness-blueprint",
     "crates/harness-sandbox",
+    "crates/harness-permissions",
     "crates/harness-skills",
     "crates/harness-tools-fs",
     "crates/harness-tools-shell",
+    "crates/harness-tools-web",
+    "crates/harness-tools-tasks",
     "crates/harness-sensors-rust",
     "crates/harness-sensors-common",
     "crates/harness-models",
@@ -24,6 +27,7 @@ members = [
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",
+    "examples/ai-ledger",
 ]
 
 [workspace.package]
@@ -47,9 +51,12 @@ harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness
 harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.4" }
 harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.4" }
 harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.4" }
+harness-permissions= { package = "harness-rs-permissions",path = "crates/harness-permissions",version = "0.0.4" }
 harness-skills     = { package = "harness-rs-skills",     path = "crates/harness-skills",     version = "0.0.4" }
 harness-tools-fs   = { package = "harness-rs-tools-fs",   path = "crates/harness-tools-fs",   version = "0.0.4" }
 harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness-tools-shell",version = "0.0.4" }
+harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.4" }
+harness-tools-tasks= { package = "harness-rs-tools-tasks",path = "crates/harness-tools-tasks",version = "0.0.4" }
 harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.4" }
 harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.4" }
 harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.4" }
@@ -75,8 +82,9 @@ syn         = { version = "2", features = ["full", "extra-traits"] }
 walkdir     = "2"
 clap        = { version = "4", features = ["derive"] }
 once_cell   = "1"
-reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 chrono      = { version = "0.4", features = ["serde"] }
+schemars    = "0.8"
 
 [profile.release]
 lto = "thin"

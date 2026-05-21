@@ -72,6 +72,68 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ToolDecl>,
     stream: bool,
+    /// OpenAI-style structured output. `None` ⇒ free-form text.
+    /// `{type: "json_object"}` ⇒ any-JSON mode (DeepSeek-compatible).
+    /// `{type: "json_schema", json_schema: {name, schema, strict}}` ⇒ schema-
+    /// constrained mode (OpenAI proper). See `build_response_format`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<serde_json::Value>,
+}
+
+/// Translate `Context.response_format` into the OpenAI request body. Returns
+/// `(response_format_json, schema_hint_for_system_prompt)`:
+/// - For providers that fully support `json_schema` (OpenAI proper), the
+///   schema rides in `response_format` and the system-prompt hint is empty.
+/// - For providers that only support `json_object` (DeepSeek as of Dec
+///   2025), the schema is injected into the system prompt as a fallback so
+///   the model still has something to conform to, and `response_format` is
+///   the loose `json_object` mode.
+///
+/// The DeepSeek detection is host-based — anything not pointing at OpenAI's
+/// `api.openai.com` is assumed to be a compat-shim with limited surface.
+fn build_response_format(
+    fmt: &harness_core::ResponseFormat,
+    base_url: &str,
+) -> (Option<serde_json::Value>, Option<String>) {
+    use harness_core::ResponseFormat;
+    let supports_json_schema = base_url.contains("api.openai.com");
+    match fmt {
+        ResponseFormat::Free => (None, None),
+        ResponseFormat::JsonObject => (
+            Some(serde_json::json!({"type": "json_object"})),
+            None,
+        ),
+        ResponseFormat::JsonSchema { name, schema } => {
+            if supports_json_schema {
+                (
+                    Some(serde_json::json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": name,
+                            "schema": schema,
+                            "strict": true,
+                        }
+                    })),
+                    None,
+                )
+            } else {
+                // Compat shim: json_object mode + schema injected into system
+                // prompt as a hint. Less strict than json_schema mode but
+                // works against DeepSeek / Groq / others.
+                let hint = format!(
+                    "Respond ONLY with a single JSON object matching this schema (no markdown fences, no prose):\n{}",
+                    serde_json::to_string(schema).unwrap_or_else(|_| "{}".into())
+                );
+                (
+                    Some(serde_json::json!({"type": "json_object"})),
+                    Some(hint),
+                )
+            }
+        }
+        // ResponseFormat is `#[non_exhaustive]`; future variants get safest
+        // default (free-form text, no response_format header).
+        _ => (None, None),
+    }
 }
 
 /// `ChatMessage` is intentionally **lenient** — providers add fields
@@ -153,7 +215,12 @@ struct ChatUsage {
 #[async_trait]
 impl Model for OpenAiCompat {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
-        let messages = build_messages(ctx);
+        let (response_format, schema_hint) =
+            build_response_format(&ctx.response_format, &self.cfg.base_url);
+        let mut messages = build_messages(ctx);
+        if let Some(hint) = schema_hint {
+            inject_schema_hint(&mut messages, &hint);
+        }
         let tools = ctx
             .tools
             .iter()
@@ -173,6 +240,7 @@ impl Model for OpenAiCompat {
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
             stream: false,
+            response_format,
         };
 
         let url = format!(
@@ -281,7 +349,12 @@ impl Model for OpenAiCompat {
         &self,
         ctx: &Context,
     ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
-        let messages = build_messages(ctx);
+        let (response_format, schema_hint) =
+            build_response_format(&ctx.response_format, &self.cfg.base_url);
+        let mut messages = build_messages(ctx);
+        if let Some(hint) = schema_hint {
+            inject_schema_hint(&mut messages, &hint);
+        }
         let tools = ctx
             .tools
             .iter()
@@ -300,6 +373,7 @@ impl Model for OpenAiCompat {
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
             stream: true,
+            response_format,
         };
         let url = format!(
             "{}/chat/completions",
@@ -481,6 +555,33 @@ fn provider_from_base_url(url: &str) -> String {
         .next()
         .unwrap_or("openai-compat")
         .to_string()
+}
+
+/// Append a schema hint to the system message (creating one if necessary).
+/// Used when the provider only supports `json_object` mode — we put the
+/// schema where the model can see it. Two newlines to separate from
+/// existing system text.
+fn inject_schema_hint(messages: &mut Vec<ChatMessage>, hint: &str) {
+    if let Some(sys) = messages.iter_mut().find(|m| m.role == "system") {
+        let existing = sys.content.take().unwrap_or_default();
+        let joined = if existing.trim().is_empty() {
+            hint.to_string()
+        } else {
+            format!("{existing}\n\n{hint}")
+        };
+        sys.content = Some(joined);
+    } else {
+        messages.insert(
+            0,
+            ChatMessage {
+                role: "system".into(),
+                content: Some(hint.to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+        );
+    }
 }
 
 fn build_messages(ctx: &Context) -> Vec<ChatMessage> {

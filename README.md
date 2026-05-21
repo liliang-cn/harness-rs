@@ -13,7 +13,7 @@ architectural rationale.
 | Layer | What it does | Crate |
 |------|-----|-----|
 | **Model** | OpenAI-compatible + Anthropic-native + scriptable mock | `harness-models` |
-| **Tools** | fs (read/write/edit/list), shell (risk-classified allowlist) | `harness-tools-fs`, `harness-tools-shell` |
+| **Tools** | fs (read/write/edit/list), shell (risk-classified allowlist), web (DDG → Bing search + URL fetch + HTML→text) | `harness-tools-fs`, `harness-tools-shell`, `harness-tools-web` |
 | **Sensors** | `cargo check` + `cargo clippy` produce LLM-friendly `Signal`s; auto-fix patches apply automatically | `harness-sensors-rust` |
 | **Skills** | strict [agentskills.io](https://agentskills.io/specification) validator + `#[skill]` proc-macro + export to spec-compliant directory | `harness-skills`, `harness-macros` |
 | **Guides** | feedforward Markdown context, scoped by task | `#[guide]` + `harness-templates` |

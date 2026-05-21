@@ -71,6 +71,14 @@ pub enum Event<'a> {
     PostModel {
         out: &'a ModelOutput,
     },
+    /// Streaming-only: a text fragment arrived from `Model::stream()`. Fires
+    /// 0..N times between `PreModel` and `PostModel` when the AgentLoop is
+    /// in streaming mode. `text` is the new fragment (not the accumulator).
+    /// Tool-call deltas are NOT surfaced here — the loop assembles those
+    /// and emits the final `PostModel` with full `tool_calls`.
+    ModelTokenDelta {
+        text: &'a str,
+    },
 
     // subagents
     SubagentStart {
@@ -170,6 +178,7 @@ impl<'a> Event<'a> {
             Event::PostAutoFix { .. } => "PostAutoFix",
             Event::PreModel { .. } => "PreModel",
             Event::PostModel { .. } => "PostModel",
+            Event::ModelTokenDelta { .. } => "ModelTokenDelta",
             Event::SubagentStart { .. } => "SubagentStart",
             Event::SubagentReport { .. } => "SubagentReport",
             Event::FileChanged { .. } => "FileChanged",

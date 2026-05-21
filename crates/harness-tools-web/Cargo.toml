@@ -1,0 +1,20 @@
+[package]
+name = "harness-rs-tools-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Web-search + URL-fetch tools for harness-rs agents: DuckDuckGo → Bing fallback, HTML → text, no API keys required."
+
+[dependencies]
+harness         = { workspace = true }
+harness-core    = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+async-trait     = { workspace = true }
+tokio           = { workspace = true }
+reqwest         = { workspace = true }
+scraper         = "0.20"
+urlencoding     = "2"

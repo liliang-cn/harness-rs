@@ -22,10 +22,12 @@ pub use subagent::*;
 
 use harness_compactor::DefaultCompactor;
 use harness_core::{
-    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model, Sensor,
-    SessionSource, SignalSet, Stage, Task, ToolResult, Turn, TurnRole, World,
+    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model,
+    ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage, StopReason,
+    Task, ToolCall, ToolResult, Turn, TurnRole, Usage, World,
 };
 use harness_hooks::HookBus;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Where a run finished. Marked `#[non_exhaustive]` so future fields don't break
@@ -61,6 +63,14 @@ pub struct AgentLoop<M: Model> {
     pub sensors: Vec<Arc<dyn Sensor>>,
     pub hooks: HookBus,
     pub compactor: Arc<dyn Compactor>,
+    /// Default response format applied to every run unless overridden by
+    /// `run_typed`. See [`ResponseFormat`].
+    pub response_format: ResponseFormat,
+    /// When `true`, the loop drives each model turn via `Model::stream()`
+    /// instead of `complete()`, firing `Event::ModelTokenDelta` for each
+    /// text fragment. Tool-call deltas are still assembled inside the loop;
+    /// only the terminal `ModelOutput` shape is observable downstream.
+    pub streaming: bool,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -72,7 +82,17 @@ impl<M: Model> AgentLoop<M> {
             sensors: Vec::new(),
             hooks: HookBus::new(),
             compactor: Arc::new(DefaultCompactor::new()),
+            response_format: ResponseFormat::Free,
+            streaming: false,
         }
+    }
+
+    /// Opt in to streaming the model's terminal turn token-by-token via
+    /// `Model::stream()`. Hooks subscribed to `Event::ModelTokenDelta` see
+    /// each fragment as it arrives; the rest of the loop is unchanged.
+    pub fn with_streaming(mut self, enable: bool) -> Self {
+        self.streaming = enable;
+        self
     }
 
     pub fn with_compactor(mut self, c: Arc<dyn Compactor>) -> Self {
@@ -106,6 +126,27 @@ impl<M: Model> AgentLoop<M> {
         self
     }
 
+    /// Set the default response format for all runs through this loop. See
+    /// [`ResponseFormat`]. For typed deserialisation, prefer `run_typed::<T>()`.
+    pub fn with_response_format(mut self, fmt: ResponseFormat) -> Self {
+        self.response_format = fmt;
+        self
+    }
+
+    /// Shortcut for `with_response_format(ResponseFormat::JsonSchema { name, schema })`.
+    /// Accepts a raw `serde_json::Value` so callers can hand-roll the schema or
+    /// pull it from `schemars::schema_for!(T)`.
+    pub fn with_response_schema(
+        self,
+        name: impl Into<String>,
+        schema: serde_json::Value,
+    ) -> Self {
+        self.with_response_format(ResponseFormat::JsonSchema {
+            name: name.into(),
+            schema,
+        })
+    }
+
     pub async fn run(&self, task: Task, world: &mut World) -> Result<Outcome, HarnessError> {
         let max = harness_core::Policy::default().max_iters;
         self.run_with_max_iters(task, world, max).await
@@ -119,6 +160,110 @@ impl<M: Model> AgentLoop<M> {
     ) -> Result<Outcome, HarnessError> {
         self.run_with_seed_history(task, Vec::new(), world, max_iters)
             .await
+    }
+
+    /// Run the agent and deserialise the terminal reply into `T`.
+    ///
+    /// The schema for `T` is derived via `schemars::schema_for!(T)` and
+    /// installed as `ResponseFormat::JsonSchema` for this run only — any
+    /// pre-existing `self.response_format` is ignored. On success the
+    /// returned `T` is parsed from `Outcome::Done.text` (or, on budget
+    /// exhaustion, from `Outcome::BudgetExhausted.last_text`).
+    ///
+    /// Errors:
+    /// - `HarnessError::Other` if the model returns no text at all
+    /// - `HarnessError::Other` if `serde_json::from_str::<T>(text)` fails —
+    ///   the original text is included in the message for debugging.
+    pub async fn run_typed<T>(&self, task: Task, world: &mut World) -> Result<T, HarnessError>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + 'static,
+    {
+        let max = harness_core::Policy::default().max_iters;
+        self.run_typed_with_max_iters::<T>(task, world, max).await
+    }
+
+    /// Like `run_typed` but with explicit `max_iters`.
+    pub async fn run_typed_with_max_iters<T>(
+        &self,
+        task: Task,
+        world: &mut World,
+        max_iters: u32,
+    ) -> Result<T, HarnessError>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + 'static,
+    {
+        let schema_root = schemars::schema_for!(T);
+        let schema = serde_json::to_value(&schema_root)
+            .map_err(|e| HarnessError::Other(format!("response schema: {e}")))?;
+        let name = std::any::type_name::<T>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("response")
+            .to_string();
+        let fmt = ResponseFormat::JsonSchema { name, schema };
+        let outcome = self
+            .run_with_response_format(task, world, max_iters, fmt)
+            .await?;
+        let text = match outcome {
+            Outcome::Done {
+                text: Some(t),
+                ..
+            }
+            | Outcome::BudgetExhausted {
+                last_text: Some(t),
+                ..
+            } => t,
+            Outcome::Done { text: None, .. } => {
+                return Err(HarnessError::Other(
+                    "run_typed: model returned no text".into(),
+                ));
+            }
+            Outcome::BudgetExhausted {
+                last_text: None, ..
+            } => {
+                return Err(HarnessError::Other(
+                    "run_typed: budget exhausted with no text".into(),
+                ));
+            }
+        };
+        serde_json::from_str::<T>(&text).map_err(|e| {
+            HarnessError::Other(format!(
+                "run_typed: decode {} failed: {e} — raw text was: {text}",
+                std::any::type_name::<T>()
+            ))
+        })
+    }
+
+    /// Run with a one-off `ResponseFormat` override (doesn't touch `self`).
+    pub async fn run_with_response_format(
+        &self,
+        task: Task,
+        world: &mut World,
+        max_iters: u32,
+        fmt: ResponseFormat,
+    ) -> Result<Outcome, HarnessError> {
+        // Borrow checker won't let us swap `self.response_format` because
+        // `self` is `&`. Easiest workaround: hand-roll the same setup that
+        // `run_with_seed_history` does, but with our `fmt`. We do this by
+        // calling through a private helper.
+        self.run_with_seed_history_and_format(task, Vec::new(), world, max_iters, Some(fmt))
+            .await
+    }
+
+    async fn run_with_seed_history_and_format(
+        &self,
+        task: Task,
+        seed: Vec<Turn>,
+        world: &mut World,
+        max_iters: u32,
+        fmt_override: Option<ResponseFormat>,
+    ) -> Result<Outcome, HarnessError> {
+        let mut ctx = Context::new(task);
+        ctx.policy.max_iters = max_iters;
+        ctx.tools = self.tools.schemas();
+        ctx.history = seed;
+        ctx.response_format = fmt_override.unwrap_or_else(|| self.response_format.clone());
+        self.run_built_context(ctx, world).await
     }
 
     /// Like `run_with_max_iters` but seeds `ctx.history` with `seed` **before**
@@ -137,7 +282,19 @@ impl<M: Model> AgentLoop<M> {
         ctx.policy.max_iters = max_iters;
         ctx.tools = self.tools.schemas();
         ctx.history = seed;
+        ctx.response_format = self.response_format.clone();
+        self.run_built_context(ctx, world).await
+    }
 
+    /// Inner ReAct loop on an already-prepared `Context`. Use the public
+    /// `run*` methods unless you need to inject a non-standard `Context`
+    /// (e.g. `run_with_response_format` does to apply a one-off
+    /// `ResponseFormat` without mutating `self`).
+    async fn run_built_context(
+        &self,
+        mut ctx: Context,
+        world: &mut World,
+    ) -> Result<Outcome, HarnessError> {
         self.hooks.fire(
             &Event::SessionStart {
                 source: SessionSource::Startup,
@@ -175,7 +332,11 @@ impl<M: Model> AgentLoop<M> {
             }
 
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
-            let out = self.model.complete(&ctx).await?;
+            let out = if self.streaming {
+                self.complete_via_stream(&ctx, world).await?
+            } else {
+                self.model.complete(&ctx).await?
+            };
             self.hooks.fire(&Event::PostModel { out: &out }, world);
             // Accumulate usage even if the run later exhausts budget.
             total_usage.input_tokens += out.usage.input_tokens;
@@ -344,6 +505,110 @@ impl<M: Model> AgentLoop<M> {
             last_text,
             tools_called,
             usage: total_usage,
+        })
+    }
+
+    /// Drive `Model::stream()` and assemble the result into a `ModelOutput`,
+    /// firing `Event::ModelTokenDelta` for each text fragment along the way.
+    ///
+    /// Adapters that don't implement real streaming (e.g. `GeminiNative` /
+    /// `AnthropicNative` today) fall back to the default trait impl, which
+    /// runs `complete()` and emits the whole reply as a single delta. That
+    /// works — the loop sees one big `ModelDelta::Text(...)` followed by
+    /// `Stop`, fires one big `ModelTokenDelta`, and proceeds. So enabling
+    /// `streaming` is safe regardless of which provider the user picked.
+    async fn complete_via_stream(
+        &self,
+        ctx: &Context,
+        world: &mut World,
+    ) -> Result<ModelOutput, HarnessError> {
+        use futures::StreamExt;
+        let mut stream = self
+            .model
+            .stream(ctx)
+            .await
+            .map_err(harness_core::HarnessError::Model)?;
+        let mut text = String::new();
+        let mut reasoning_lines: Vec<String> = Vec::new();
+        let mut usage = Usage::default();
+        let mut stop_reason = StopReason::EndTurn;
+        // Insertion-ordered map: index → (id, name, args). We can't use the
+        // tool-call id as the primary key because the stream may emit args
+        // chunks before the first chunk that carries the id; the OpenAI-compat
+        // SSE parser already does its own buffering and surfaces `id` in
+        // ToolCallStart, but be lenient with adapters that may interleave.
+        let mut tool_starts: HashMap<String, (String, String)> = HashMap::new();
+        let mut tool_order: Vec<String> = Vec::new();
+        while let Some(item) = stream.next().await {
+            let delta = item.map_err(harness_core::HarnessError::Model)?;
+            match delta {
+                ModelDelta::Text(t) => {
+                    if !t.is_empty() {
+                        self.hooks
+                            .fire(&Event::ModelTokenDelta { text: &t }, world);
+                        text.push_str(&t);
+                    }
+                }
+                ModelDelta::ToolCallStart { id, name } => {
+                    if !tool_starts.contains_key(&id) {
+                        tool_order.push(id.clone());
+                    }
+                    tool_starts.entry(id).or_insert_with(|| (name, String::new()));
+                }
+                ModelDelta::ToolCallArgs { id, partial_json } => {
+                    let entry = tool_starts
+                        .entry(id.clone())
+                        .or_insert_with(|| (String::new(), String::new()));
+                    if !tool_order.iter().any(|k| k == &id) {
+                        tool_order.push(id);
+                    }
+                    entry.1.push_str(&partial_json);
+                }
+                ModelDelta::ToolCallEnd { .. } => {}
+                ModelDelta::Usage(u) => usage = u,
+                ModelDelta::Stop(r) => stop_reason = r,
+                ModelDelta::Reasoning(s) => {
+                    if !s.is_empty() {
+                        reasoning_lines.push(s);
+                    }
+                }
+                // ModelDelta is `#[non_exhaustive]`; ignore future variants
+                // we don't yet understand.
+                _ => {}
+            }
+        }
+        let tool_calls: Vec<ToolCall> = tool_order
+            .into_iter()
+            .filter_map(|id| {
+                tool_starts.remove(&id).map(|(name, args)| {
+                    let args_v = serde_json::from_str::<serde_json::Value>(&args)
+                        .unwrap_or_else(|_| serde_json::Value::String(args));
+                    ToolCall {
+                        id,
+                        name,
+                        args: args_v,
+                    }
+                })
+            })
+            .collect();
+        // Reconcile stop_reason with what actually came out — adapters
+        // sometimes emit `Stop(EndTurn)` even after tool_calls, which would
+        // confuse downstream consumers that branch on stop_reason alone.
+        let stop_reason = if !tool_calls.is_empty() {
+            StopReason::ToolUse
+        } else {
+            stop_reason
+        };
+        Ok(ModelOutput {
+            text: if text.is_empty() { None } else { Some(text) },
+            tool_calls,
+            usage,
+            stop_reason,
+            reasoning: if reasoning_lines.is_empty() {
+                None
+            } else {
+                Some(reasoning_lines.join("\n"))
+            },
         })
     }
 

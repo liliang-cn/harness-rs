@@ -67,6 +67,12 @@ pub enum ModelDelta {
     ToolCallEnd { id: String },
     Usage(Usage),
     Stop(StopReason),
+    /// Provider-specific reasoning trace that must round-trip on the next
+    /// request. DeepSeek thinking content, Anthropic thinking blocks, and
+    /// Gemini raw `parts` (with thoughtSignatures) all flow through this —
+    /// the AgentLoop folds them into the final `ModelOutput.reasoning`
+    /// without surfacing them to user-visible token streams.
+    Reasoning(String),
 }
 
 #[async_trait]
