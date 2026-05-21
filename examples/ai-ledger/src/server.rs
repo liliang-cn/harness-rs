@@ -35,6 +35,11 @@ use tokio_stream::StreamExt;
 
 const INDEX_HTML: &str = include_str!("index.html");
 
+/// Vite-built admin SPA, embedded into the binary so deploys stay
+/// single-artifact. Built by `cd admin-ui && npm run build`.
+static ADMIN_DIST: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/admin-ui/dist");
+
 /// Domain-specific guidance prepended to `MemorySynthesizer`'s prompt. Tells
 /// the synth model what counts as a durable fact in the personal-accounting
 /// context — preferences, habits, repeated patterns — and what to skip:
@@ -79,30 +84,65 @@ pub struct ModelOption {
     pub available: bool,
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    /// Default model id when a user hasn't set a preference. Always one of
-    /// `available_models` whose `available=true`.
+/// Admin-mutable runtime config. Kept inside `AppState` behind an `RwLock`
+/// so PATCH /api/admin/config can swap keys/models without a restart.
+#[derive(Clone, Debug)]
+pub struct AppConfig {
     pub default_model_id: String,
-    pub profile: UserProfile,
-    pub max_iters: u32,
-    /// Catalogue of models the UI can pick from.
     pub available_models: Vec<ModelOption>,
-    /// Provider credentials. Both may be set; either may be `None` if the
-    /// corresponding env var wasn't provided at startup.
     pub deepseek_key: Option<String>,
     pub gemini_key: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub profile: UserProfile,
+    pub max_iters: u32,
     /// Shared task store. Per-user filtering lives in the tools themselves
     /// (they pick up `world.profile.extra["user_id"]`).
     pub task_store: Arc<dyn TaskStore>,
+    /// Hot-reloadable provider config. Read briefly; never hold the guard
+    /// across an `.await`.
+    pub config: Arc<std::sync::RwLock<AppConfig>>,
+}
+
+impl AppConfig {
+    /// `available_models` flag derives from key presence, so recompute it
+    /// after any credential change.
+    pub fn refresh_availability(&mut self) {
+        for m in &mut self.available_models {
+            m.available = match m.provider.as_str() {
+                "deepseek" => self.deepseek_key.is_some(),
+                "gemini" => self.gemini_key.is_some(),
+                _ => false,
+            };
+        }
+        // If the current default became unavailable, pick the first
+        // available; otherwise leave it.
+        if !self
+            .available_models
+            .iter()
+            .any(|m| m.id == self.default_model_id && m.available)
+            && let Some(first) = self.available_models.iter().find(|m| m.available)
+        {
+            self.default_model_id = first.id.clone();
+        }
+    }
 }
 
 impl AppState {
+    /// Snapshot the config under a brief read-lock. Callers should NOT hold
+    /// the guard across an `.await`.
+    pub fn cfg(&self) -> AppConfig {
+        self.config.read().expect("AppConfig RwLock poisoned").clone()
+    }
+
     /// Resolve a model id to the AnyModel adapter, picking the right
     /// credential by provider. Returns `Err(reason)` if the model id isn't
     /// recognised or the corresponding credential is missing.
     pub fn build_model_for(&self, model_id: &str) -> Result<crate::AnyModel, String> {
-        let opt = self
+        let cfg = self.cfg();
+        let opt = cfg
             .available_models
             .iter()
             .find(|m| m.id == model_id)
@@ -112,7 +152,7 @@ impl AppState {
         }
         match opt.provider.as_str() {
             "deepseek" => {
-                let key = self
+                let key = cfg
                     .deepseek_key
                     .clone()
                     .ok_or_else(|| "DEEPSEEK_API_KEY not set on server".to_string())?;
@@ -123,7 +163,7 @@ impl AppState {
                 )))
             }
             "gemini" => {
-                let key = self
+                let key = cfg
                     .gemini_key
                     .clone()
                     .ok_or_else(|| "GEMINI_API_KEY not set on server".to_string())?;
@@ -140,21 +180,22 @@ impl AppState {
     /// else the server default. Trial users always get the default
     /// (per-user preference is ignored).
     pub fn effective_model_for(&self, user: &User) -> String {
+        let cfg = self.cfg();
         if user.tier == "trial" {
-            return self.default_model_id.clone();
+            return cfg.default_model_id.clone();
         }
         let want = match user.preferred_model.as_deref() {
             Some(s) if !s.is_empty() => s,
-            _ => return self.default_model_id.clone(),
+            _ => return cfg.default_model_id.clone(),
         };
-        if self
+        if cfg
             .available_models
             .iter()
             .any(|m| m.id == want && m.available)
         {
             want.to_string()
         } else {
-            self.default_model_id.clone()
+            cfg.default_model_id.clone()
         }
     }
 }
@@ -188,6 +229,11 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         // ─ public
         .route("/", get(serve_index))
         .route("/marked.min.js", get(serve_marked_js))
+        // Admin SPA: GET /admin → index.html; GET /admin/* → matching asset
+        // from the bundled dist, with SPA fallback to index.html.
+        .route("/admin", get(serve_admin_index))
+        .route("/admin/", get(serve_admin_index))
+        .route("/admin/*path", get(serve_admin_asset))
         .route("/api/info", get(info_handler))
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
@@ -220,7 +266,16 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/portfolio/trades", get(portfolio_trades_handler))
         .route("/api/portfolio/positions", get(portfolio_positions_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
-        .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler))
+        .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler));
+
+    // Mount admin endpoints — all gated by `require_admin` in the handlers.
+    let app = crate::admin::register_routes(app)
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -235,6 +290,76 @@ async fn serve_index() -> impl axum::response::IntoResponse {
         [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
         Html(INDEX_HTML),
     )
+}
+
+async fn serve_admin_index() -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    let body = ADMIN_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+        .unwrap_or("<h1>admin UI not built</h1>");
+    (
+        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+        Html(body),
+    )
+}
+
+async fn serve_admin_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    // First try the literal asset path inside dist/. If absent, fall through
+    // to index.html (SPA fallback for client-side routes like /admin/users).
+    if let Some(file) = ADMIN_DIST.get_file(&path) {
+        let mime = mime_for(&path);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                // Vite hashes filenames in /assets, so long-cache them. Other
+                // static files (favicon.svg etc.) get a short cache only.
+                (
+                    header::CACHE_CONTROL,
+                    if path.starts_with("assets/") {
+                        "public, max-age=31536000, immutable"
+                    } else {
+                        "no-cache"
+                    },
+                ),
+            ],
+            Body::from(file.contents()),
+        )
+            .into_response();
+    }
+    // SPA fallback: client-side route, return index.html so the React app
+    // can resolve it.
+    if let Some(idx) = ADMIN_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+    {
+        return (
+            [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+            Html(idx),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "admin asset not found").into_response()
+}
+
+fn mime_for(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "js" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "json" => "application/json",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn serve_marked_js() -> impl axum::response::IntoResponse {
@@ -252,17 +377,18 @@ async fn serve_marked_js() -> impl axum::response::IntoResponse {
 async fn info_handler(State(s): State<AppState>) -> Json<Value> {
     // Public endpoint — shown by the auth overlay before login. Return the
     // catalogue so the model picker can render even pre-login.
-    let default_provider = s
+    let cfg = s.cfg();
+    let default_provider = cfg
         .available_models
         .iter()
-        .find(|m| m.id == s.default_model_id)
+        .find(|m| m.id == cfg.default_model_id)
         .map(|m| m.provider.clone())
         .unwrap_or_default();
     Json(json!({
         "provider": default_provider,
-        "model": s.default_model_id,
-        "default_model_id": s.default_model_id,
-        "available_models": s.available_models,
+        "model": cfg.default_model_id,
+        "default_model_id": cfg.default_model_id,
+        "available_models": cfg.available_models,
     }))
 }
 
@@ -339,6 +465,14 @@ async fn register_handler(Json(req): Json<RegisterReq>) -> Result<Json<Value>, A
     let s = new_session(&user.id);
     db.insert_session(&s)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(
+        Some(&user.id),
+        "register",
+        None,
+        Some(&json!({"email": user.email, "tier": user.tier}).to_string()),
+        0,
+        0,
+    );
     Ok(Json(json!({
         "token": s.token,
         "user": &user,
@@ -350,13 +484,34 @@ async fn login_handler(Json(req): Json<LoginReq>) -> Result<Json<Value>, ApiErro
     let user = db
         .get_user_by_email(&req.email)
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::Unauthorized(AuthError::BadCredentials.to_string()))?;
+        .ok_or_else(|| {
+            let _ = open_db().map(|db| {
+                db.insert_audit(
+                    None,
+                    "login_failed",
+                    None,
+                    Some(&json!({"email": req.email, "reason": "no_such_user"}).to_string()),
+                    0,
+                    0,
+                )
+            });
+            ApiError::Unauthorized(AuthError::BadCredentials.to_string())
+        })?;
     if !verify_password(&req.password, &user.password_hash) {
+        let _ = db.insert_audit(
+            Some(&user.id),
+            "login_failed",
+            None,
+            Some(&json!({"reason": "bad_password"}).to_string()),
+            0,
+            0,
+        );
         return Err(ApiError::Unauthorized(AuthError::BadCredentials.to_string()));
     }
     let s = new_session(&user.id);
     db.insert_session(&s)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(Some(&user.id), "login", None, None, 0, 0);
     Ok(Json(json!({ "token": s.token, "user": &user })))
 }
 
@@ -364,7 +519,7 @@ async fn logout_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
     // Token isn't in AuthCtx; we just rely on session expiry. For an explicit
     // logout, the client also needs to discard the token. Best-effort: drop ALL
     // sessions for this user when called.
-    let _ = auth.user.id; // ack the extractor pulled us through
+    let _ = open_db().map(|db| db.insert_audit(Some(&auth.user.id), "logout", None, None, 0, 0));
     Ok(Json(json!({"ok": true})))
 }
 
@@ -394,7 +549,8 @@ async fn set_model_handler(
         ));
     }
     if let Some(want) = req.model.as_deref() {
-        let ok = s
+        let cfg = s.cfg();
+        let ok = cfg
             .available_models
             .iter()
             .any(|m| m.id == want && m.available);
@@ -442,6 +598,14 @@ async fn change_password_handler(
     let dropped = db
         .delete_other_sessions(&auth.user.id, &auth.token)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(
+        Some(&auth.user.id),
+        "password_change",
+        None,
+        Some(&json!({"other_sessions_dropped": dropped}).to_string()),
+        0,
+        0,
+    );
     Ok(Json(json!({
         "ok": true,
         "other_sessions_dropped": dropped,
@@ -820,7 +984,7 @@ fn permission_hook_for_tier(
     }
 }
 
-fn open_db() -> Result<Db, ApiError> {
+pub(crate) fn open_db() -> Result<Db, ApiError> {
     let p = ledger_path();
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1031,7 +1195,7 @@ fn random_session_id() -> String {
 /// Per-user JSONL path for `harness-core::Memory`. The framework's default
 /// FileMemory impl reads + appends to this file; one file per user gives
 /// strict isolation without the trait needing to know about users.
-fn memory_path_for(user_id: &str) -> std::path::PathBuf {
+pub(crate) fn memory_path_for(user_id: &str) -> std::path::PathBuf {
     let base = ledger_path()
         .parent()
         .map(|p| p.to_path_buf())
@@ -1186,7 +1350,7 @@ async fn session_stream_handler(
         };
         let _ = tx_for_done.send(json!({"type": "start"}));
         match loop_.run_with_max_iters(task, &mut world, s.max_iters).await {
-            Ok(Outcome::Done { text, iters, .. }) => {
+            Ok(Outcome::Done { text, iters, usage, .. }) => {
                 let reply = text.unwrap_or_default();
                 // Persist the assistant reply + update session model_id.
                 if let Ok(db) = open_db() {
@@ -1202,12 +1366,20 @@ async fn session_stream_handler(
                         &session_id_for_task,
                         &model_id_for_task,
                     );
+                    let _ = db.insert_audit(
+                        Some(&user_id_for_task),
+                        "chat_message",
+                        Some(&session_id_for_task),
+                        Some(&json!({"iters": iters, "model": &model_id_for_task}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
+                    );
                 }
                 let _ = tx_for_done.send(json!({
                     "type": "done", "ok": true, "iters": iters, "reply": reply,
                 }));
             }
-            Ok(Outcome::BudgetExhausted { iters, last_text, .. }) => {
+            Ok(Outcome::BudgetExhausted { iters, last_text, usage, .. }) => {
                 let reply = last_text.unwrap_or_else(|| "(budget exhausted)".into());
                 if let Ok(db) = open_db() {
                     let _ = db.append_chat_message(
@@ -1216,6 +1388,14 @@ async fn session_stream_handler(
                         "asst",
                         &reply,
                         Some(iters),
+                    );
+                    let _ = db.insert_audit(
+                        Some(&user_id_for_task),
+                        "chat_message",
+                        Some(&session_id_for_task),
+                        Some(&json!({"iters": iters, "warning": "budget_exhausted"}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
                     );
                 }
                 let _ = tx_for_done.send(json!({
@@ -1286,7 +1466,7 @@ async fn chat_stream_handler(
         let mut profile = s.profile.clone();
         profile
             .extra
-            .insert("user_id".into(), serde_json::Value::String(user_id));
+            .insert("user_id".into(), serde_json::Value::String(user_id.clone()));
         profile
             .extra
             .insert("tier".into(), serde_json::Value::String(user_tier));
@@ -1298,16 +1478,26 @@ async fn chat_stream_handler(
         };
         let _ = tx_for_done.send(json!({"type": "start"}));
         match loop_.run_with_max_iters(task, &mut world, s.max_iters).await {
-            Ok(Outcome::Done { text, iters, .. }) => {
+            Ok(Outcome::Done { text, iters, usage, .. }) => {
                 let _ = tx_for_done.send(json!({
                     "type": "done",
                     "ok": true,
                     "iters": iters,
                     "reply": text.unwrap_or_default(),
                 }));
+                if let Ok(db) = open_db() {
+                    let _ = db.insert_audit(
+                        Some(&user_id),
+                        "chat_message",
+                        None,
+                        Some(&json!({"iters": iters, "sessionless": true}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
+                    );
+                }
             }
             Ok(Outcome::BudgetExhausted {
-                iters, last_text, ..
+                iters, last_text, usage, ..
             }) => {
                 let _ = tx_for_done.send(json!({
                     "type": "done",
@@ -1316,6 +1506,16 @@ async fn chat_stream_handler(
                     "reply": last_text.unwrap_or_else(|| "(budget exhausted)".into()),
                     "warning": "budget_exhausted",
                 }));
+                if let Ok(db) = open_db() {
+                    let _ = db.insert_audit(
+                        Some(&user_id),
+                        "chat_message",
+                        None,
+                        Some(&json!({"iters": iters, "warning": "budget_exhausted", "sessionless": true}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
+                    );
+                }
             }
             Err(e) => {
                 let _ = tx_for_done.send(json!({
@@ -1490,8 +1690,9 @@ async fn portfolio_refresh_handler(auth: AuthCtx) -> Result<Json<Value>, ApiErro
 }
 
 // minimal error mapper → JSON + status
-enum ApiError {
+pub(crate) enum ApiError {
     BadRequest(String),
+    #[allow(dead_code)]
     Unauthorized(String),
     Forbidden(String),
     Internal(String),

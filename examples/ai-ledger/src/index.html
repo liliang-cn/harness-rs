@@ -112,12 +112,32 @@ body {
 }
 .chat-session-row .sess-del:hover { color: var(--neg, #d33); }
 @media (max-width: 760px) {
-  #chatCol {
-    right: 0; left: 0; bottom: 0; top: 56px;
-    width: 100%; height: auto;
-    border-radius: 14px 14px 0 0; max-height: none;
+  /* Bottom sheet on mobile: anchored to bottom, half-screen height. */
+  #chatCol, #memoryCol {
+    right: 0; left: 0; bottom: 0; top: auto;
+    width: 100%; height: 80vh;
+    border-radius: 14px 14px 0 0;
   }
   .chat-fab { right: 12px; bottom: 12px; }
+}
+
+/* ─── Memory modal (same anchoring as chat modal) ─── */
+#memoryCol {
+  position: fixed; right: 18px; bottom: 84px; z-index: 9001;
+  width: 420px; height: min(640px, 75vh);
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel); box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  display: none; flex-direction: column;
+}
+#memoryCol.open { display: flex; }
+#memoryCol .col-title { border-radius: 14px 14px 0 0; }
+#memoryListBox {
+  flex: 1; overflow-y: auto; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+#memoryCol .mem-footer {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px; font-size: 11px; color: var(--muted); line-height: 1.5;
 }
 
 .col {
@@ -138,6 +158,10 @@ body {
   background: var(--panel);
 }
 .col-title .badge { font-size: 11px; color: var(--muted); font-weight: normal; }
+.col-title .app-title {
+  font-weight: 600; font-size: 14px; color: var(--ink);
+  letter-spacing: 0.02em; margin-right: 4px;
+}
 .header-btn {
   appearance: none; cursor: pointer;
   background: var(--bg); color: var(--ink);
@@ -148,7 +172,8 @@ body {
 .header-btn:hover { background: var(--panel); }
 .col-title .grow { flex: 1; }
 
-/* mode toggle inside dashboard header */
+/* Mode toggle inside dashboard header. PC overrides further down strip the
+   segmented pill look in favour of plain underlined tabs. */
 .mode-toggle { display: flex; gap: 2px; background: var(--bg); border-radius: 8px; padding: 2px; }
 .mode-btn {
   appearance: none; background: transparent; border: 0; color: var(--muted);
@@ -156,6 +181,24 @@ body {
   border-radius: 6px; cursor: pointer; min-height: 28px;
 }
 .mode-btn.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+
+/* On PC: text-only nav with an underline indicator for the active mode.
+   Drops the rounded-pill segmented look that reads as mobile-native. */
+@media (min-width: 900px) {
+  .mode-toggle {
+    background: transparent; padding: 0; gap: 4px; margin-left: 8px;
+  }
+  .mode-btn {
+    font-size: 14px; font-weight: 500; padding: 6px 12px;
+    color: var(--muted); border-radius: 0; border-bottom: 2px solid transparent;
+    min-height: 36px;
+  }
+  .mode-btn:hover { color: var(--ink); }
+  .mode-btn.active {
+    background: transparent; box-shadow: none;
+    color: var(--ink); border-bottom-color: var(--accent);
+  }
+}
 
 /* chat */
 .messages {
@@ -369,6 +412,45 @@ table.tbl td.tx-transfer { color: var(--muted); }
 .portfolio-summary .cell .val.pos { color: var(--pos); }
 .portfolio-summary .cell .val.neg { color: var(--neg); }
 
+/* ─── Desktop overrides (wide screens) ─────────
+   Keep the mobile-first stacked layout as the baseline, but on a PC the
+   single-column ribbon at full window width looks empty. Cap both the
+   header band AND the dash content to a comfortable reading width and
+   centre them; the body's `--bg` shows in the side gutters. */
+@media (min-width: 900px) {
+  #dashCol { background: var(--bg); }
+  .col-title {
+    max-width: 1100px;
+    width: 100%;
+    margin: 16px auto 0;
+    padding: 14px 24px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  .dash {
+    max-width: 1100px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 16px 0 32px;
+  }
+  .dash-mode {
+    display: none;
+    /* Two-column grid; cards default to one cell unless they opt in to
+       `card-wide` to span both. */
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-content: start;
+  }
+  .dash-mode.active { display: grid; }
+  /* Tables and the brief card read better wide — let them span. */
+  .dash-mode .card:has(table.tbl),
+  .dash-mode .card.card-wide {
+    grid-column: 1 / -1;
+  }
+  .card { padding: 16px 20px; }
+}
+
 /* ─── Mobile overrides (must remain last) ─── */
 @media (max-width: 760px) {
   /* Tables in cards collapse to vertical "row cards" on narrow screens.
@@ -520,10 +602,21 @@ table.tbl td.tx-transfer { color: var(--muted); }
 <!-- Floating chat button — always visible when authenticated; clicked → opens #chatCol. -->
 <button class="chat-fab hidden" id="chatFab" title="聊天" aria-label="打开聊天">💬</button>
 
+<!-- Memory modal — opened from 我的 → 'AI 记得我什么'. -->
+<section id="memoryCol">
+  <div class="col-title">
+    <span class="col-label">🧠 AI 记得我什么</span>
+    <span id="memoryListCount" class="badge"></span>
+    <span class="grow"></span>
+    <button class="btn-mini" id="memoryClearBtn" style="margin-right:6px">清空</button>
+    <button class="chat-close-btn" id="memoryCloseBtn" title="关闭" aria-label="关闭">✖</button>
+  </div>
+  <div id="memoryListBox"></div>
+</section>
+
 <section class="col" id="dashCol">
   <div class="col-title">
-    <span class="badge" id="monthBadge"></span>
-    <span class="grow"></span>
+    <span class="app-title">AI 财务助手</span>
     <div class="mode-toggle">
       <button class="mode-btn active" data-mode="ledger">📊 记账</button>
       <button class="mode-btn" data-mode="portfolio">📈 投资</button>
@@ -553,13 +646,13 @@ table.tbl td.tx-transfer { color: var(--muted); }
           <th>分类</th><th>时间</th><th>账户</th><th style="text-align:right">金额</th>
         </tr></thead><tbody id="txns"></tbody></table>
       </div>
-      <div class="card">
+      <div class="card card-wide">
         <h3>订阅 · 周期扣款 <span class="grow"></span>
           <span id="subsMonthly" style="font-size:11px;color:var(--muted);font-weight:normal"></span>
         </h3>
         <div id="subsBox" class="empty">没有登记的订阅。试试 "我有个 Claude Code 订阅，每月 $250 USD，下次扣款 6-21"。</div>
       </div>
-      <div class="card">
+      <div class="card card-wide">
         <h3>AI 月度简报 <span class="grow"></span>
           <button class="btn-mini" id="briefBtn">生成简报</button>
         </h3>
@@ -569,7 +662,7 @@ table.tbl td.tx-transfer { color: var(--muted); }
 
     <!-- ── 投资 模式 ── -->
     <div class="dash-mode" id="portfolioMode">
-      <div class="card">
+      <div class="card card-wide">
         <h3>组合汇总 <span class="grow"></span>
           <button class="btn-mini" id="refreshBtn">刷新行情</button>
         </h3>
@@ -636,11 +729,13 @@ table.tbl td.tx-transfer { color: var(--muted); }
       <div class="card">
         <h3>AI 记得我什么 <span class="grow"></span>
           <span id="profMemCount" style="font-size:11px; color:var(--muted); font-weight:normal"></span>
-          <button class="btn-mini" id="profMemClearBtn" style="margin-left:6px">清空</button>
         </h3>
-        <div id="profMemBox" style="display:flex; flex-direction:column; gap:6px; max-height:360px; overflow-y:auto;"></div>
+        <button id="profMemOpenBtn"
+          style="width:100%; padding:10px; border:1px solid var(--line); border-radius:10px;
+                 background:var(--bg); color:var(--ink); font:inherit; font-weight:500;
+                 min-height:44px; cursor:pointer; text-align:left">🧠 查看全部记忆 →</button>
         <div style="font-size:11px; color:var(--muted); margin-top:6px">
-          聊天结束后会用 deepseek-v4-flash 把会话 distill 成 1–3 条 atomic fact（带 TTL）；不对的可以一条条删，或一键清空。直接说"记住 X"会立刻进记忆。金额 / 邮箱 / 卡号会被 framework 层挡掉。
+          聊几次后自动沉淀；不对的可以一条条删。
         </div>
       </div>
 
@@ -744,6 +839,23 @@ document.getElementById('authForm').addEventListener('submit', async (e) => {
   }
 });
 
+// If URL carries ?invite=…, pre-fill the register form and switch to register tab.
+(function applyInviteFromUrl() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const inv = params.get('invite');
+    if (!inv) return;
+    const invField = document.getElementById('authInvite');
+    if (invField) invField.value = inv;
+    // Activate the register tab so the invite field is visible.
+    const regTab = document.querySelector('.auth-tab[data-tab="register"]');
+    regTab?.click();
+    // Clean the URL so refreshes don't keep the code around.
+    const clean = location.pathname + location.hash;
+    history.replaceState(null, '', clean);
+  } catch {}
+})();
+
 if (!getToken()) {
   // Defer-show until DOM is settled
   setTimeout(showAuth, 0);
@@ -787,7 +899,7 @@ function setDashMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.dash-mode').forEach(d => d.classList.toggle('active', d.id === mode + 'Mode'));
   if (mode === 'portfolio') refreshPortfolio();
-  else if (mode === 'profile') { paintProfile(); refreshInvites(); renderChatHistory(); renderMemories(); }
+  else if (mode === 'profile') { paintProfile(); refreshInvites(); renderChatHistory(); refreshMemoryCount(); }
   else refreshLedger();
 }
 
@@ -814,17 +926,33 @@ document.getElementById('profChatOpenBtn')?.addEventListener('click', () => {
   openChatModal('list');
 });
 
-async function renderMemories() {
-  const box = document.getElementById('profMemBox');
+// Refresh just the count badge on the 我的 entry; doesn't touch the modal list.
+async function refreshMemoryCount() {
   const cnt = document.getElementById('profMemCount');
+  if (!cnt) return;
+  try {
+    const r = await fetch('/api/me/memories').then(r => r.json());
+    const n = (r.memories || []).length;
+    cnt.textContent = n ? `${n} 条` : '';
+  } catch { cnt.textContent = ''; }
+}
+
+// Render the full memory list inside the modal (#memoryListBox).
+async function renderMemories() {
+  const box = document.getElementById('memoryListBox');
+  const cnt = document.getElementById('profMemCount');
+  const cnt2 = document.getElementById('memoryListCount');
   if (!box) return;
+  box.innerHTML = '<div class="empty" style="padding:14px">加载中…</div>';
   let r;
   try { r = await fetch('/api/me/memories').then(r => r.json()); }
-  catch { box.innerHTML = '<div class="empty">加载失败</div>'; return; }
+  catch { box.innerHTML = '<div class="empty" style="padding:14px">加载失败</div>'; return; }
   const mems = r.memories || [];
-  if (cnt) cnt.textContent = mems.length ? `${mems.length} 条` : '';
+  const label = mems.length ? `${mems.length} 条` : '';
+  if (cnt) cnt.textContent = label;
+  if (cnt2) cnt2.textContent = label;
   if (mems.length === 0) {
-    box.innerHTML = '<div class="empty">还没有沉淀的记忆。聊几次之后会自动出现。</div>';
+    box.innerHTML = '<div class="empty" style="padding:14px">还没有沉淀的记忆。聊几次之后会自动出现。</div>';
     return;
   }
   box.innerHTML = mems.map(m => {
@@ -848,7 +976,26 @@ async function renderMemories() {
   }
 }
 
-document.getElementById('profMemClearBtn')?.addEventListener('click', async () => {
+// ─── Memory modal: open from 我的 → 查看全部记忆 ───
+const memoryCol = $('memoryCol');
+
+function openMemoryModal() {
+  // If chat modal is open, close it first — only one floating modal at a time.
+  if (chatCol && chatCol.classList.contains('open')) closeChatModal();
+  memoryCol.classList.add('open');
+  chatFab?.classList.add('hidden');
+  renderMemories();
+}
+
+function closeMemoryModal() {
+  memoryCol.classList.remove('open');
+  chatFab?.classList.remove('hidden');
+}
+
+document.getElementById('profMemOpenBtn')?.addEventListener('click', openMemoryModal);
+document.getElementById('memoryCloseBtn')?.addEventListener('click', closeMemoryModal);
+
+document.getElementById('memoryClearBtn')?.addEventListener('click', async () => {
   if (!confirm('清空我的全部 AI 记忆？不影响其他用户。')) return;
   const r = await fetch('/api/me/memories', {method: 'DELETE'});
   if (r.ok) {
@@ -890,6 +1037,7 @@ function setChatMode(mode /* 'list' | 'chat' */) {
 }
 
 async function openChatModal(initialMode) {
+  if (memoryCol && memoryCol.classList.contains('open')) closeMemoryModal();
   chatCol.classList.add('open');
   chatFab.classList.add('hidden');
   if (initialMode === 'list') {
@@ -1012,7 +1160,9 @@ document.getElementById('chatBackBtn')?.addEventListener('click', async () => {
 document.getElementById('chatNewBtn')?.addEventListener('click', startNewSession);
 chatFab?.addEventListener('click', () => openChatModal(null));
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && chatCol.classList.contains('open')) closeChatModal();
+  if (e.key !== 'Escape') return;
+  if (memoryCol && memoryCol.classList.contains('open')) closeMemoryModal();
+  else if (chatCol.classList.contains('open')) closeChatModal();
 });
 
 // Show the FAB only once the user is authenticated.
@@ -1137,7 +1287,9 @@ function addMeta(text, spinner) {
 function newTrace() {
   const t = document.createElement('details');
   t.className = 'trace';
-  t.open = true;
+  // Collapsed by default — user can click to peek at the live thinking
+  // stream. finalizeTrace also keeps it collapsed on completion.
+  t.open = false;
   const summary = document.createElement('summary');
   summary.textContent = '正在思考…';
   t.appendChild(summary);
@@ -1221,8 +1373,8 @@ async function refreshAccounts() {
 async function refreshReport() {
   const r = await fetch('/api/report').then(r => r.json());
   const tag = `${r.year}-${String(r.month).padStart(2,'0')}`;
-  monthBadge.textContent = tag;
-  monthBadge2.textContent = tag;
+  if (monthBadge) monthBadge.textContent = tag;
+  if (monthBadge2) monthBadge2.textContent = tag;
   const totals = r.grand_total_by_currency || {};
   grand.innerHTML = '';
   if (Object.keys(totals).length === 0) {
@@ -1648,6 +1800,49 @@ pwForm.addEventListener('submit', async (e) => {
   }
 });
 
+// Tiny ephemeral toast — used for copy feedback. No styling deps.
+let _toastTimer = null;
+function showToast(msg) {
+  let t = document.getElementById('_toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = '_toast';
+    t.style.cssText = 'position:fixed; left:50%; bottom:24px; transform:translateX(-50%);' +
+      ' background:rgba(0,0,0,.82); color:#fff; padding:8px 14px; border-radius:8px;' +
+      ' font-size:13px; z-index:99999; pointer-events:none; opacity:0;' +
+      ' transition:opacity .15s ease;';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  requestAnimationFrame(() => { t.style.opacity = '1'; });
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 1600);
+}
+
+async function copyText(text, okMsg) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for non-HTTPS (clipboard API requires secure context).
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed; left:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    showToast(okMsg || '已复制');
+  } catch {
+    showToast('复制失败');
+  }
+}
+
+function inviteUrl(code) {
+  return `${location.origin}/?invite=${encodeURIComponent(code)}`;
+}
+
 // Invites: list + generate
 async function refreshInvites() {
   const me = getMe();
@@ -1663,17 +1858,34 @@ async function refreshInvites() {
   }
   for (const inv of j.invites) {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed var(--line);';
+    row.style.cssText = 'display:flex; flex-direction:column; gap:4px; padding:8px 0;' +
+      ' border-bottom:1px dashed var(--line);';
+
+    const topLine = document.createElement('div');
+    topLine.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px;';
     const code = document.createElement('code');
     code.textContent = inv.code;
-    code.style.cssText = 'font-family:ui-monospace,monospace; cursor:pointer';
-    code.title = '点击复制';
-    code.onclick = () => navigator.clipboard?.writeText(inv.code);
+    code.style.cssText = 'font-family:ui-monospace,monospace; cursor:pointer;' +
+      ' padding:2px 6px; border-radius:4px; background:rgba(0,0,0,.05);';
+    code.title = '点击复制邀请码';
+    code.onclick = () => copyText(inv.code, '✓ 邀请码已复制');
     const meta = document.createElement('span');
-    meta.style.cssText = 'color:var(--muted); font-size:12px';
+    meta.style.cssText = 'color:var(--muted); font-size:12px; flex-shrink:0';
     meta.textContent = `剩 ${inv.uses_remaining} 次`;
-    row.appendChild(code);
-    row.appendChild(meta);
+    topLine.appendChild(code);
+    topLine.appendChild(meta);
+    row.appendChild(topLine);
+
+    const linkBtn = document.createElement('button');
+    linkBtn.type = 'button';
+    linkBtn.textContent = '🔗 复制邀请链接';
+    linkBtn.style.cssText = 'align-self:flex-start; appearance:none; border:1px solid var(--line);' +
+      ' background:var(--bg); color:var(--ink); font:inherit; font-size:12px; cursor:pointer;' +
+      ' padding:4px 10px; border-radius:6px;';
+    linkBtn.title = inviteUrl(inv.code);
+    linkBtn.onclick = () => copyText(inviteUrl(inv.code), '✓ 邀请链接已复制');
+    row.appendChild(linkBtn);
+
     box.appendChild(row);
   }
 }
