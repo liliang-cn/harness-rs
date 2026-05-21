@@ -1,0 +1,22 @@
+[package]
+name = "harness-rs-permissions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Permission modes + per-tool allow/deny rules for harness-rs. Layers over the existing Hook system (PreToolUse gating) — gives ai-ledger-style multi-user backends a first-class way to map user tier → tool access without writing a hook per tool."
+
+keywords     = ["agent", "ai", "llm", "harness", "permissions"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+[lib]
+name = "harness_permissions"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tracing      = { workspace = true }

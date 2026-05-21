@@ -1,5 +1,11 @@
 /target
+/target-linux
+/target-musl
 /HARNESS_NOTES.md
 **/Cargo.lock.bak
 .env
 .env.local
+# Playwright MCP test artifacts
+.playwright-mcp/
+# Ad-hoc UI screenshots from manual testing
+/*.png

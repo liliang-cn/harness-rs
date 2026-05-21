@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Ledger HTTP service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/ai-ledger/ledger --serve --bind 0.0.0.0 --port 6743 --tier flash
+WorkingDirectory=/opt/ai-ledger
+EnvironmentFile=/etc/ai-ledger.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/ai-ledger
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

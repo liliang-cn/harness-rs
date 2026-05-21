@@ -151,6 +151,12 @@ struct AnthropicUsage {
 impl Model for AnthropicNative {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
         let (system, messages) = build_messages(ctx);
+        // Anthropic has no native `response_format` field as of Dec 2025, and
+        // their `tool_choice` forced-tool trick conflicts with real
+        // tool-using loops (forcing one tool blocks the model from calling
+        // any others). Best-effort approach: append the schema/JSON
+        // instruction to the system prompt and trust the model to follow.
+        let system = augment_system_for_response_format(system, &ctx.response_format);
         let tools = ctx
             .tools
             .iter()
@@ -294,6 +300,35 @@ impl Model for AnthropicNative {
             supports_streaming: false, // not wired yet
         }
     }
+}
+
+/// Best-effort response-format support for Anthropic: append schema/JSON
+/// instructions to the system prompt. Anthropic doesn't ship a native
+/// `response_format` parameter; the documented alternatives (forced
+/// tool_choice, response prefill) both break the multi-turn ReAct loop in
+/// non-trivial ways, so we fall back to prompt steering.
+fn augment_system_for_response_format(
+    system: Option<String>,
+    fmt: &harness_core::ResponseFormat,
+) -> Option<String> {
+    use harness_core::ResponseFormat;
+    let extra = match fmt {
+        ResponseFormat::Free => return system,
+        ResponseFormat::JsonObject => {
+            "Reply with valid JSON only — no markdown fences, no prose, no explanation.".to_string()
+        }
+        ResponseFormat::JsonSchema { schema, .. } => format!(
+            "Reply ONLY with a single JSON object that matches this schema (no markdown fences, no prose):\n{}",
+            serde_json::to_string(schema).unwrap_or_else(|_| "{}".into())
+        ),
+        // ResponseFormat is `#[non_exhaustive]`; unknown future variants ⇒
+        // free-form (no prompt injection).
+        _ => return system,
+    };
+    Some(match system {
+        Some(s) if !s.trim().is_empty() => format!("{s}\n\n{extra}"),
+        _ => extra,
+    })
 }
 
 fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {

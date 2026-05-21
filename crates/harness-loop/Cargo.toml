@@ -26,6 +26,8 @@ tracing           = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true }
+schemars          = { workspace = true }
+futures           = { workspace = true }
 
 [dev-dependencies]
 harness-skills    = { workspace = true }

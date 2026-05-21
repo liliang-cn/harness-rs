@@ -82,6 +82,46 @@ impl Default for Policy {
     }
 }
 
+/// Constrain the model's terminal (non-tool-call) reply shape. Default = Free.
+///
+/// Each model adapter translates this to the provider's native format on the
+/// wire:
+/// - OpenAI / DeepSeek: `response_format: {type: "json_object"}` for
+///   `JsonObject`; `{type: "json_schema", json_schema: {name, schema, strict}}`
+///   for `JsonSchema`. Providers that only support `json_object` (DeepSeek as
+///   of Dec 2025) degrade gracefully by injecting the schema into the system
+///   prompt instead.
+/// - Gemini: `generationConfig.responseMimeType = "application/json"` plus
+///   `generationConfig.responseSchema = <schema>` for `JsonSchema`.
+/// - Anthropic: no native field — adapters synthesise a "structured_output"
+///   tool with the schema, force `tool_choice` to it, and surface the tool's
+///   args as the assistant text on response.
+///
+/// `JsonSchema.schema` is a `serde_json::Value` so callers can build it
+/// however they like — hand-rolled, via `schemars::schema_for!(T)`, or pulled
+/// from a `harness_loop::AgentLoop::run_typed<T>()` derivation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ResponseFormat {
+    /// Free-form text. The framework adds nothing to the request body.
+    #[default]
+    Free,
+    /// "Reply with valid JSON of any shape." Useful when the caller will run
+    /// its own validation and doesn't want to commit to a schema yet.
+    JsonObject,
+    /// "Reply with JSON matching this schema." Adapters may need to sanitise
+    /// dialect-specific keys before emitting (Gemini rejects `$ref`, OpenAI
+    /// strict mode demands `additionalProperties: false` everywhere, …).
+    JsonSchema {
+        /// Short identifier — providers that require one (OpenAI) use it as
+        /// the `json_schema.name` field.
+        name: String,
+        /// JSON Schema, as a `serde_json::Value`.
+        schema: serde_json::Value,
+    },
+}
+
 /// The model-visible state of an in-progress agent run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context {
@@ -94,6 +134,14 @@ pub struct Context {
     /// Tools the agent may call this turn. Model adapters translate these to
     /// the provider's tool-calling format (OpenAI `tools`, Anthropic `tools`, …).
     pub tools: Vec<crate::ToolSchema>,
+    /// Constraint on the model's terminal reply. Defaults to `Free` —
+    /// providers receive no extra request fields. See [`ResponseFormat`].
+    #[serde(default, skip_serializing_if = "response_format_is_default")]
+    pub response_format: ResponseFormat,
+}
+
+fn response_format_is_default(f: &ResponseFormat) -> bool {
+    matches!(f, ResponseFormat::Free)
 }
 
 impl Context {
@@ -106,6 +154,7 @@ impl Context {
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: Vec::new(),
+            response_format: ResponseFormat::Free,
         }
     }
 

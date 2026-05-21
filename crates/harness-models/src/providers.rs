@@ -22,3 +22,6 @@ pub const DEEPSEEK: &str = "https://api.deepseek.com";
 pub const GROQ: &str = "https://api.groq.com/openai/v1";
 pub const TOGETHER: &str = "https://api.together.xyz/v1";
 pub const OLLAMA: &str = "http://127.0.0.1:11434/v1";
+/// Google Gemini native API root (used by `GeminiNative`, NOT the
+/// OpenAI-compat shim which lives at `{GEMINI}/v1beta/openai`).
+pub const GEMINI: &str = "https://generativelanguage.googleapis.com";

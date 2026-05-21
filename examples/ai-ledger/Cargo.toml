@@ -1,0 +1,46 @@
+[package]
+name = "ai-ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Example: natural-language-driven personal ledger — multi-account, multi-currency, with budgets and reports. Powered by harness-rs."
+
+[[bin]]
+name = "ledger"
+path = "src/main.rs"
+
+[dependencies]
+harness         = { workspace = true }
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-models  = { workspace = true }
+harness-context = { workspace = true }
+harness-skills  = { workspace = true }
+harness-tools-web = { workspace = true }
+harness-permissions = { workspace = true }
+harness-tools-tasks = { workspace = true }
+argon2          = "0.5"
+rand            = "0.8"
+hex             = "0.4"
+tokio           = { workspace = true, features = ["io-std", "net", "signal"] }
+anyhow          = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+clap            = { workspace = true }
+async-trait     = { workspace = true }
+chrono          = { version = "0.4", features = ["serde"] }
+chrono-tz       = "0.10"
+uuid            = { version = "1", features = ["v4"] }
+rusqlite        = { version = "0.32", features = ["bundled", "chrono"] }
+rust_decimal    = { version = "1", features = ["serde-with-str"] }
+axum            = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio-stream    = "0.1"
+futures         = { workspace = true }
+reqwest         = { workspace = true }
+thiserror       = { workspace = true }
+schemars        = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
