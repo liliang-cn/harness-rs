@@ -333,6 +333,49 @@ details.trace > .trace-body {
 }
 #send:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ─── Push-to-talk mic button + WeChat-style recording overlay ───
+   Mic sits in the composer next to send. Long-press to record (Web
+   Speech API). Live interim transcript appears in a centred overlay;
+   slide finger up past the cancel zone to discard. */
+#mic {
+  min-width: 44px; min-height: 44px; padding: 0;
+  border-radius: 12px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink);
+  font-size: 20px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+#mic.recording { background: var(--accent); color: white; border-color: var(--accent); }
+#mic.cancel { background: var(--neg, #d33); border-color: var(--neg, #d33); }
+#mic:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#voiceOverlay {
+  position: fixed; inset: 0; z-index: 9500;
+  background: rgba(0,0,0,0.55);
+  display: none;
+  align-items: center; justify-content: center; flex-direction: column;
+  gap: 16px; padding: 24px;
+  pointer-events: none;
+}
+#voiceOverlay.on { display: flex; }
+.voice-panel {
+  background: var(--panel); color: var(--ink);
+  border-radius: 16px; padding: 16px 20px;
+  min-width: 240px; max-width: min(90vw, 480px);
+  text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
+.voice-dots { font-size: 28px; line-height: 1; letter-spacing: 4px; }
+.voice-dots span { display: inline-block; animation: voiceDot 1.05s infinite ease-in-out; }
+.voice-dots span:nth-child(2) { animation-delay: 0.15s; }
+.voice-dots span:nth-child(3) { animation-delay: 0.30s; }
+.voice-dots span:nth-child(4) { animation-delay: 0.45s; }
+.voice-dots span:nth-child(5) { animation-delay: 0.60s; }
+@keyframes voiceDot { 0%,80%,100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
+.voice-hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+.voice-text { font-size: 15px; margin-top: 8px; min-height: 22px; word-break: break-word; }
+#voiceOverlay.cancel .voice-panel { background: var(--neg, #d33); color: #fff; }
+#voiceOverlay.cancel .voice-hint, #voiceOverlay.cancel .voice-text { color: #fff; }
+
 /* dashboard */
 .dash {
   flex: 1; overflow-y: auto; padding: 16px;
@@ -358,6 +401,14 @@ details.trace > .trace-body {
   padding: 4px 10px; min-height: 28px; border-radius: 8px; cursor: pointer;
 }
 .btn-mini:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.export-btn {
+  width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--ink); font: inherit; font-weight: 500;
+  min-height: 44px; cursor: pointer; text-align: left;
+}
+.export-btn:hover { background: var(--panel); }
+.export-btn:disabled { opacity: 0.5; cursor: progress; }
 
 .accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .acc {
@@ -595,10 +646,19 @@ table.tbl td.tx-transfer { color: var(--muted); }
   <div class="messages chat-view-chat" id="messages" style="display:none"></div>
   <div class="composer chat-view-chat" id="chatComposer" style="display:none">
     <textarea id="input" placeholder="例：刚火锅花了 188，微信扣的 / 今天买了100股AAPL 198.42" enterkeyhint="send"></textarea>
+    <button id="mic" title="按住说话" aria-label="按住说话">🎤</button>
     <button id="send">发送</button>
   </div>
 </section>
 
+<!-- Push-to-talk overlay (WeChat-style). Toggled by the mic button. -->
+<div id="voiceOverlay" aria-hidden="true">
+  <div class="voice-panel">
+    <div class="voice-dots" aria-hidden="true"><span>•</span><span>•</span><span>•</span><span>•</span><span>•</span></div>
+    <div class="voice-text" id="voiceText"></div>
+    <div class="voice-hint" id="voiceHint">松开填入 · 上滑取消</div>
+  </div>
+</div>
 <!-- Floating chat button — always visible when authenticated; clicked → opens #chatCol. -->
 <button class="chat-fab hidden" id="chatFab" title="聊天" aria-label="打开聊天">💬</button>
 
@@ -736,6 +796,18 @@ table.tbl td.tx-transfer { color: var(--muted); }
                  min-height:44px; cursor:pointer; text-align:left">🧠 查看全部记忆 →</button>
         <div style="font-size:11px; color:var(--muted); margin-top:6px">
           聊几次后自动沉淀；不对的可以一条条删。
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>导出数据</h3>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <button class="export-btn" data-export="transactions" title="按时间倒序导出所有流水">⬇ 记账流水 (CSV)</button>
+          <button class="export-btn" data-export="trades" title="导出所有买入/卖出/建仓基线">⬇ 投资交易 (CSV)</button>
+          <button class="export-btn" data-export="subscriptions" title="包含已取消的">⬇ 订阅 (CSV)</button>
+        </div>
+        <div style="font-size:11px; color:var(--muted); margin-top:8px">
+          UTF-8 + BOM，Excel / Numbers / Sheets 直接打开。账户名 / 标的名已映射，不显示原始 id。
         </div>
       </div>
 
@@ -1900,6 +1972,43 @@ document.getElementById('profLogoutBtn').addEventListener('click', async () => {
   location.reload();
 });
 
+// ─── Export CSV: fetch with bearer header → blob → trigger download ───
+// (Can't use plain <a download> because that drops the Authorization header.)
+document.querySelectorAll('.export-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const kind = btn.dataset.export;
+    if (!kind) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⬇ 导出中…';
+    try {
+      const r = await fetch(`/api/me/export/${kind}.csv`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Use server's filename when available, else fall back to a date stamp.
+      const cd = r.headers.get('content-disposition') || '';
+      const m = cd.match(/filename="?([^";]+)"?/i);
+      const filename = m
+        ? m[1]
+        : `${kind}-${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      typeof showToast === 'function' && showToast('✓ 已下载');
+    } catch (e) {
+      alert(`导出失败: ${(e && e.message) || e}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+});
+
 paintProfile();
 
 function trimPreview(p) {
@@ -2072,6 +2181,151 @@ input.addEventListener('keydown', (e) => {
   }
 });
 send.addEventListener('click', submitMessage);
+
+// ─── Push-to-talk via Web Speech API (WeChat-style) ───
+(function setupPushToTalk() {
+  const mic = $('mic');
+  const overlay = $('voiceOverlay');
+  const voiceText = $('voiceText');
+  const voiceHint = $('voiceHint');
+  if (!mic) return;
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    mic.disabled = true;
+    mic.title = '当前浏览器不支持语音识别（建议 Chrome / Safari）';
+    return;
+  }
+
+  let rec = null;
+  let active = false;       // currently recording
+  let cancelled = false;    // slide-up cancel flag
+  let startY = 0;           // touchstart Y for slide-up gesture
+  let finalText = '';       // accumulated final transcripts (recogniser may chunk them)
+
+  function buildRec() {
+    const r = new SR();
+    r.lang = 'zh-CN';
+    r.interimResults = true;
+    r.continuous = true;
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const seg = e.results[i];
+        if (seg.isFinal) finalText += seg[0].transcript;
+        else interim += seg[0].transcript;
+      }
+      voiceText.textContent = (finalText + interim).trim() || '听着…';
+    };
+    r.onerror = (e) => {
+      // 'no-speech' fires when the user releases without saying anything;
+      // suppress it as a normal cancel rather than alerting.
+      if (e.error && e.error !== 'no-speech' && e.error !== 'aborted') {
+        voiceText.textContent = '识别失败: ' + e.error;
+      }
+    };
+    r.onend = () => {
+      // We may stop manually (release) or by silence timeout. The release
+      // path already handled state via `release()`; if `end` fires while
+      // active is still true (rare), clean up.
+      if (active) finish();
+    };
+    return r;
+  }
+
+  function start() {
+    if (active) return;
+    cancelled = false;
+    finalText = '';
+    active = true;
+    mic.classList.add('recording');
+    overlay.classList.remove('cancel');
+    overlay.classList.add('on');
+    voiceText.textContent = '';
+    voiceHint.textContent = '松开填入 · 上滑取消';
+    try {
+      rec = buildRec();
+      rec.start();
+    } catch (e) {
+      // start() throws if called too soon after a previous end; rebuild + retry once.
+      try {
+        rec = buildRec();
+        rec.start();
+      } catch (err) {
+        active = false;
+        mic.classList.remove('recording');
+        overlay.classList.remove('on');
+        alert('语音启动失败: ' + (err && err.message ? err.message : err));
+      }
+    }
+  }
+
+  function setCancelState(on) {
+    if (on) {
+      mic.classList.add('cancel');
+      overlay.classList.add('cancel');
+      voiceHint.textContent = '松开取消';
+    } else {
+      mic.classList.remove('cancel');
+      overlay.classList.remove('cancel');
+      voiceHint.textContent = '松开填入 · 上滑取消';
+    }
+  }
+
+  function finish() {
+    if (!active) return;
+    active = false;
+    mic.classList.remove('recording', 'cancel');
+    overlay.classList.remove('on', 'cancel');
+    const text = finalText.trim();
+    finalText = '';
+    if (cancelled || !text) {
+      // discard
+      return;
+    }
+    // STT for Chinese is noisy; let the user eyeball + edit before sending.
+    // Append (with a space) rather than overwrite — useful when they're
+    // composing a longer message in chunks.
+    const existing = input.value.trim();
+    input.value = existing ? existing + ' ' + text : text;
+    // Bring focus + scroll cursor to end so the next keystroke continues it.
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  function release() {
+    // Stop the recogniser; result events may still arrive briefly.
+    try { rec && rec.stop(); } catch {}
+    // Give the recogniser a tick to flush the last interim → final transition.
+    setTimeout(finish, 80);
+  }
+
+  // Mouse (desktop) — press-and-hold semantics, mouseup outside still fires.
+  mic.addEventListener('mousedown', (e) => { e.preventDefault(); start(); });
+  // Global mouseup so dragging off the button still ends recording.
+  document.addEventListener('mouseup', () => { if (active) release(); });
+
+  // Touch (mobile) — track Y delta for slide-up-to-cancel.
+  mic.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    startY = e.touches[0].clientY;
+    start();
+  }, { passive: false });
+  mic.addEventListener('touchmove', (e) => {
+    if (!active) return;
+    const dy = startY - e.touches[0].clientY; // positive = swiped up
+    cancelled = dy > 60;
+    setCancelState(cancelled);
+  }, { passive: true });
+  mic.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    release();
+  });
+  mic.addEventListener('touchcancel', () => {
+    cancelled = true;
+    release();
+  });
+})();
 
 setupModelPicker();
 refreshLedger();

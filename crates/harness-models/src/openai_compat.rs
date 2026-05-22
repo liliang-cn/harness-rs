@@ -515,6 +515,20 @@ fn decode_delta(
     let first = choices.first()?;
     let delta = first.get("delta")?;
 
+    // Reasoning / thinking-mode content. DeepSeek streams `reasoning_content`
+    // alongside (and BEFORE) `content` when the model is in thinking mode.
+    // We MUST capture it because the next request to the same conversation
+    // is required to echo it back — otherwise DeepSeek returns
+    //   400: "The `reasoning_content` in the thinking mode must be passed
+    //         back to the API."
+    // OpenAI proper doesn't send this field; the guard below makes it a
+    // safe no-op for non-DeepSeek streams.
+    if let Some(Value::String(r)) = delta.get("reasoning_content")
+        && !r.is_empty()
+    {
+        return Some(ModelDelta::Reasoning(r.clone()));
+    }
+
     // Plain text content
     if let Some(Value::String(t)) = delta.get("content")
         && !t.is_empty()
