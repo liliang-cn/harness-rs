@@ -15,7 +15,7 @@ use axum::{
     response::{Html, Sse, sse::Event as SseEvent, sse::KeepAlive},
     routing::{get, post},
 };
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use futures::stream::Stream;
 use harness::prelude::*;
 use harness_context::with_profile;
@@ -254,6 +254,10 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/budgets", get(budgets_handler))
         .route("/api/subscriptions", get(subscriptions_handler))
         .route("/api/subscriptions/:id/cancel", post(subscription_cancel_handler))
+        .route("/api/voice/transcribe", post(transcribe_handler))
+        .route("/api/me/export/transactions.csv", get(export_transactions_csv))
+        .route("/api/me/export/trades.csv", get(export_trades_csv))
+        .route("/api/me/export/subscriptions.csv", get(export_subscriptions_csv))
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
         // Session-aware chat: each conversation is persisted in the DB so
@@ -774,6 +778,368 @@ async fn subscription_cancel_handler(
         return Err(ApiError::BadRequest(format!("no active subscription `{id}`")));
     }
     Ok(Json(json!({"cancelled": id})))
+}
+
+// ───── voice → text (Gemini audio inlineData) ─────
+//
+// Client (web / miniprogram) uploads a small audio clip as base64.
+// We hand it to Gemini's generateContent with a "transcribe this" prompt
+// and return the plain text. Used by the 小程序 long-press mic flow —
+// in the web we already have Web Speech API in-browser, but this is the
+// fallback path if it lands there too.
+
+#[derive(Deserialize)]
+struct TranscribeReq {
+    audio_base64: String,
+    /// e.g. "audio/mp3", "audio/wav", "audio/webm". Defaults to mp3.
+    #[serde(default)]
+    mime_type: Option<String>,
+}
+
+async fn transcribe_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Json(req): Json<TranscribeReq>,
+) -> Result<Json<Value>, ApiError> {
+    let cfg = s.cfg();
+    let key = cfg
+        .gemini_key
+        .clone()
+        .ok_or_else(|| ApiError::Internal("GEMINI_API_KEY not configured".into()))?;
+    let mime = req.mime_type.as_deref().unwrap_or("audio/mp3");
+    // Strip the small base64 max length cap — Gemini accepts up to ~20MB
+    // inline. Empirically 30-second m4a is well under that.
+    if req.audio_base64.is_empty() {
+        return Err(ApiError::BadRequest("audio_base64 is empty".into()));
+    }
+
+    let body = json!({
+        "contents": [{
+            "parts": [
+                {"text": "请把这段录音转写成文字。直接返回文字本身，不要加引号或者其他说明。如果是中文就返回中文，英文就返回英文，混合则按实际语言混合。"},
+                {"inlineData": { "mimeType": mime, "data": req.audio_base64 }}
+            ]
+        }],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 2048
+        }
+    });
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={key}"
+    );
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("gemini request: {e}")))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| ApiError::Internal(format!("gemini body: {e}")))?;
+    if !status.is_success() {
+        return Err(ApiError::Internal(format!(
+            "gemini HTTP {status}: {}",
+            text.chars().take(400).collect::<String>()
+        )));
+    }
+    let v: Value = serde_json::from_str(&text)
+        .map_err(|e| ApiError::Internal(format!("gemini json: {e}")))?;
+    let transcript = v
+        .get("candidates")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("content"))
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.get(0))
+        .and_then(|p| p.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Audit it; tokens_in/out unknown from this call shape.
+    if let Ok(db) = open_db() {
+        let _ = db.insert_audit(
+            Some(&auth.user.id),
+            "transcribe",
+            None,
+            Some(&json!({"chars": transcript.chars().count()}).to_string()),
+            0,
+            0,
+        );
+    }
+
+    Ok(Json(json!({ "text": transcript })))
+}
+
+// ───── CSV exports ─────
+//
+// Three endpoints, one per domain (transactions, trades, subscriptions).
+// UTF-8 BOM is prepended so Excel/Numbers on macOS opens Chinese columns
+// without the "garbled mojibake" first-launch experience. account_id and
+// asset_id columns are joined to human-readable names via in-memory maps
+// so the CSV is useful without consulting the app.
+
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+fn csv_line(cols: &[&str]) -> String {
+    let mut s = String::with_capacity(cols.iter().map(|c| c.len() + 1).sum::<usize>() + 1);
+    for (i, c) in cols.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&csv_escape(c));
+    }
+    s.push('\n');
+    s
+}
+
+fn csv_response(body: String, filename: &str) -> axum::response::Response {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    // BOM so Excel auto-detects UTF-8.
+    let mut payload = String::from("\u{FEFF}");
+    payload.push_str(&body);
+    (
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        payload,
+    )
+        .into_response()
+}
+
+async fn export_transactions_csv(auth: AuthCtx) -> Result<axum::response::Response, ApiError> {
+    let db = open_db()?;
+    let accounts = db
+        .list_accounts(&auth.user.id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let name_by_id: std::collections::HashMap<String, String> = accounts
+        .into_iter()
+        .map(|a| (a.id, a.name))
+        .collect();
+
+    // All time. SQLite handles RFC3339 string comparison sensibly between
+    // these bounds.
+    let from = chrono::Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap();
+    let to = chrono::Utc.with_ymd_and_hms(2999, 12, 31, 23, 59, 59).unwrap();
+    let txns = db
+        .list_transactions(&auth.user.id, from, to, None, None)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let mut body = String::new();
+    body.push_str(&csv_line(&[
+        "id",
+        "类型",
+        "金额",
+        "币种",
+        "账户",
+        "对方账户",
+        "分类",
+        "备注",
+        "发生时间",
+        "创建时间",
+    ]));
+    for t in &txns {
+        let kind = match t.kind {
+            crate::model::TxnKind::Expense => "支出",
+            crate::model::TxnKind::Income => "收入",
+            crate::model::TxnKind::Transfer => "转账",
+        };
+        let acct = name_by_id
+            .get(&t.account_id)
+            .cloned()
+            .unwrap_or_else(|| t.account_id.clone());
+        let counter = t
+            .counter_account_id
+            .as_ref()
+            .and_then(|id| name_by_id.get(id).cloned().or(Some(id.clone())))
+            .unwrap_or_default();
+        body.push_str(&csv_line(&[
+            &t.id,
+            kind,
+            &t.amount.to_string(),
+            &t.currency,
+            &acct,
+            &counter,
+            t.category.as_deref().unwrap_or(""),
+            t.note.as_deref().unwrap_or(""),
+            &t.occurred_at.to_rfc3339(),
+            &t.created_at.to_rfc3339(),
+        ]));
+    }
+
+    let _ = db.insert_audit(
+        Some(&auth.user.id),
+        "export",
+        Some("transactions"),
+        Some(&json!({"rows": txns.len()}).to_string()),
+        0,
+        0,
+    );
+
+    let stamp = chrono::Utc::now().format("%Y%m%d");
+    Ok(csv_response(body, &format!("transactions-{stamp}.csv")))
+}
+
+async fn export_trades_csv(auth: AuthCtx) -> Result<axum::response::Response, ApiError> {
+    let db = open_db()?;
+    let assets = db
+        .list_assets(&auth.user.id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let asset_by_id: std::collections::HashMap<String, crate::portfolio::model::Asset> = assets
+        .into_iter()
+        .map(|a| (a.id.clone(), a))
+        .collect();
+
+    let trades = db
+        .all_trades(&auth.user.id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let mut body = String::new();
+    body.push_str(&csv_line(&[
+        "id",
+        "标的",
+        "标的名称",
+        "类型",
+        "数量",
+        "单价",
+        "币种",
+        "手续费",
+        "金额合计",
+        "交易时间",
+        "备注",
+        "创建时间",
+    ]));
+    for tr in &trades {
+        let symbol = asset_by_id
+            .get(&tr.asset_id)
+            .map(|a| a.symbol.clone())
+            .unwrap_or_else(|| tr.asset_id.clone());
+        let asset_name = asset_by_id
+            .get(&tr.asset_id)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let kind = match tr.kind {
+            crate::portfolio::model::TradeKind::Buy => "买入",
+            crate::portfolio::model::TradeKind::Sell => "卖出",
+            crate::portfolio::model::TradeKind::Opening => "建仓基线",
+        };
+        let total = (tr.qty * tr.price_per_unit + tr.fees).to_string();
+        body.push_str(&csv_line(&[
+            &tr.id,
+            &symbol,
+            &asset_name,
+            kind,
+            &tr.qty.to_string(),
+            &tr.price_per_unit.to_string(),
+            &tr.currency,
+            &tr.fees.to_string(),
+            &total,
+            &tr.occurred_at.to_rfc3339(),
+            tr.note.as_deref().unwrap_or(""),
+            &tr.created_at.to_rfc3339(),
+        ]));
+    }
+
+    let _ = db.insert_audit(
+        Some(&auth.user.id),
+        "export",
+        Some("trades"),
+        Some(&json!({"rows": trades.len()}).to_string()),
+        0,
+        0,
+    );
+
+    let stamp = chrono::Utc::now().format("%Y%m%d");
+    Ok(csv_response(body, &format!("trades-{stamp}.csv")))
+}
+
+async fn export_subscriptions_csv(auth: AuthCtx) -> Result<axum::response::Response, ApiError> {
+    let db = open_db()?;
+    let accounts = db
+        .list_accounts(&auth.user.id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let name_by_id: std::collections::HashMap<String, String> = accounts
+        .into_iter()
+        .map(|a| (a.id, a.name))
+        .collect();
+
+    // Include cancelled rows too — the user is asking for an export, not a
+    // dashboard view.
+    let subs = db
+        .list_subscriptions(&auth.user.id, false)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let mut body = String::new();
+    body.push_str(&csv_line(&[
+        "id",
+        "名称",
+        "金额",
+        "币种",
+        "频率",
+        "下次扣款",
+        "扣款账户",
+        "分类",
+        "支付渠道",
+        "备注",
+        "状态",
+        "创建时间",
+        "取消时间",
+    ]));
+    for s in &subs {
+        let freq = match s.frequency {
+            crate::model::Frequency::Weekly => "每周",
+            crate::model::Frequency::Monthly => "每月",
+            crate::model::Frequency::Quarterly => "每季度",
+            crate::model::Frequency::Yearly => "每年",
+        };
+        let acct = name_by_id
+            .get(&s.account_id)
+            .cloned()
+            .unwrap_or_else(|| s.account_id.clone());
+        body.push_str(&csv_line(&[
+            &s.id,
+            &s.name,
+            &s.amount.to_string(),
+            &s.currency,
+            freq,
+            &s.next_charge_date.to_string(),
+            &acct,
+            s.category.as_deref().unwrap_or(""),
+            s.pay_channel.as_deref().unwrap_or(""),
+            s.note.as_deref().unwrap_or(""),
+            &s.status,
+            &s.created_at.to_rfc3339(),
+            s.cancelled_at.map(|d| d.to_rfc3339()).as_deref().unwrap_or(""),
+        ]));
+    }
+
+    let _ = db.insert_audit(
+        Some(&auth.user.id),
+        "export",
+        Some("subscriptions"),
+        Some(&json!({"rows": subs.len()}).to_string()),
+        0,
+        0,
+    );
+
+    let stamp = chrono::Utc::now().format("%Y%m%d");
+    Ok(csv_response(body, &format!("subscriptions-{stamp}.csv")))
 }
 
 #[derive(Deserialize)]
