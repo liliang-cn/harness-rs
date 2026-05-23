@@ -48,7 +48,27 @@ async fn list_users(
     let users = db
         .list_users_with_stats()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "users": users })))
+    // Enrich with estimated cost_usd using the currently configured chat
+    // model. Approximate when the operator has swapped models — historical
+    // tokens get priced at the *current* rate, not whatever produced them.
+    // Exact accounting would need model_id on each audit row; v1 skips that.
+    let model_id = s.cfg().chat_model;
+    let enriched: Vec<Value> = users
+        .into_iter()
+        .map(|u| {
+            let cost = crate::pricing::cost_usd(&model_id, u.tokens_in, u.tokens_out);
+            let mut v = serde_json::to_value(&u).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                // round to 6 decimal places — fractions of a cent are noise.
+                obj.insert(
+                    "cost_usd".into(),
+                    json!((cost * 1_000_000.0).round() / 1_000_000.0),
+                );
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "users": enriched, "priced_at_model": model_id })))
 }
 
 async fn get_user(
