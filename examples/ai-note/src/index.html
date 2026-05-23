@@ -74,9 +74,12 @@ body {
 .app-title { font-weight: 700; font-size: 15px; }
 .grow { flex: 1; }
 .search-input {
-  flex: 1; max-width: 380px;
-  padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--bg); font: inherit; font-size: 13px;
+  flex: 1;
+  /* Grow as the topbar allows so the placeholder + medium-length queries
+     don't truncate. Cap at 720px so on ultra-wide it doesn't dominate. */
+  max-width: 720px;
+  padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); font: inherit; font-size: 14px;
 }
 .search-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .icon-btn {
