@@ -29,6 +29,10 @@ use std::sync::Arc;
 const INDEX_HTML: &str = include_str!("index.html");
 const MARKED_JS: &str = include_str!("marked.min.js");
 
+/// Max notes a `tier == "trial"` user may have at once. Paid / admin are
+/// unbounded. Edit / delete don't count — only the inserts.
+pub const TRIAL_MAX_NOTES: u32 = 30;
+
 /// Admin-mutable runtime config (mirrors ai-ledger's pattern).
 /// Provider keys / chat provider+model live here and are reflected to the
 /// DB so they survive restart. The actual chat-model adapter is still
@@ -427,6 +431,17 @@ async fn create_note_handler(
         return Err(ApiError::BadRequest("body is empty".into()));
     }
     let db = open_db_state(&s)?;
+    // Trial cap. Edit/delete uncapped; only inserts count.
+    if auth.user.tier == "trial" {
+        let used = db
+            .count_notes(&auth.user.id)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if used >= TRIAL_MAX_NOTES {
+            return Err(ApiError::Forbidden(format!(
+                "trial limit hit — you have {used} notes, the cap is {TRIAL_MAX_NOTES}. Delete some, or upgrade to paid."
+            )));
+        }
+    }
     let note = db
         .create_note(&auth.user.id, &req.title, &req.body, &req.tags)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -648,6 +663,10 @@ async fn chat_handler(
         "db_path".into(),
         serde_json::Value::String(s.db_path.to_string_lossy().into_owned()),
     );
+    profile.extra.insert(
+        "tier".into(),
+        serde_json::Value::String(auth.user.tier.clone()),
+    );
     // Plant the user's tz so `current_time` resolves "今天" / "今天" / "this week"
     // in their local clock. Defaults to system tz if unset.
     if let Some(tz) = &s.user_tz {
@@ -773,6 +792,11 @@ Hard rules:\n\
    first, then briefly confirm with a one-line ack (\"已记录 · 4 条今日想法\"). The user's \
    words are the canonical record; don't paraphrase them away.\n\
 8. Notes are private to the user. No third-party leakage in your replies.\n\
+9. **Trial limit.** If `create_note` returns `{error: \"trial_limit\", used, limit, hint}`, \
+   don't retry — instead tell the user in plain Chinese that they've hit the {limit}-note \
+   cap (state the exact number), suggest deleting an old note to make room (offer to \
+   `list_recent_notes` so they can pick), and mention the paid upgrade path. Don't \
+   apologise effusively; one sentence + actionable choices is enough.\n\
 ";
 
 fn random_user_id() -> String {

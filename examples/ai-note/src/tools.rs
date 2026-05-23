@@ -30,6 +30,12 @@ fn open_db(w: &World) -> Result<crate::db::Db, ToolError> {
     crate::db::Db::open(&p).map_err(|e| ToolError::Exec(format!("db open: {e}")))
 }
 
+fn tier_of(w: &World) -> String {
+    w.profile
+        .extra::<String>("tier")
+        .unwrap_or_else(|| "trial".into())
+}
+
 fn embedder() -> Result<std::sync::Arc<dyn harness_core::Embedder>, ToolError> {
     crate::embed_slot::get().ok_or_else(|| ToolError::Exec("embedder not configured".into()))
 }
@@ -122,6 +128,26 @@ async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         .unwrap_or_default();
 
     let db = open_db(w)?;
+    if tier_of(w) == "trial" {
+        let used = db
+            .count_notes(&uid)
+            .map_err(|e| ToolError::Exec(format!("count: {e}")))?;
+        let cap = crate::server::TRIAL_MAX_NOTES;
+        if used >= cap {
+            // Structured payload so the agent can phrase the upgrade nudge naturally.
+            return Ok(ToolResult {
+                ok: false,
+                content: json!({
+                    "error": "trial_limit",
+                    "used": used,
+                    "limit": cap,
+                    "hint": "trial 用户最多 {limit} 条笔记。删几条腾空间，或升级到 paid（找个邀请码注册）。"
+                        .replace("{limit}", &cap.to_string()),
+                }),
+                trace: Some(format!("trial cap hit ({used}/{cap})")),
+            });
+        }
+    }
     let note = db
         .create_note(&uid, title, body, &tags)
         .map_err(|e| ToolError::Exec(format!("insert: {e}")))?;
