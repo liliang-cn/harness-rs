@@ -142,12 +142,14 @@ async fn main() -> anyhow::Result<()> {
     .spawn();
 
     // ── http server ──────────────────────────────────────────
+    let user_tz = std::env::var("HARNESS_USER_TZ").ok().filter(|s| !s.is_empty());
     let state = server::AppState {
         db_path,
         model: chat_model,
         embedder,
         max_iters: cli.max_iters,
         model_handle,
+        user_tz,
     };
     let addr: std::net::SocketAddr = format!("{}:{}", cli.bind, cli.port).parse()?;
     println!("→ ai-note");

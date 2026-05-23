@@ -380,6 +380,39 @@ impl Db {
         rows.collect()
     }
 
+    /// Like `list_recent_notes` but with inclusive `since` / `until` filters
+    /// on `updated_at`. Either bound can be `None`. RFC3339 strings; SQLite
+    /// orders them lexicographically which is correct for RFC3339 UTC.
+    pub fn list_notes_in_range(
+        &self,
+        user_id: &str,
+        since: Option<&str>,
+        until: Option<&str>,
+        limit: u32,
+    ) -> SqlResult<Vec<Note>> {
+        let mut sql = String::from(
+            "SELECT id, title, body, tags, created_at, updated_at
+             FROM notes WHERE user_id = ?1",
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(s) = since {
+            sql.push_str(&format!(" AND updated_at >= ?{}", p.len() + 1));
+            p.push(s.to_string());
+        }
+        if let Some(u) = until {
+            sql.push_str(&format!(" AND updated_at <= ?{}", p.len() + 1));
+            p.push(u.to_string());
+        }
+        sql.push_str(&format!(" ORDER BY updated_at DESC LIMIT ?{}", p.len() + 1));
+        p.push((limit as i64).to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), row_to_note)?;
+        rows.collect()
+    }
+
     // ───── embedding storage ─────
 
     /// Pull the next batch of notes that need embedding. Cheap because of the

@@ -5,6 +5,7 @@
 //! `world.profile.extra::<String>("user_id")`, which the HTTP layer plants
 //! before launching the loop.
 
+use chrono::{Local, Utc};
 use harness::ToolError;
 use harness::prelude::*;
 use serde_json::{Value, json};
@@ -34,6 +35,54 @@ fn embedder() -> Result<std::sync::Arc<dyn harness_core::Embedder>, ToolError> {
 }
 
 // ───── tools ─────
+
+/// Get the current wall-clock time. ALWAYS call this BEFORE interpreting any
+/// relative date in the user's message ("今天" / "yesterday" / "上周" / "last
+/// month" / "tomorrow" / "前天" / "next Friday" etc). Returns ISO timestamps
+/// in both UTC and the user's local timezone, plus weekday and human format.
+#[harness::tool(
+    name = "current_time",
+    risk = "read-only",
+    schema = r#"{ "type": "object", "properties": {} }"#
+)]
+async fn current_time(_args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let now_utc = Utc::now();
+    let tz_name = w.profile.tz.clone();
+    let (iso_local, weekday, human, tz_source) = match tz_name
+        .as_deref()
+        .and_then(|s| s.parse::<chrono_tz::Tz>().ok())
+    {
+        Some(tz) => {
+            let local = now_utc.with_timezone(&tz);
+            (
+                local.to_rfc3339(),
+                local.format("%A").to_string(),
+                local.format("%Y-%m-%d %H:%M %Z").to_string(),
+                format!("profile.tz={}", tz_name.as_deref().unwrap_or("?")),
+            )
+        }
+        None => {
+            let local = now_utc.with_timezone(&Local);
+            (
+                local.to_rfc3339(),
+                local.format("%A").to_string(),
+                local.format("%Y-%m-%d %H:%M %Z").to_string(),
+                "system-clock".into(),
+            )
+        }
+    };
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "iso_utc": now_utc.to_rfc3339(),
+            "iso_local": iso_local,
+            "weekday": weekday,
+            "human": human,
+            "timezone": tz_source,
+        }),
+        trace: None,
+    })
+}
 
 /// Create a new note. Always extract the user's full intent into `body` —
 /// don't summarise. `title` should be 4-15 chars capturing the gist; leave
@@ -134,28 +183,44 @@ async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
     })
 }
 
-/// List the user's most recent notes by updated_at. Use for overview queries
-/// ("what have I been writing"). `limit` defaults to 10.
+/// List the user's notes by updated_at, optionally filtered by date range.
+/// Use for time-scoped queries ("今天写了什么" / "notes from last week" /
+/// "what did I capture in 2025"). `since` and `until` are RFC3339 UTC
+/// timestamps; resolve relative dates by calling `current_time` first then
+/// computing the window yourself (e.g. for "今天" use today's 00:00 in the
+/// user's local TZ converted to UTC).
 #[harness::tool(
     name = "list_recent_notes",
     risk = "read-only",
     schema = r#"{
         "type": "object",
         "properties": {
-            "limit": { "type": "integer", "description": "Default 10, max 100.", "minimum": 1, "maximum": 100 }
+            "limit": { "type": "integer", "description": "Default 10, max 200.", "minimum": 1, "maximum": 200 },
+            "since": { "type": "string", "description": "RFC3339 UTC, inclusive lower bound on updated_at." },
+            "until": { "type": "string", "description": "RFC3339 UTC, inclusive upper bound on updated_at." }
         }
     }"#
 )]
 async fn list_recent_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let uid = uid_of(w)?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10).min(200) as u32;
+    let since = args.get("since").and_then(|v| v.as_str());
+    let until = args.get("until").and_then(|v| v.as_str());
     let db = open_db(w)?;
-    let notes = db
-        .list_recent_notes(&uid, limit)
-        .map_err(|e| ToolError::Exec(format!("list: {e}")))?;
+    let notes = if since.is_some() || until.is_some() {
+        db.list_notes_in_range(&uid, since, until, limit)
+            .map_err(|e| ToolError::Exec(format!("list: {e}")))?
+    } else {
+        db.list_recent_notes(&uid, limit)
+            .map_err(|e| ToolError::Exec(format!("list: {e}")))?
+    };
     Ok(ToolResult {
         ok: true,
-        content: json!({ "count": notes.len(), "notes": notes }),
+        content: json!({
+            "count": notes.len(),
+            "notes": notes,
+            "filter": { "since": since, "until": until }
+        }),
         trace: None,
     })
 }

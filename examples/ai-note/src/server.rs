@@ -35,6 +35,9 @@ pub struct AppState {
     pub embedder: Arc<dyn Embedder>,
     pub max_iters: u32,
     pub model_handle: String,
+    /// IANA tz id (e.g. "Asia/Shanghai"). Planted on the agent's
+    /// profile.tz so `current_time` returns the right local clock.
+    pub user_tz: Option<String>,
 }
 
 impl AppState {
@@ -460,6 +463,11 @@ async fn chat_handler(
         "db_path".into(),
         serde_json::Value::String(s.db_path.to_string_lossy().into_owned()),
     );
+    // Plant the user's tz so `current_time` resolves "今天" / "今天" / "this week"
+    // in their local clock. Defaults to system tz if unset.
+    if let Some(tz) = &s.user_tz {
+        profile.tz = Some(tz.clone());
+    }
     // Flag that an embedder is available (tools read the slot, not this).
     profile
         .extra
@@ -540,22 +548,35 @@ You are a personal note-taking assistant. The user types natural-language \
 messages describing what they want to capture, recall, edit, or delete.\n\
 \n\
 Hard rules:\n\
-1. When the user gives you a thought, observation, idea, todo, or anything \
+1. **Time awareness.** Whenever the user uses a relative date — 今天 / 昨天 / 前天 / 上周 / \
+   上个月 / 去年 / today / yesterday / last week / last month / last year / next Friday / etc — \
+   call `current_time` FIRST and compute the window from its `iso_local` + `timezone` fields. \
+   Never guess what \"today\" is.\n\
+   - For \"今天\" / \"today\": since = local midnight today (in user TZ → UTC), until = now.\n\
+   - For \"昨天\" / \"yesterday\": [local midnight yesterday, local midnight today).\n\
+   - For \"上周\" / \"last week\": [local midnight last Monday, local midnight this Monday).\n\
+   - For \"上个月\" / \"last month\": [first day of last month 00:00 local, first day of this month 00:00 local).\n\
+   - For \"去年\" / \"last year\": [Jan 1 last year 00:00 local, Jan 1 this year 00:00 local).\n\
+   Pass those as RFC3339 UTC to `list_recent_notes`'s `since`/`until` args.\n\
+2. When the user gives you a thought, observation, idea, todo, or anything \
    they want remembered, call `create_note` IMMEDIATELY. Don't ask for a title — \
    pick a short 4-15 char one yourself from the content. Pull tags out if natural \
    (e.g. \"work\", \"idea\", \"book\", \"todo\", \"reading\").\n\
-2. When the user is searching / recalling (\"did I write about X\" / \"关于 X 的笔记\" / \
-   \"find my note on Y\" / \"what did I say about Z\"), call `search_notes` with their \
-   query verbatim. Pass the user's full phrasing, NOT just keywords — the embedding \
-   model handles paraphrasing.\n\
-3. When the user wants an overview (\"what have I been writing\", \"recent notes\"), \
-   call `list_recent_notes`.\n\
-4. For `update_note` and `delete_note` you MUST first surface the matching id via \
+3. When the user is searching / recalling without a time bound (\"did I write about X\" / \
+   \"关于 X 的笔记\" / \"find my note on Y\" / \"what did I say about Z\"), call `search_notes` \
+   with their query verbatim. Pass the user's full phrasing, NOT just keywords — the \
+   embedding model handles paraphrasing.\n\
+4. When the user combines a topic AND a time bound (\"上周关于 X 的笔记\" / \"yesterday's todos\"), \
+   first compute the date window per rule 1, then call `list_recent_notes` with `since`/`until`. \
+   If the topic still needs disambiguating after that, also call `search_notes` and intersect.\n\
+5. When the user wants an overview (\"what have I been writing\", \"recent notes\"), call \
+   `list_recent_notes` with no date filter.\n\
+6. For `update_note` and `delete_note` you MUST first surface the matching id via \
    search_notes / list_recent_notes, then confirm with the user before mutating.\n\
-5. NEVER summarise what the note will say back to the user before storing it. Store \
+7. NEVER summarise what the note will say back to the user before storing it. Store \
    first, then briefly confirm with a one-line ack (\"已记录 · 4 条今日想法\"). The user's \
    words are the canonical record; don't paraphrase them away.\n\
-6. Notes are private to the user. No third-party leakage in your replies.\n\
+8. Notes are private to the user. No third-party leakage in your replies.\n\
 ";
 
 fn random_user_id() -> String {

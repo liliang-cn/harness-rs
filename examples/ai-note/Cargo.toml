@@ -30,6 +30,7 @@ serde_json         = { workspace = true }
 clap               = { workspace = true }
 async-trait        = { workspace = true }
 chrono             = { version = "0.4", features = ["serde"] }
+chrono-tz          = "0.10"
 uuid               = { version = "1", features = ["v4"] }
 rusqlite           = { version = "0.32", features = ["bundled", "chrono"] }
 axum               = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
