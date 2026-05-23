@@ -206,6 +206,70 @@ body {
 }
 .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ─── personal center (takes over the viewer slot) ─── */
+.profile-view {
+  max-width: 720px; margin: 0 auto; padding: 24px 32px 60px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.profile-view h2 { margin: 0; font-size: 20px; font-weight: 700; }
+.profile-view .p-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 18px;
+}
+.profile-view .p-card h3 {
+  margin: 0 0 10px; font-size: 11px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.profile-view .kv {
+  display: grid; grid-template-columns: 80px 1fr; gap: 6px 16px;
+  font-size: 14px;
+}
+.profile-view .kv .k { color: var(--muted); }
+.profile-view .kv .v { word-break: break-all; }
+.profile-view .kv .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.profile-view .row-btn {
+  width: 100%; padding: 10px 12px; min-height: 42px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.profile-view .row-btn:hover { background: var(--panel); }
+.profile-view .row-btn.danger {
+  background: transparent; color: var(--neg); border-color: var(--neg);
+}
+
+/* invites */
+.profile-view .inv-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px dashed var(--line2);
+}
+.profile-view .inv-row:last-child { border-bottom: none; }
+.profile-view .inv-code {
+  font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+  background: var(--bg); padding: 4px 8px; border-radius: 6px;
+}
+.profile-view .inv-meta { color: var(--muted); font-size: 11px; flex: 1; }
+.profile-view .inv-act { display: flex; gap: 4px; }
+.profile-view .inv-act .mini {
+  appearance: none; background: transparent; border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 9px; font-size: 12px; cursor: pointer;
+  color: var(--ink);
+}
+.profile-view .inv-act .mini.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* password modal */
+.pw-bg {
+  position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.45);
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+.pw-bg.on { display: flex; }
+.pw-card {
+  width: 100%; max-width: 380px;
+  background: var(--panel); border-radius: 14px; padding: 20px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.pw-card h3 { margin: 0 0 4px; font-size: 16px; }
+.pw-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
 /* ─── full-page markdown editor (takes over the viewer slot) ─── */
 .editor-view {
   max-width: 1180px; margin: 0 auto; padding: 16px 24px 80px;
@@ -384,6 +448,15 @@ body {
   .md-pane:not(.preview-on) .md-preview { display: none; }
   .md-toolbar { gap: 2px; padding: 4px; }
   .md-btn { padding: 6px 8px; font-size: 14px; }
+
+  /* Profile page on mobile */
+  .profile-view { padding: 16px 12px 60px; }
+  .pw-bg { padding: 0; align-items: flex-end; }
+  .pw-card {
+    width: 100%; max-width: none;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+  }
 }
 </style>
 </head>
@@ -418,7 +491,7 @@ body {
     <button class="icon-btn search-close" id="searchClose" title="关闭" aria-label="关闭" hidden>✕</button>
   </div>
   <button class="icon-btn" id="btnNew" title="新笔记">＋<span class="lbl"> 新笔记</span></button>
-  <button class="icon-btn" id="btnLogout" title="登出">⎋</button>
+  <button class="icon-btn" id="btnProfile" title="我的">👤</button>
 </div>
 
 <!-- Main two-pane layout -->
@@ -446,6 +519,23 @@ body {
 
 
 <div id="toast"></div>
+
+<!-- Password change modal (lightweight) -->
+<div class="pw-bg" id="pwBg">
+  <div class="pw-card">
+    <h3>修改密码</h3>
+    <input class="field" id="pwOld" type="password" placeholder="当前密码" autocomplete="current-password" />
+    <input class="field" id="pwNew" type="password" placeholder="新密码" autocomplete="new-password" />
+    <div id="pwError" style="color:var(--neg);font-size:13px;min-height:18px"></div>
+    <div class="pw-actions">
+      <button class="btn-ghost" id="pwCancel">取消</button>
+      <button class="btn-primary" id="pwSubmit" style="width:auto;padding:8px 18px;">确认</button>
+    </div>
+    <div class="muted fs-12" style="font-size:11px;color:var(--muted);margin-top:6px;">
+      改完会自动登出其他设备（本设备保持登录）。
+    </div>
+  </div>
+</div>
 
 <script>
 // ─── auth + fetch ───
@@ -1035,11 +1125,161 @@ chatInput.addEventListener('keydown', (e) => {
   }
 });
 
-$('btnLogout').addEventListener('click', async () => {
+// ─── personal center ───
+$('btnProfile').addEventListener('click', () => openProfile());
+
+async function openProfile() {
+  editingId = null; // leaving any in-flight editor
+  const v = $('viewer');
+  const isMobile = window.innerWidth <= 760;
+  v.innerHTML = `
+    <div class="profile-view">
+      <div class="row" style="display:flex;align-items:center;gap:8px;">
+        ${isMobile ? '<button class="btn-ghost" id="pBack">← 返回</button>' : ''}
+        <h2>我的</h2>
+      </div>
+      <div class="p-card">
+        <h3>账户</h3>
+        <div class="kv" id="pAccount"><div class="muted">加载中…</div></div>
+      </div>
+      <div class="p-card">
+        <h3>密码</h3>
+        <button class="row-btn" id="pChangePw">🔒 修改密码 →</button>
+        <div class="muted fs-12" style="margin-top:6px;font-size:11px;color:var(--muted)">
+          修改后会自动登出其他设备。
+        </div>
+      </div>
+      <div class="p-card" id="pInvitesCard" style="display:none">
+        <h3 style="display:flex;align-items:center;">
+          <span style="flex:1">邀请码</span>
+          <button class="mini primary" id="pGenInvite" style="appearance:none;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;">＋ 生成</button>
+        </h3>
+        <div id="pInvites" style="display:flex;flex-direction:column;"></div>
+        <div class="muted fs-12" style="margin-top:8px;font-size:11px;color:var(--muted)">
+          一次性邀请码。对方用链接打开会自动填入并升级为 paid。
+        </div>
+      </div>
+      <div class="p-card">
+        <h3>会话</h3>
+        <button class="row-btn danger" id="pLogout">登出当前设备</button>
+      </div>
+    </div>`;
+
+  if (isMobile) {
+    $('sidebar').classList.add('hidden-on-mobile');
+    $('viewer').classList.add('visible-on-mobile');
+    window.scrollTo(0, 0);
+  }
+  v.querySelector('#pBack')?.addEventListener('click', () => leaveProfile());
+  v.querySelector('#pChangePw').addEventListener('click', openPwModal);
+  v.querySelector('#pLogout').addEventListener('click', doLogout);
+  v.querySelector('#pGenInvite').addEventListener('click', generateInvite);
+
+  // fetch /api/me
+  try {
+    const r = await fetch('/api/me').then(r => r.json());
+    const u = r.user || {};
+    const created = u.created_at ? new Date(u.created_at).toLocaleString() : '';
+    v.querySelector('#pAccount').innerHTML = `
+      <div class="k">邮箱</div><div class="v">${escapeHtml(u.email || '')}</div>
+      <div class="k">等级</div><div class="v">${escapeHtml(u.tier || '')}</div>
+      <div class="k">注册</div><div class="v">${escapeHtml(created)}</div>
+      <div class="k">用户 ID</div><div class="v mono">${escapeHtml(u.id || '')}</div>`;
+
+    // invites visible only for paid+
+    if (u.tier === 'paid' || u.tier === 'admin') {
+      v.querySelector('#pInvitesCard').style.display = '';
+      refreshInvites();
+    }
+  } catch (e) {
+    v.querySelector('#pAccount').textContent = '加载失败';
+  }
+}
+
+function leaveProfile() {
+  if (window.innerWidth <= 760) {
+    $('sidebar').classList.remove('hidden-on-mobile');
+    $('viewer').classList.remove('visible-on-mobile');
+  }
+  $('viewer').innerHTML = `<div class="empty">从左侧选一条笔记，或者点右下角💬跟 AI 聊。</div>`;
+}
+
+async function refreshInvites() {
+  const box = $('viewer').querySelector('#pInvites');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/me/invites').then(r => r.json());
+    const invs = r.invites || [];
+    if (invs.length === 0) {
+      box.innerHTML = '<div class="muted fs-12" style="font-size:12px;color:var(--muted);padding:10px 0;">还没有未用过的邀请码。点上方「+ 生成」试试。</div>';
+      return;
+    }
+    box.innerHTML = invs.map(inv => `
+      <div class="inv-row">
+        <span class="inv-code">${escapeHtml(inv.code)}</span>
+        <span class="inv-meta">剩 ${inv.uses_remaining} 次</span>
+        <div class="inv-act">
+          <button class="mini" data-act="code" data-code="${escapeHtml(inv.code)}">复制码</button>
+          <button class="mini primary" data-act="link" data-code="${escapeHtml(inv.code)}">复制链接</button>
+        </div>
+      </div>`).join('');
+    for (const b of box.querySelectorAll('button[data-act]')) {
+      b.addEventListener('click', () => {
+        const code = b.dataset.code;
+        const txt = b.dataset.act === 'link'
+          ? `${location.origin}/?invite=${encodeURIComponent(code)}`
+          : code;
+        navigator.clipboard?.writeText(txt).then(
+          () => toast(b.dataset.act === 'link' ? '✓ 链接已复制' : '✓ 码已复制'),
+          () => toast('复制失败'),
+        );
+      });
+    }
+  } catch { box.textContent = '加载失败'; }
+}
+
+async function generateInvite() {
+  const btn = $('viewer').querySelector('#pGenInvite');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/me/invites', { method: 'POST' });
+    if (!r.ok) throw new Error(await readErr(r));
+    refreshInvites();
+    toast('✓ 已生成');
+  } catch (e) { toast('生成失败: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+
+function openPwModal() {
+  $('pwOld').value = ''; $('pwNew').value = ''; $('pwError').textContent = '';
+  $('pwBg').classList.add('on');
+  setTimeout(() => $('pwOld').focus(), 30);
+}
+$('pwCancel').addEventListener('click', () => $('pwBg').classList.remove('on'));
+$('pwSubmit').addEventListener('click', async () => {
+  const old_password = $('pwOld').value;
+  const new_password = $('pwNew').value;
+  if (!old_password || !new_password) { $('pwError').textContent = '都得填'; return; }
+  if (new_password === old_password) { $('pwError').textContent = '新密码不能跟旧密码相同'; return; }
+  $('pwSubmit').disabled = true;
+  try {
+    const r = await fetch('/api/me/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_password, new_password }),
+    });
+    if (!r.ok) throw new Error(await readErr(r));
+    $('pwBg').classList.remove('on');
+    toast('✓ 已修改');
+  } catch (e) { $('pwError').textContent = e.message || '失败'; }
+  finally { $('pwSubmit').disabled = false; }
+});
+
+async function doLogout() {
   try { await fetch('/api/logout', { method: 'POST' }); } catch {}
   clearAuth();
   location.reload();
-});
+}
 
 // ─── kickoff ───
 if (getToken()) refreshNotes();
