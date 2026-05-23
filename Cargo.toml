@@ -29,6 +29,7 @@ members = [
     "examples/personal-assistant",
     "examples/investor-bot",
     "examples/ai-ledger",
+    "examples/ai-note",
 ]
 
 [workspace.package]

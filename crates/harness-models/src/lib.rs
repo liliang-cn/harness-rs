@@ -11,6 +11,7 @@
 
 pub mod anthropic;
 pub mod config;
+pub mod embed_gemini;
 pub mod gemini;
 pub mod mock;
 pub mod openai_compat;
@@ -19,6 +20,7 @@ pub mod retry;
 
 pub use anthropic::*;
 pub use config::*;
+pub use embed_gemini::*;
 pub use gemini::*;
 pub use mock::*;
 pub use openai_compat::*;
