@@ -28,13 +28,6 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
-/* Desktop: page sits in a white surface with the inner viewer/sidebar
-   providing the content contrast. Gutters (outside max-width 1280px)
-   become white and merge with the topbar / sidebar visually. */
-@media (min-width: 900px) {
-  body { background: var(--panel); }
-}
-
 /* ─── auth overlay ─── */
 #authOverlay {
   position: fixed; inset: 0; z-index: 9999;
@@ -135,7 +128,7 @@ body {
 .score-pill { color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
 .empty-list { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 13px; }
 
-#viewer { background: var(--bg); overflow-y: auto; }
+#viewer { background: var(--panel); overflow-y: auto; }
 #viewer .empty { padding: 64px 24px; text-align: center; color: var(--muted); }
 .note-view {
   max-width: 820px; margin: 0 auto; padding: 32px 40px;
@@ -165,7 +158,7 @@ body {
 .note-view .body table { border-collapse: collapse; margin: 0 0 14px; }
 .note-view .body th, .note-view .body td { border: 1px solid var(--line); padding: 6px 12px; }
 .note-view .actions {
-  position: sticky; top: 0; background: linear-gradient(to bottom, var(--bg), transparent);
+  position: sticky; top: 0; background: linear-gradient(to bottom, var(--panel) 70%, transparent);
   padding: 12px 0; margin: -12px 0 8px;
   display: flex; gap: 8px; flex-wrap: wrap; z-index: 1;
 }
@@ -227,7 +220,7 @@ body {
 }
 .profile-view h2 { margin: 0; font-size: 20px; font-weight: 700; }
 .profile-view .p-card {
-  background: var(--panel); border: 1px solid var(--line);
+  background: var(--bg); border: 1px solid var(--line);
   border-radius: 14px; padding: 16px 18px;
 }
 .profile-view .p-card h3 {
@@ -243,10 +236,10 @@ body {
 .profile-view .kv .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .profile-view .row-btn {
   width: 100%; padding: 10px 12px; min-height: 42px;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
   color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
-.profile-view .row-btn:hover { background: var(--panel); }
+.profile-view .row-btn:hover { background: var(--bg); }
 .profile-view .row-btn.danger {
   background: transparent; color: var(--neg); border-color: var(--neg);
 }
@@ -259,7 +252,8 @@ body {
 .profile-view .inv-row:last-child { border-bottom: none; }
 .profile-view .inv-code {
   font-family: ui-monospace, Menlo, monospace; font-size: 13px;
-  background: var(--bg); padding: 4px 8px; border-radius: 6px;
+  background: var(--panel); padding: 4px 8px; border-radius: 6px;
+  border: 1px solid var(--line);
 }
 .profile-view .inv-meta { color: var(--muted); font-size: 11px; flex: 1; }
 .profile-view .inv-act { display: flex; gap: 4px; }
@@ -291,7 +285,7 @@ body {
 }
 .editor-view .e-actions {
   position: sticky; top: 0; z-index: 2;
-  background: linear-gradient(to bottom, var(--bg) 70%, transparent);
+  background: linear-gradient(to bottom, var(--panel) 70%, transparent);
   padding: 10px 0;
   display: flex; gap: 8px; align-items: center;
   flex-wrap: wrap;
@@ -308,7 +302,7 @@ body {
 .editor-view .e-tags {
   font: inherit; font-size: 13px; padding: 6px 10px;
   border: 1px solid var(--line); border-radius: 8px;
-  background: var(--panel); color: var(--ink); max-width: 480px;
+  background: var(--bg); color: var(--ink); max-width: 480px;
 }
 .editor-view .e-tags:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
@@ -316,7 +310,7 @@ body {
 .md-toolbar {
   display: flex; flex-wrap: wrap; gap: 4px;
   padding: 6px;
-  background: var(--panel); border: 1px solid var(--line);
+  background: var(--bg); border: 1px solid var(--line);
   border-radius: 8px 8px 0 0; border-bottom: 0;
 }
 .md-btn {
@@ -325,7 +319,7 @@ body {
   border-radius: 6px; font: inherit; font-size: 13px; color: var(--ink);
   line-height: 1;
 }
-.md-btn:hover { background: var(--bg); }
+.md-btn:hover { background: var(--panel); }
 .md-btn.b { font-weight: 700; }
 .md-btn.i { font-style: italic; }
 .md-btn.c { font-family: ui-monospace, Menlo, monospace; }
