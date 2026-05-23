@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/ai-ledger/ledger --serve --bind 0.0.0.0 --port 6743 --tier flash
+ExecStart=/opt/ai-ledger/ledger --serve --bind 127.0.0.1 --port 6743 --tier flash
 WorkingDirectory=/opt/ai-ledger
 EnvironmentFile=/etc/ai-ledger.env
 Restart=on-failure
