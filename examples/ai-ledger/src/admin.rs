@@ -42,7 +42,7 @@ pub fn register_routes(r: Router<AppState>) -> Router<AppState> {
 // ───── handlers ─────
 
 async fn list_users(
-    State(_s): State<AppState>,
+    State(s): State<AppState>,
     auth: AuthCtx,
 ) -> Result<Json<Value>, ApiError> {
     require_admin(&auth)?;
@@ -50,7 +50,25 @@ async fn list_users(
     let users = db
         .list_users_with_stats()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "users": users })))
+    // Enrich with cost_usd using the operator's current default chat model.
+    // Approximate — historical tokens get priced at the *current* rate; for
+    // exact accounting we'd need model_id on each audit row.
+    let model_id = s.cfg().default_model_id;
+    let enriched: Vec<Value> = users
+        .into_iter()
+        .map(|u| {
+            let cost = crate::pricing::cost_usd(&model_id, u.tokens_in, u.tokens_out);
+            let mut v = serde_json::to_value(&u).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "cost_usd".into(),
+                    json!((cost * 1_000_000.0).round() / 1_000_000.0),
+                );
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "users": enriched, "priced_at_model": model_id })))
 }
 
 async fn get_user(
