@@ -29,6 +29,11 @@ use std::sync::Arc;
 const INDEX_HTML: &str = include_str!("index.html");
 const MARKED_JS: &str = include_str!("marked.min.js");
 
+/// Vite-built admin SPA, embedded into the binary so deploys stay
+/// single-artifact. Built by `cd admin-ui && npm run build`.
+static ADMIN_DIST: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/admin-ui/dist");
+
 /// Max notes a `tier == "trial"` user may have at once. Paid / admin are
 /// unbounded. Edit / delete don't count — only the inserts.
 pub const TRIAL_MAX_NOTES: u32 = 30;
@@ -133,6 +138,11 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/marked.min.js", get(serve_marked_js))
+        // Admin SPA: GET /admin or /admin/ → index.html; /admin/* → asset
+        // file, with SPA fallback to index.html for client-side routes.
+        .route("/admin", get(serve_admin_index))
+        .route("/admin/", get(serve_admin_index))
+        .route("/admin/*path", get(serve_admin_asset))
         .route("/api/info", get(info_handler))
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
@@ -178,6 +188,74 @@ async fn serve_index() -> impl axum::response::IntoResponse {
         [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
         Html(INDEX_HTML),
     )
+}
+
+async fn serve_admin_index() -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    let body = ADMIN_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+        .unwrap_or("<h1>admin UI not built</h1>");
+    (
+        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+        Html(body),
+    )
+}
+
+async fn serve_admin_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    // First try the literal asset path inside dist/. If absent, fall through
+    // to index.html (SPA fallback for client-side routes like /admin/users).
+    if let Some(file) = ADMIN_DIST.get_file(&path) {
+        let mime = mime_for(&path);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                // Vite hashes filenames in /assets, so long-cache them. Other
+                // static files (favicon.svg etc.) get a short cache only.
+                (
+                    header::CACHE_CONTROL,
+                    if path.starts_with("assets/") {
+                        "public, max-age=31536000, immutable"
+                    } else {
+                        "no-cache"
+                    },
+                ),
+            ],
+            Body::from(file.contents()),
+        )
+            .into_response();
+    }
+    if let Some(idx) = ADMIN_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+    {
+        return (
+            [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+            Html(idx),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "admin asset not found").into_response()
+}
+
+fn mime_for(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "js" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "json" => "application/json",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn serve_marked_js() -> impl axum::response::IntoResponse {

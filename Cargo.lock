@@ -101,6 +101,7 @@ dependencies = [
  "harness-rs-permissions",
  "harness-rs-skills",
  "hex",
+ "include_dir",
  "rand 0.8.6",
  "reqwest",
  "rusqlite",
