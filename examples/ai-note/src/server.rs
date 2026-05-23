@@ -547,15 +547,20 @@ async fn export_note_md_handler(
         note.body,
     );
 
-    let filename = build_md_filename(&title_line, &note.id);
+    let pretty = build_md_filename(&title_line, &note.id);
+    // RFC 6266: `filename="..."` must be ASCII (technically Latin-1, but
+    // putting raw UTF-8 there made Chrome render mojibake on CJK titles).
+    // The pretty CJK name rides in `filename*=UTF-8''…` only; every modern
+    // browser prefers it when both are present.
+    let ascii_fallback = format!("note-{}.md", note.id);
     Ok((
         [
             (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
             (
                 header::CONTENT_DISPOSITION,
                 format!(
-                    "attachment; filename=\"{filename}\"; filename*=UTF-8''{}",
-                    percent_encode(&filename)
+                    "attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{}",
+                    percent_encode(&pretty)
                 ),
             ),
             (header::CACHE_CONTROL, "no-store".to_string()),
