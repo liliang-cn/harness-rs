@@ -24,25 +24,22 @@
     # Operator email — ACME registers under this; gets cert-expiry warnings.
     email ll_faw@hotmail.com
 
-    # Comment the line below out for production. With it on you hit LE's
-    # staging environment, which issues untrusted certs (browser warning)
-    # but doesn't count against the LE production rate limit. Useful for
-    # the first end-to-end smoke; flip off once it works.
+    # Uncomment to hit LE's staging environment (issues untrusted certs but
+    # doesn't count against the production rate limit — useful for the
+    # first end-to-end smoke if you're poking).
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
-# Replace `superleo.app` with whatever you actually buy. The placeholder
-# is here so the file is `caddy validate`-clean as-shipped.
-(common) {
+# Reusable proxy block. Usage: `import site UPSTREAM:PORT`.
+# Long-running agent loops occasionally exceed Caddy's default 30s idle;
+# bumping both halves to 2m so chat replies that touch DeepSeek + tools
+# don't get cut off mid-thought.
+(site) {
     encode zstd gzip
-    # Agent chat history + zip export response both can be a few MB; 50MB
-    # cap is generous on both sides.
     request_body {
         max_size 50MB
     }
-    # Long agent loops occasionally exceed the default 30s idle. Bump
-    # both halves of the proxy to 2min. Tune up if you stream LLM output.
-    reverse_proxy {
+    reverse_proxy {args[0]} {
         transport http {
             read_timeout  2m
             write_timeout 2m
@@ -52,25 +49,15 @@
 
 # ── ai-note ──────────────────────────────────────────────────────
 note.superleo.app {
-    import common
-    reverse_proxy 127.0.0.1:6755
+    import site 127.0.0.1:6755
 }
 
 # ── ai-ledger ────────────────────────────────────────────────────
 ledger.superleo.app {
-    import common
-    reverse_proxy 127.0.0.1:6743
+    import site 127.0.0.1:6743
 }
 
 # ── trade (placeholder — fill in upstream port + uncomment) ──────
 # trade.superleo.app {
-#     import common
-#     reverse_proxy 127.0.0.1:PORT
+#     import site 127.0.0.1:PORT
 # }
-
-# Optional: catch-all that 444s any unknown Host so port scanners get
-# nothing useful. Comment this out if you'd rather Caddy serve a default
-# 404 page.
-:80, :443 {
-    abort
-}
