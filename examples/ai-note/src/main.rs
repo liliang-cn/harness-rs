@@ -11,6 +11,7 @@ use harness_models::{GeminiNative, OpenAiCompat, providers};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod admin;
 mod auth;
 mod db;
 mod embed_slot;
@@ -126,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     // ── embedder ─────────────────────────────────────────────
     // Gemini-only for now. Could swap to OpenAI / Voyage / local later.
     let embed_key = gemini_key
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("GEMINI_API_KEY required for embeddings"))?;
     let embedder: Arc<dyn harness_core::Embedder> =
         Arc::new(harness_models::GeminiEmbed::with_key(embed_key));
@@ -143,6 +145,37 @@ async fn main() -> anyhow::Result<()> {
 
     // ── http server ──────────────────────────────────────────
     let user_tz = std::env::var("HARNESS_USER_TZ").ok().filter(|s| !s.is_empty());
+
+    // Seed provider_config from env on first launch; DB wins on subsequent
+    // restarts after admin edits.
+    {
+        let cfg_db = db::Db::open(&db_path)?;
+        if let Some(k) = &deepseek_key {
+            cfg_db.provider_config_seed_if_missing("deepseek_api_key", k)?;
+        }
+        if let Some(k) = &gemini_key {
+            cfg_db.provider_config_seed_if_missing("gemini_api_key", k)?;
+        }
+        cfg_db.provider_config_seed_if_missing("chat_provider", &cli.chat_provider)?;
+        cfg_db.provider_config_seed_if_missing("chat_model", &cli.chat_model)?;
+    }
+    let stored = {
+        let cfg_db = db::Db::open(&db_path)?;
+        cfg_db.provider_config_all()?
+    };
+    let app_cfg = server::AppConfig {
+        deepseek_key: stored.get("deepseek_api_key").cloned().or(deepseek_key),
+        gemini_key: stored.get("gemini_api_key").cloned().or(gemini_key),
+        chat_provider: stored
+            .get("chat_provider")
+            .cloned()
+            .unwrap_or_else(|| cli.chat_provider.clone()),
+        chat_model: stored
+            .get("chat_model")
+            .cloned()
+            .unwrap_or_else(|| cli.chat_model.clone()),
+    };
+
     let state = server::AppState {
         db_path,
         model: chat_model,
@@ -150,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
         max_iters: cli.max_iters,
         model_handle,
         user_tz,
+        config: std::sync::Arc::new(std::sync::RwLock::new(app_cfg)),
     };
     let addr: std::net::SocketAddr = format!("{}:{}", cli.bind, cli.port).parse()?;
     println!("→ ai-note");
