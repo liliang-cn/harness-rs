@@ -73,14 +73,19 @@ body {
 }
 .app-title { font-weight: 700; font-size: 15px; }
 .grow { flex: 1; }
+/* Search starts as a 🔍 icon button. Tap to expand into an input that
+   grows to fill the topbar; the input takes focus and Escape (or the ✕
+   button) collapses it back to the icon. */
+.search-wrap { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.search-wrap.open { flex: 1; min-width: 0; }
 .search-input {
-  flex: 1;
-  /* Grow as the topbar allows so the placeholder + medium-length queries
-     don't truncate. Cap at 720px so on ultra-wide it doesn't dominate. */
+  flex: 1; min-width: 0;
   max-width: 720px;
   padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg); font: inherit; font-size: 14px;
 }
+.search-input[hidden] { display: none; }
+.search-close { padding: 4px 8px; font-size: 14px; color: var(--muted); }
 .search-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .icon-btn {
   appearance: none; background: transparent; border: 1px solid var(--line);
@@ -234,6 +239,12 @@ body {
   .app-title { font-size: 0; line-height: 1; }
   .app-title::before { content: "📓"; font-size: 22px; line-height: 1; }
   .search-input { font-size: 16px; max-width: none; min-width: 0; flex: 1; padding: 8px 12px; }
+  /* On mobile, when search is open it claims the whole topbar — hide
+     the title and the right-hand action buttons so the input gets room. */
+  .search-wrap.open ~ .grow { display: none; }
+  body.searching .app-title,
+  body.searching #btnNew,
+  body.searching #btnLogout { display: none; }
   /* Hide text labels on action buttons; keep symbols. */
   .icon-btn { padding: 8px 10px; font-size: 16px; }
   .icon-btn .lbl { display: none; }
@@ -304,7 +315,11 @@ body {
 <!-- Topbar -->
 <div id="topbar">
   <span class="app-title">📓 AI Note</span>
-  <input id="searchInput" class="search-input" placeholder="搜索" />
+  <div id="searchWrap" class="search-wrap">
+    <button class="icon-btn search-toggle" id="searchToggle" title="搜索" aria-label="搜索">🔍</button>
+    <input id="searchInput" class="search-input" placeholder="搜索" hidden />
+    <button class="icon-btn search-close" id="searchClose" title="关闭" aria-label="关闭" hidden>✕</button>
+  </div>
   <span class="grow"></span>
   <button class="icon-btn" id="btnNew" title="新笔记">＋<span class="lbl"> 新笔记</span></button>
   <button class="icon-btn" id="btnLogout" title="登出">⎋</button>
@@ -498,6 +513,30 @@ $('searchInput').addEventListener('input', (e) => {
       renderList(r.hits || [], true);
     } catch {}
   }, 220);
+});
+
+// ─── search toggle: button → input ───
+function openSearch() {
+  $('searchWrap').classList.add('open');
+  $('searchToggle').hidden = true;
+  $('searchInput').hidden = false;
+  $('searchClose').hidden = false;
+  document.body.classList.add('searching');
+  setTimeout(() => $('searchInput').focus(), 30);
+}
+function closeSearch() {
+  $('searchWrap').classList.remove('open');
+  $('searchToggle').hidden = false;
+  $('searchInput').hidden = true;
+  $('searchClose').hidden = true;
+  document.body.classList.remove('searching');
+  $('searchInput').value = '';
+  renderList(allNotes, false);
+}
+$('searchToggle').addEventListener('click', openSearch);
+$('searchClose').addEventListener('click', closeSearch);
+$('searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeSearch();
 });
 
 // ─── note view ───
