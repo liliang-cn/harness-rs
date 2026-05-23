@@ -206,23 +206,115 @@ body {
 }
 .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ─── new note modal ─── */
-.modal-bg {
-  position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.45);
-  display: none; align-items: center; justify-content: center; padding: 16px;
+/* ─── full-page markdown editor (takes over the viewer slot) ─── */
+.editor-view {
+  max-width: 1180px; margin: 0 auto; padding: 16px 24px 80px;
+  display: flex; flex-direction: column; gap: 10px;
 }
-.modal-bg.on { display: flex; }
-.modal {
-  width: 100%; max-width: 680px; max-height: 90vh; overflow-y: auto;
-  background: var(--panel); border-radius: 14px; padding: 24px;
-  display: flex; flex-direction: column; gap: 12px;
+.editor-view .e-actions {
+  position: sticky; top: 0; z-index: 2;
+  background: linear-gradient(to bottom, var(--bg) 70%, transparent);
+  padding: 10px 0;
+  display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap;
 }
-.modal h3 { margin: 0; font-size: 16px; }
-.modal textarea { min-height: 200px; padding: 12px; border: 1px solid var(--line);
-  border-radius: 10px; font: inherit; font-size: 14px; resize: vertical; background: var(--bg); }
-.modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
-.btn-ghost { appearance: none; background: transparent; border: 1px solid var(--line);
-  border-radius: 10px; padding: 8px 14px; cursor: pointer; font: inherit; }
+.editor-view .grow { flex: 1; }
+.editor-view .e-title {
+  font: inherit; font-size: 22px; font-weight: 700;
+  border: 0; border-bottom: 1px solid transparent;
+  background: transparent; padding: 4px 0;
+  width: 100%; color: var(--ink);
+}
+.editor-view .e-title:focus { outline: none; border-bottom-color: var(--accent); }
+.editor-view .e-title::placeholder { color: var(--muted); font-weight: 500; }
+.editor-view .e-tags {
+  font: inherit; font-size: 13px; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--ink); max-width: 480px;
+}
+.editor-view .e-tags:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* Toolbar */
+.md-toolbar {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px 8px 0 0; border-bottom: 0;
+}
+.md-btn {
+  appearance: none; background: transparent; border: 0;
+  cursor: pointer; padding: 4px 9px; min-width: 32px;
+  border-radius: 6px; font: inherit; font-size: 13px; color: var(--ink);
+  line-height: 1;
+}
+.md-btn:hover { background: var(--bg); }
+.md-btn.b { font-weight: 700; }
+.md-btn.i { font-style: italic; }
+.md-btn.c { font-family: ui-monospace, Menlo, monospace; }
+.md-btn.active { background: var(--accent-bg); color: var(--accent); }
+.md-sep { width: 1px; background: var(--line); margin: 4px 4px; }
+.md-spacer { flex: 1; }
+
+/* Split: textarea | preview */
+.md-pane {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+  min-height: 55vh;
+}
+.md-pane.preview-off { grid-template-columns: 1fr; }
+.md-pane.preview-only { grid-template-columns: 0fr 1fr; }
+.md-pane.preview-only .e-body { display: none; }
+.md-pane .e-body {
+  font: inherit; font-size: 15px; line-height: 1.7;
+  border: 0; outline: none;
+  padding: 16px;
+  background: var(--panel); color: var(--ink);
+  resize: none;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+  font-size: 14px;
+  border-right: 1px solid var(--line);
+}
+.md-pane.preview-off .e-body { border-right: 0; }
+.md-pane .md-preview {
+  padding: 16px 20px;
+  overflow-y: auto;
+  background: #fcfcfd;
+  font-size: 15px; line-height: 1.7;
+}
+.md-pane .md-preview > :first-child { margin-top: 0; }
+.md-pane .md-preview p { margin: 0 0 12px; }
+.md-pane .md-preview h1 { font-size: 22px; margin: 18px 0 10px; }
+.md-pane .md-preview h2 { font-size: 19px; margin: 16px 0 8px; }
+.md-pane .md-preview h3 { font-size: 16px; margin: 14px 0 6px; }
+.md-pane .md-preview ul, .md-pane .md-preview ol { margin: 0 0 12px; padding-left: 24px; }
+.md-pane .md-preview li { margin: 4px 0; }
+.md-pane .md-preview code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; }
+.md-pane .md-preview pre { background: #1f2329; color: #e6e6e6; padding: 12px 14px;
+  border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.md-pane .md-preview pre code { background: transparent; padding: 0; color: inherit; }
+.md-pane .md-preview blockquote { border-left: 3px solid var(--accent); padding: 4px 14px;
+  color: var(--muted); margin: 0 0 12px; }
+.md-pane .md-preview a { color: var(--accent); }
+.md-pane .md-preview table { border-collapse: collapse; }
+.md-pane .md-preview th, .md-pane .md-preview td { border: 1px solid var(--line); padding: 6px 12px; }
+
+.btn-ghost {
+  appearance: none; background: transparent; border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--ink);
+}
+.btn-ghost:hover { background: var(--panel); }
+.btn-save {
+  appearance: none; background: var(--accent); color: #fff;
+  border: 0; border-radius: 8px; padding: 6px 16px;
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* toast */
 #toast {
@@ -279,15 +371,19 @@ body {
   /* FAB: respect home-indicator safe area. */
   #fabChat { bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px)); }
 
-  /* New-note modal: full-width-ish on phone */
-  .modal-bg { padding: 0; align-items: flex-end; }
-  .modal {
-    width: 100%; max-width: none; max-height: 92dvh;
-    border-radius: 16px 16px 0 0;
-    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
-  }
-  .field { font-size: 16px; }
-  .modal textarea { font-size: 16px; }
+  /* Full-page editor on mobile: hug edges, collapse split. */
+  .editor-view { padding: 12px 12px 60px; }
+  .editor-view .e-title { font-size: 19px; }
+  .editor-view .e-tags { font-size: 14px; }
+  .md-pane { grid-template-columns: 1fr; min-height: 50vh; }
+  .md-pane .e-body { border-right: 0; font-size: 16px; }
+  /* On mobile, default to edit-only; toolbar 👁 toggles to preview-only. */
+  .md-pane.preview-on { grid-template-columns: 1fr; }
+  .md-pane.preview-on .e-body { display: none; }
+  .md-pane.preview-on .md-preview { display: block; }
+  .md-pane:not(.preview-on) .md-preview { display: none; }
+  .md-toolbar { gap: 2px; padding: 4px; }
+  .md-btn { padding: 6px 8px; font-size: 14px; }
 }
 </style>
 </head>
@@ -348,19 +444,6 @@ body {
   </div>
 </div>
 
-<!-- New note modal -->
-<div class="modal-bg" id="newModal">
-  <div class="modal">
-    <h3>新笔记</h3>
-    <input class="field" id="newTitle" placeholder="标题（可选）" />
-    <textarea id="newBody" placeholder="正文 · 支持 markdown" required></textarea>
-    <input class="field" id="newTags" placeholder="标签（逗号分隔，可选）" />
-    <div class="actions">
-      <button class="btn-ghost" id="newCancel">取消</button>
-      <button class="btn-primary" id="newSave" style="width:auto;padding:8px 18px;">保存</button>
-    </div>
-  </div>
-</div>
 
 <div id="toast"></div>
 
@@ -625,16 +708,237 @@ async function deleteNote(id) {
   } else { toast('删除失败'); }
 }
 
-// ─── new / edit modal ───
+// ─── full-page editor (takes over the viewer slot) ───
 let editingId = null;
 $('btnNew').addEventListener('click', () => openEdit(null));
-$('newCancel').addEventListener('click', () => $('newModal').classList.remove('on'));
-$('newSave').addEventListener('click', async () => {
-  const title = $('newTitle').value.trim();
-  const body = $('newBody').value;
-  const tagsStr = $('newTags').value.trim();
+
+function openEdit(note) {
+  editingId = note ? note.id : null;
+  const isEdit = !!note;
+  const title = isEdit ? (note.title || '') : '';
+  const body = isEdit ? (note.body || '') : '';
+  const tags = isEdit ? (note.tags || []).join(', ') : '';
+  const isMobile = window.innerWidth <= 760;
+  const v = $('viewer');
+  v.innerHTML = `
+    <div class="editor-view">
+      <div class="e-actions">
+        ${isMobile ? '<button class="btn-ghost" id="eBack">← 返回</button>' : ''}
+        <strong>${isEdit ? '编辑笔记' : '新笔记'}</strong>
+        <span class="grow"></span>
+        <button class="btn-ghost" id="eCancel">取消</button>
+        <button class="btn-save" id="eSave">保存</button>
+      </div>
+      <input class="e-title" id="eTitle" placeholder="标题（可选）" value="${escapeHtml(title)}" />
+      <input class="e-tags" id="eTags" placeholder="标签（逗号分隔，可选）" value="${escapeHtml(tags)}" />
+
+      <div class="md-toolbar" role="toolbar" aria-label="Markdown 工具栏">
+        <button class="md-btn" data-md="h1" title="标题 H1">H1</button>
+        <button class="md-btn" data-md="h2" title="标题 H2">H2</button>
+        <button class="md-btn" data-md="h3" title="标题 H3">H3</button>
+        <span class="md-sep"></span>
+        <button class="md-btn b" data-md="bold" title="加粗 ⌘B">B</button>
+        <button class="md-btn i" data-md="italic" title="斜体 ⌘I">I</button>
+        <button class="md-btn c" data-md="code" title="行内代码">&lt;/&gt;</button>
+        <span class="md-sep"></span>
+        <button class="md-btn" data-md="ul"     title="无序列表">• 列表</button>
+        <button class="md-btn" data-md="ol"     title="有序列表">1. 列表</button>
+        <button class="md-btn" data-md="check"  title="任务列表">☐ Todo</button>
+        <span class="md-sep"></span>
+        <button class="md-btn" data-md="quote"  title="引用">”</button>
+        <button class="md-btn" data-md="link"   title="链接 ⌘K">🔗</button>
+        <button class="md-btn" data-md="codeblock" title="代码块">{ }</button>
+        <button class="md-btn" data-md="hr"     title="分隔线">⎯</button>
+        <span class="md-spacer"></span>
+        <button class="md-btn" id="eTogglePreview" title="切换预览">${isMobile ? '👁' : '👁 预览'}</button>
+      </div>
+
+      <div class="md-pane ${isMobile ? '' : ''}" id="ePane">
+        <textarea class="e-body" id="eBody" placeholder="正文 · 支持 markdown" required spellcheck="false">${escapeHtml(body)}</textarea>
+        <div class="md-preview" id="ePreview"></div>
+      </div>
+
+      <p class="muted fs-12" style="margin:0;color:var(--muted);font-size:11px;">
+        ⌘/Ctrl + Enter 保存 · Esc 取消 · ⌘B 加粗 · ⌘I 斜体 · ⌘K 链接${isEdit ? '' : ' · 保存后会自动用 Gemini embedding 索引几秒'}
+      </p>
+    </div>`;
+
+  if (isMobile) {
+    $('sidebar').classList.add('hidden-on-mobile');
+    $('viewer').classList.add('visible-on-mobile');
+    window.scrollTo(0, 0);
+  }
+
+  const bodyEl = v.querySelector('#eBody');
+  const previewEl = v.querySelector('#ePreview');
+  const paneEl = v.querySelector('#ePane');
+  const togglePreviewBtn = v.querySelector('#eTogglePreview');
+
+  function renderPreview() {
+    if (window.marked) {
+      previewEl.innerHTML = window.marked.parse(bodyEl.value, { breaks: true, gfm: true });
+    } else {
+      previewEl.textContent = bodyEl.value;
+    }
+  }
+  renderPreview();
+  let previewTimer;
+  bodyEl.addEventListener('input', () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 150);
+  });
+
+  // toolbar
+  v.querySelectorAll('.md-btn[data-md]').forEach(b => {
+    b.addEventListener('mousedown', (e) => e.preventDefault());  // keep textarea focus
+    b.addEventListener('click', () => applyMd(bodyEl, b.dataset.md, renderPreview));
+  });
+
+  // preview toggle: desktop cycles split → edit-only → preview-only; mobile is on/off.
+  let previewState = 'split';
+  togglePreviewBtn.addEventListener('click', () => {
+    if (isMobile) {
+      paneEl.classList.toggle('preview-on');
+      togglePreviewBtn.classList.toggle('active', paneEl.classList.contains('preview-on'));
+    } else {
+      // cycle split → off → only → split
+      previewState = previewState === 'split' ? 'off' :
+                     previewState === 'off' ? 'only' : 'split';
+      paneEl.classList.remove('preview-off', 'preview-only');
+      if (previewState === 'off') paneEl.classList.add('preview-off');
+      if (previewState === 'only') paneEl.classList.add('preview-only');
+      togglePreviewBtn.classList.toggle('active', previewState !== 'off');
+    }
+  });
+
+  // shortcuts
+  bodyEl.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveEditor(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); leaveEditor(); return; }
+    if (e.metaKey || e.ctrlKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'b') { e.preventDefault(); applyMd(bodyEl, 'bold', renderPreview); return; }
+      if (k === 'i') { e.preventDefault(); applyMd(bodyEl, 'italic', renderPreview); return; }
+      if (k === 'k') { e.preventDefault(); applyMd(bodyEl, 'link', renderPreview); return; }
+    }
+    if (e.key === 'Tab') {
+      // soft tab — insert 2 spaces instead of losing focus.
+      e.preventDefault();
+      const start = bodyEl.selectionStart, end = bodyEl.selectionEnd;
+      bodyEl.setRangeText('  ', start, end, 'end');
+      renderPreview();
+    }
+  });
+
+  setTimeout(() => bodyEl.focus(), 50);
+  v.querySelector('#eCancel').addEventListener('click', () => leaveEditor());
+  v.querySelector('#eBack')?.addEventListener('click', () => leaveEditor());
+  v.querySelector('#eSave').addEventListener('click', saveEditor);
+}
+
+// Wrap / replace the textarea selection with markdown around it.
+function applyMd(ta, kind, afterRender) {
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const sel = ta.value.slice(start, end);
+  let before = '', after = '', placeholder = '';
+  let isBlock = false;
+  switch (kind) {
+    case 'bold':       before = '**'; after = '**'; placeholder = '加粗'; break;
+    case 'italic':     before = '*';  after = '*';  placeholder = '斜体'; break;
+    case 'code':       before = '`';  after = '`';  placeholder = 'code'; break;
+    case 'link': {
+      const text = sel || '链接文字';
+      const url = window.prompt('链接 URL', 'https://') || '';
+      if (!url) return;
+      const md = `[${text}](${url})`;
+      ta.setRangeText(md, start, end, 'end');
+      ta.focus(); afterRender(); return;
+    }
+    case 'h1': case 'h2': case 'h3': {
+      const n = kind === 'h1' ? 1 : kind === 'h2' ? 2 : 3;
+      replaceLine(ta, line => `${'#'.repeat(n)} ${line.replace(/^#+\s*/, '')}`);
+      afterRender(); return;
+    }
+    case 'ul':    replaceLines(ta, line => line.startsWith('- ') ? line.slice(2) : `- ${line}`); afterRender(); return;
+    case 'ol':    {
+      let i = 1; replaceLines(ta, line => /^\d+\.\s/.test(line) ? line.replace(/^\d+\.\s/, '') : `${i++}. ${line}`); afterRender(); return;
+    }
+    case 'check': replaceLines(ta, line => line.startsWith('- [ ] ') ? line.slice(6) : `- [ ] ${line}`); afterRender(); return;
+    case 'quote': replaceLines(ta, line => line.startsWith('> ') ? line.slice(2) : `> ${line}`); afterRender(); return;
+    case 'codeblock': {
+      const text = sel || 'code\nhere';
+      ta.setRangeText('```\n' + text + '\n```', start, end, 'end');
+      ta.focus(); afterRender(); return;
+    }
+    case 'hr': {
+      ta.setRangeText('\n---\n', start, end, 'end');
+      ta.focus(); afterRender(); return;
+    }
+  }
+  // inline wrap path
+  const inner = sel || placeholder;
+  const md = before + inner + after;
+  ta.setRangeText(md, start, end, 'end');
+  // re-select what was inside the wrappers
+  ta.selectionStart = start + before.length;
+  ta.selectionEnd = start + before.length + inner.length;
+  ta.focus();
+  afterRender();
+}
+
+function replaceLine(ta, fn) {
+  const value = ta.value;
+  const cursor = ta.selectionStart;
+  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1;
+  let lineEnd = value.indexOf('\n', cursor);
+  if (lineEnd === -1) lineEnd = value.length;
+  const line = value.slice(lineStart, lineEnd);
+  const next = fn(line);
+  ta.setRangeText(next, lineStart, lineEnd, 'end');
+  ta.focus();
+}
+
+function replaceLines(ta, fn) {
+  const value = ta.value;
+  let start = ta.selectionStart, end = ta.selectionEnd;
+  // expand to full line boundaries
+  start = value.lastIndexOf('\n', start - 1) + 1;
+  if (end > start && value[end - 1] === '\n') end -= 1;
+  const blockEnd = value.indexOf('\n', end);
+  const realEnd = blockEnd === -1 ? value.length : blockEnd;
+  const block = value.slice(start, realEnd);
+  const next = block.split('\n').map(fn).join('\n');
+  ta.setRangeText(next, start, realEnd, 'end');
+  ta.focus();
+}
+
+function leaveEditor() {
+  if (editingId) {
+    // editing an existing note → go back to its viewer
+    const id = editingId;
+    editingId = null;
+    openNote(id);
+  } else {
+    // new-note cancelled → return to recent list (or empty viewer on desktop)
+    editingId = null;
+    if (window.innerWidth <= 760) {
+      $('sidebar').classList.remove('hidden-on-mobile');
+      $('viewer').classList.remove('visible-on-mobile');
+    }
+    $('viewer').innerHTML = `<div class="empty">从左侧选一条笔记，或者点右下角💬跟 AI 聊。</div>`;
+  }
+}
+
+async function saveEditor() {
+  const v = $('viewer');
+  const title = v.querySelector('#eTitle').value.trim();
+  const body = v.querySelector('#eBody').value;
+  const tagsStr = v.querySelector('#eTags').value.trim();
   if (!body.trim()) { toast('正文不能为空'); return; }
   const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+  const saveBtn = v.querySelector('#eSave');
+  saveBtn.disabled = true;
+  saveBtn.textContent = '保存中…';
   try {
     let id;
     if (editingId) {
@@ -642,31 +946,32 @@ $('newSave').addEventListener('click', async () => {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, body, tags }),
       });
-      if (!r.ok) throw new Error('save failed');
+      if (!r.ok) throw new Error(await readErr(r));
       id = editingId;
     } else {
       const r = await fetch('/api/notes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, body, tags }),
       });
-      if (!r.ok) throw new Error('create failed');
+      if (!r.ok) throw new Error(await readErr(r));
       const j = await r.json();
       id = j.note.id;
     }
-    $('newModal').classList.remove('on');
+    const wasEdit = !!editingId;
+    editingId = null;
     await refreshNotes();
     openNote(id);
-    toast(editingId ? '已更新' : '已创建');
-  } catch (e) { toast(e.message); }
-});
+    toast(wasEdit ? '已更新' : '已创建');
+  } catch (e) {
+    toast('保存失败: ' + (e.message || e));
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存';
+  }
+}
 
-function openEdit(note) {
-  editingId = note ? note.id : null;
-  $('newTitle').value = note ? (note.title || '') : '';
-  $('newBody').value = note ? (note.body || '') : '';
-  $('newTags').value = note ? (note.tags || []).join(', ') : '';
-  $('newModal').classList.add('on');
-  setTimeout(() => $('newBody').focus(), 60);
+async function readErr(r) {
+  try { const j = await r.json(); return j.error || `HTTP ${r.status}`; }
+  catch { return `HTTP ${r.status}`; }
 }
 
 // ─── chat ───
