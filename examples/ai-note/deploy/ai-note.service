@@ -1,19 +1,19 @@
 [Unit]
-Description=AI Ledger HTTP service
+Description=AI Note HTTP service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/ai-ledger/ledger --serve --bind 127.0.0.1 --port 6743 --tier flash
-WorkingDirectory=/opt/ai-ledger
-EnvironmentFile=/etc/ai-ledger.env
+ExecStart=/opt/ai-note/ai-note --bind 127.0.0.1 --port 6755
+WorkingDirectory=/opt/ai-note
+EnvironmentFile=/etc/ai-note.env
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=yes
-ReadWritePaths=/var/lib/ai-ledger
+ReadWritePaths=/var/lib/ai-note
 User=root
 Group=root
 
