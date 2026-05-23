@@ -43,6 +43,10 @@ pub struct AppConfig {
     pub gemini_key: Option<String>,
     pub chat_provider: String,
     pub chat_model: String,
+    /// Per-model token pricing card. Seeded from `pricing::default_rate_card()`
+    /// on first launch; persisted as JSON under provider_config key
+    /// `pricing_rate_card`. Edited via PATCH /api/admin/config.
+    pub pricing: crate::pricing::RateCard,
 }
 
 #[derive(Clone)]
@@ -148,6 +152,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
             get(get_note_handler).patch(update_note_handler).delete(delete_note_handler),
         )
         .route("/api/notes/:id/export.md", get(export_note_md_handler))
+        .route("/api/notes/export.zip", get(export_all_zip_handler))
         .route("/api/notes/search", get(search_handler))
         .route("/api/chat", post(chat_handler));
 
@@ -566,6 +571,130 @@ async fn export_note_md_handler(
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
         body,
+    )
+        .into_response())
+}
+
+/// Export every note the caller owns as a single .zip archive.
+/// Layout:
+///   notes/<title>-<id8>.md   — one file per note, same YAML-front-matter
+///                              shape as the single-note export
+///   index.md                 — human-readable table of contents
+/// Filename: `notes-YYYYMMDD-<id8>.zip`. We zip in-memory because the
+/// per-user cap (30 trial / unbounded paid) and short note bodies keep
+/// archives well under a few MB; if that stops being true, swap to a
+/// streaming `body_with_io_writer`.
+async fn export_all_zip_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    use std::io::Write;
+
+    let db = open_db_state(&s)?;
+    // 10k cap — well above the 30-note trial limit; paid users with more
+    // than 10k notes can ask for a streaming export later.
+    let notes = db
+        .list_recent_notes(&auth.user.id, 10_000)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let cursor = std::io::Cursor::new(buf);
+    let mut zip = zip::ZipWriter::new(cursor);
+    let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut idx = String::from("# Notes Index\n\n");
+    idx.push_str(&format!("Exported {} notes for {}\n\n", notes.len(), auth.user.email));
+    idx.push_str("| Date | Title | Tags | File |\n|---|---|---|---|\n");
+
+    let mut used_names = std::collections::HashSet::<String>::new();
+    for note in &notes {
+        let title_line = if note.title.trim().is_empty() {
+            note.body.chars().take(32).collect::<String>()
+        } else {
+            note.title.clone()
+        };
+        let base = build_md_filename(&title_line, &note.id);
+        // Dedupe in the rare case build_md_filename collides (same title +
+        // same id is impossible, but be defensive).
+        let mut fname = format!("notes/{base}");
+        let mut n = 1;
+        while !used_names.insert(fname.clone()) {
+            fname = format!("notes/{base}.{n}");
+            n += 1;
+        }
+
+        let tags_yaml = if note.tags.is_empty() {
+            String::new()
+        } else {
+            let joined = note
+                .tags
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("tags: [{joined}]\n")
+        };
+        let body = format!(
+            "---\n\
+             id: {}\n\
+             created_at: {}\n\
+             updated_at: {}\n\
+             {}\
+             ---\n\
+             \n\
+             # {}\n\
+             \n\
+             {}\n",
+            note.id,
+            note.created_at.to_rfc3339(),
+            note.updated_at.to_rfc3339(),
+            tags_yaml,
+            title_line,
+            note.body,
+        );
+
+        zip.start_file(&fname, opts)
+            .map_err(|e| ApiError::Internal(format!("zip: {e}")))?;
+        zip.write_all(body.as_bytes())
+            .map_err(|e| ApiError::Internal(format!("zip write: {e}")))?;
+
+        let tags_disp = if note.tags.is_empty() { "—".into() } else { note.tags.join(", ") };
+        let date = note.created_at.format("%Y-%m-%d").to_string();
+        // Escape pipe so it doesn't break the markdown table.
+        let title_esc = title_line.replace('|', "\\|");
+        idx.push_str(&format!(
+            "| {date} | {title_esc} | {tags_disp} | [{base}](./{fname}) |\n"
+        ));
+    }
+
+    zip.start_file("index.md", opts)
+        .map_err(|e| ApiError::Internal(format!("zip: {e}")))?;
+    zip.write_all(idx.as_bytes())
+        .map_err(|e| ApiError::Internal(format!("zip write: {e}")))?;
+
+    let cursor = zip
+        .finish()
+        .map_err(|e| ApiError::Internal(format!("zip finish: {e}")))?;
+    let bytes = cursor.into_inner();
+
+    let stamp = Utc::now().format("%Y%m%d").to_string();
+    let id_short: String = auth.user.id.chars().take(8).collect();
+    let ascii_fallback = format!("notes-{stamp}-{id_short}.zip");
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{ascii_fallback}\""),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        bytes,
     )
         .into_response())
 }

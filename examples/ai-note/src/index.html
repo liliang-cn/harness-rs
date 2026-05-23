@@ -1157,6 +1157,13 @@ async function openProfile() {
           修改后会自动登出其他设备。
         </div>
       </div>
+      <div class="p-card">
+        <h3>笔记备份</h3>
+        <button class="row-btn" id="pExportZip">⬇ 导出全部笔记 (.zip)</button>
+        <div class="muted fs-12" style="margin-top:6px;font-size:11px;color:var(--muted)">
+          所有笔记打包为 .md 文件，附 index.md 目录。可解压后用任何 markdown 编辑器打开。
+        </div>
+      </div>
       <div class="p-card" id="pInvitesCard" style="display:none">
         <h3 style="display:flex;align-items:center;">
           <span style="flex:1">邀请码</span>
@@ -1182,6 +1189,7 @@ async function openProfile() {
   v.querySelector('#pChangePw').addEventListener('click', openPwModal);
   v.querySelector('#pLogout').addEventListener('click', doLogout);
   v.querySelector('#pGenInvite').addEventListener('click', generateInvite);
+  v.querySelector('#pExportZip').addEventListener('click', exportAllNotes);
 
   // fetch /api/me
   try {
@@ -1201,6 +1209,40 @@ async function openProfile() {
     }
   } catch (e) {
     v.querySelector('#pAccount').textContent = '加载失败';
+  }
+}
+
+async function exportAllNotes() {
+  // We can't use a plain <a download> because the auth header lives in
+  // fetch's JS scope, not in cookie form. Fetch → blob → synthetic link.
+  const btn = document.getElementById('pExportZip');
+  const origText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 打包中…'; }
+  try {
+    const r = await fetch('/api/notes/export.zip');
+    if (!r.ok) {
+      let msg = `${r.status}`;
+      try { const j = await r.json(); msg = j.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    // Pull the filename out of Content-Disposition if present.
+    const cd = r.headers.get('content-disposition') || '';
+    let name = 'notes.zip';
+    const m = cd.match(/filename="([^"]+)"/);
+    if (m) name = m[1];
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('✓ 已导出');
+  } catch (e) {
+    toast('导出失败: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
   }
 }
 

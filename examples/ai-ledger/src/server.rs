@@ -92,6 +92,9 @@ pub struct AppConfig {
     pub available_models: Vec<ModelOption>,
     pub deepseek_key: Option<String>,
     pub gemini_key: Option<String>,
+    /// Per-model token pricing card. Persisted as JSON under provider_config
+    /// key `pricing_rate_card`; edited via PATCH /api/admin/config.
+    pub pricing: crate::pricing::RateCard,
 }
 
 #[derive(Clone)]
