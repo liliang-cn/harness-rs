@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const INDEX_HTML: &str = include_str!("index.html");
+const MARKED_JS: &str = include_str!("marked.min.js");
 
 /// Admin-mutable runtime config (mirrors ai-ledger's pattern).
 /// Provider keys / chat provider+model live here and are reflected to the
@@ -123,6 +124,7 @@ impl axum::response::IntoResponse for ApiError {
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(serve_index))
+        .route("/marked.min.js", get(serve_marked_js))
         .route("/api/info", get(info_handler))
         .route("/api/register", post(register_handler))
         .route("/api/login", post(login_handler))
@@ -166,6 +168,17 @@ async fn serve_index() -> impl axum::response::IntoResponse {
     (
         [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
         Html(INDEX_HTML),
+    )
+}
+
+async fn serve_marked_js() -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    (
+        [
+            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        MARKED_JS,
     )
 }
 
