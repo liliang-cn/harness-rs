@@ -72,6 +72,7 @@ export interface UserStats {
   last_seen_at: string | null;
   tokens_in: number;
   tokens_out: number;
+  cost_usd?: number;
   invited_by: string | null;
   invite_code_used: string | null;
 }
@@ -111,7 +112,8 @@ export const adminApi = {
   listInvites: () => api<{ invites: Invite[] }>('/api/me/invites'),
   createInvite: () =>
     api<{ invite: Invite }>('/api/me/invites', { method: 'POST' }),
-  listUsers: () => api<{ users: UserStats[] }>('/api/admin/users'),
+  listUsers: () =>
+    api<{ users: UserStats[]; priced_at_model?: string }>('/api/admin/users'),
   getUser: (id: string) =>
     api<{
       user: UserStats & { preferred_model: string | null; trade_count: number };

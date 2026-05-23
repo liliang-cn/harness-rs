@@ -17,6 +17,7 @@ mod auth;
 mod db;
 mod model;
 mod portfolio;
+mod pricing;
 mod server;
 mod skills;
 mod subscription;

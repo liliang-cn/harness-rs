@@ -32,6 +32,7 @@ function fmtDate(iso: string | null): string {
 
 export function Users() {
   const [users, setUsers] = useState<UserStats[] | null>(null);
+  const [pricedAtModel, setPricedAtModel] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [deleteUser, setDeleteUser] = useState<UserStats | null>(null);
   const [resetUser, setResetUser] = useState<UserStats | null>(null);
@@ -43,6 +44,7 @@ export function Users() {
     try {
       const j = await adminApi.listUsers();
       setUsers(j.users);
+      setPricedAtModel(j.priced_at_model ?? '');
     } catch (e) {
       message.error(`加载失败: ${(e as Error).message}`);
     } finally {
@@ -178,6 +180,19 @@ export function Users() {
       render: (_, u) => (u.tokens_in + u.tokens_out).toLocaleString(),
     },
     {
+      title: 'Cost (USD)',
+      key: 'cost',
+      width: 110,
+      align: 'right',
+      sorter: (a, b) => (a.cost_usd ?? 0) - (b.cost_usd ?? 0),
+      render: (_, u) => {
+        const c = u.cost_usd ?? 0;
+        // Show 2 dp once we cross 1¢; below that, 4 dp keeps tiny-bill rounding honest.
+        const txt = c >= 0.01 ? `$${c.toFixed(2)}` : c > 0 ? `$${c.toFixed(4)}` : '—';
+        return <span style={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>{txt}</span>;
+      },
+    },
+    {
       title: '最后访问',
       dataIndex: 'last_seen_at',
       key: 'last_seen_at',
@@ -227,9 +242,16 @@ export function Users() {
   return (
     <Card>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          用户 {users ? `(${users.length})` : ''}
-        </Title>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            用户 {users ? `(${users.length})` : ''}
+          </Title>
+          {pricedAtModel && (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              cost 按当前模型 <Text code>{pricedAtModel}</Text> 估算
+            </Text>
+          )}
+        </div>
         <Button
           icon={<LinkOutlined />}
           onClick={() => setInvitesOpen(true)}
