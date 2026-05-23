@@ -119,6 +119,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
             "/api/notes/:id",
             get(get_note_handler).patch(update_note_handler).delete(delete_note_handler),
         )
+        .route("/api/notes/:id/export.md", get(export_note_md_handler))
         .route("/api/notes/search", get(search_handler))
         .route("/api/chat", post(chat_handler))
         .layer(
@@ -395,6 +396,112 @@ async fn update_note_handler(
         return Err(ApiError::BadRequest("note not found".into()));
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Export a single note as a markdown file. Body is stored verbatim, so
+/// any markdown the user (or agent) wrote round-trips. We prepend a
+/// minimal YAML-front-matter block with id / dates / tags so the download
+/// is self-describing — useful for re-import / cross-tool sharing.
+async fn export_note_md_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let db = open_db_state(&s)?;
+    let note = db
+        .get_note(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("note not found".into()))?;
+
+    let title_line = if note.title.trim().is_empty() {
+        // Fall back to the first 32 chars of body as a heading so the file
+        // isn't headless.
+        let head: String = note.body.chars().take(32).collect();
+        head
+    } else {
+        note.title.clone()
+    };
+    let tags_yaml = if note.tags.is_empty() {
+        String::new()
+    } else {
+        let joined = note
+            .tags
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("tags: [{joined}]\n")
+    };
+    let body = format!(
+        "---\n\
+         id: {}\n\
+         created_at: {}\n\
+         updated_at: {}\n\
+         {}\
+         ---\n\
+         \n\
+         # {}\n\
+         \n\
+         {}\n",
+        note.id,
+        note.created_at.to_rfc3339(),
+        note.updated_at.to_rfc3339(),
+        tags_yaml,
+        title_line,
+        note.body,
+    );
+
+    let filename = build_md_filename(&title_line, &note.id);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{filename}\"; filename*=UTF-8''{}",
+                    percent_encode(&filename)
+                ),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// Build a filesystem-safe filename from a title + id. Keeps CJK characters
+/// (they're fine in modern filesystems) but strips path separators and
+/// other shell-hostile bytes. Always ends with `-<id>.md` so siblings stay
+/// distinct even with duplicate titles.
+fn build_md_filename(title: &str, id: &str) -> String {
+    let bad: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t'];
+    let clean: String = title
+        .chars()
+        .map(|c| if bad.contains(&c) || (c as u32) < 0x20 { '-' } else { c })
+        .collect();
+    let stem = clean.trim().trim_matches('-');
+    let mut stem: String = stem.chars().take(40).collect();
+    if stem.is_empty() {
+        stem.push_str("note");
+    }
+    format!("{stem}-{id}.md")
+}
+
+/// Minimal percent-encoder for the `filename*=UTF-8''…` parameter so
+/// non-ASCII titles survive intermediaries that mangle Content-Disposition.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        if matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~') {
+            out.push(*b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 async fn delete_note_handler(
