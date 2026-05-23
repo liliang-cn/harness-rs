@@ -159,11 +159,19 @@ async fn main() -> anyhow::Result<()> {
         }
         cfg_db.provider_config_seed_if_missing("chat_provider", &cli.chat_provider)?;
         cfg_db.provider_config_seed_if_missing("chat_model", &cli.chat_model)?;
+        // Seed pricing rate card on first launch. JSON-encoded HashMap; admin
+        // UI edits this from the System page.
+        let default_pricing = serde_json::to_string(&pricing::default_rate_card())?;
+        cfg_db.provider_config_seed_if_missing("pricing_rate_card", &default_pricing)?;
     }
     let stored = {
         let cfg_db = db::Db::open(&db_path)?;
         cfg_db.provider_config_all()?
     };
+    let pricing_card: pricing::RateCard = stored
+        .get("pricing_rate_card")
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(pricing::default_rate_card);
     let app_cfg = server::AppConfig {
         deepseek_key: stored.get("deepseek_api_key").cloned().or(deepseek_key),
         gemini_key: stored.get("gemini_api_key").cloned().or(gemini_key),
@@ -175,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
             .get("chat_model")
             .cloned()
             .unwrap_or_else(|| cli.chat_model.clone()),
+        pricing: pricing_card,
     };
 
     let state = server::AppState {

@@ -88,6 +88,14 @@ export interface AuditEvent {
   created_ms: number;
 }
 
+export interface ModelRate {
+  input: number;
+  output: number;
+}
+
+/** Per-model token pricing in USD per 1M tokens. Mutable from admin UI. */
+export type RateCard = Record<string, ModelRate>;
+
 export interface ProviderConfigView {
   deepseek_key_masked: string;
   gemini_key_masked: string;
@@ -98,6 +106,7 @@ export interface ProviderConfigView {
     provider: string;
     available: boolean;
   }[];
+  pricing: RateCard;
 }
 
 export interface Invite {
@@ -147,6 +156,7 @@ export const adminApi = {
     deepseek_api_key?: string;
     gemini_api_key?: string;
     default_model_id?: string;
+    pricing?: RateCard;
   }) =>
     api<{ ok: true; changed: string[] }>('/api/admin/config', {
       method: 'PATCH',

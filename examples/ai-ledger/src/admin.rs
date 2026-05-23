@@ -53,11 +53,12 @@ async fn list_users(
     // Enrich with cost_usd using the operator's current default chat model.
     // Approximate — historical tokens get priced at the *current* rate; for
     // exact accounting we'd need model_id on each audit row.
-    let model_id = s.cfg().default_model_id;
+    let cfg = s.cfg();
+    let model_id = cfg.default_model_id.clone();
     let enriched: Vec<Value> = users
         .into_iter()
         .map(|u| {
-            let cost = crate::pricing::cost_usd(&model_id, u.tokens_in, u.tokens_out);
+            let cost = crate::pricing::cost_usd(&cfg.pricing, &model_id, u.tokens_in, u.tokens_out);
             let mut v = serde_json::to_value(&u).unwrap_or_else(|_| json!({}));
             if let Some(obj) = v.as_object_mut() {
                 obj.insert(
@@ -287,6 +288,7 @@ struct ProviderConfigView {
     gemini_key_masked: String,
     default_model_id: String,
     available_models: Vec<ModelOption>,
+    pricing: crate::pricing::RateCard,
 }
 
 async fn get_config(
@@ -300,6 +302,7 @@ async fn get_config(
         gemini_key_masked: mask(cfg.gemini_key.as_deref()),
         default_model_id: cfg.default_model_id,
         available_models: cfg.available_models,
+        pricing: cfg.pricing,
     }))
 }
 
@@ -308,6 +311,9 @@ struct PatchConfig {
     deepseek_api_key: Option<String>,
     gemini_api_key: Option<String>,
     default_model_id: Option<String>,
+    /// Full replacement of the rate card. Caller must send the entire map;
+    /// omitted entries are removed. Validated for non-negative numbers.
+    pricing: Option<crate::pricing::RateCard>,
 }
 
 async fn patch_config(
@@ -343,6 +349,20 @@ async fn patch_config(
             changed.push("default_model_id");
         }
     }
+    if let Some(card) = req.pricing.as_ref() {
+        for (k, v) in card {
+            if !v.input.is_finite() || !v.output.is_finite() || v.input < 0.0 || v.output < 0.0 {
+                return Err(ApiError::BadRequest(format!(
+                    "pricing[{k}]: input/output must be finite and ≥ 0"
+                )));
+            }
+        }
+        let json = serde_json::to_string(card)
+            .map_err(|e| ApiError::Internal(format!("pricing encode: {e}")))?;
+        db.provider_config_set("pricing_rate_card", &json)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        changed.push("pricing");
+    }
 
     if changed.is_empty() {
         return Err(ApiError::BadRequest("nothing to update".into()));
@@ -355,6 +375,10 @@ async fn patch_config(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     {
         let mut w = s.config.write().expect("config lock poisoned");
+        let pricing = stored
+            .get("pricing_rate_card")
+            .and_then(|s| serde_json::from_str::<crate::pricing::RateCard>(s).ok())
+            .unwrap_or_else(|| w.pricing.clone());
         let new_cfg = AppConfig {
             default_model_id: stored
                 .get("default_model_id")
@@ -363,6 +387,7 @@ async fn patch_config(
             available_models: w.available_models.clone(),
             deepseek_key: stored.get("deepseek_api_key").cloned().or_else(|| w.deepseek_key.clone()),
             gemini_key: stored.get("gemini_api_key").cloned().or_else(|| w.gemini_key.clone()),
+            pricing,
         };
         *w = new_cfg;
         w.refresh_availability();

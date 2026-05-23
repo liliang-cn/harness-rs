@@ -52,11 +52,12 @@ async fn list_users(
     // model. Approximate when the operator has swapped models — historical
     // tokens get priced at the *current* rate, not whatever produced them.
     // Exact accounting would need model_id on each audit row; v1 skips that.
-    let model_id = s.cfg().chat_model;
+    let cfg = s.cfg();
+    let model_id = cfg.chat_model.clone();
     let enriched: Vec<Value> = users
         .into_iter()
         .map(|u| {
-            let cost = crate::pricing::cost_usd(&model_id, u.tokens_in, u.tokens_out);
+            let cost = crate::pricing::cost_usd(&cfg.pricing, &model_id, u.tokens_in, u.tokens_out);
             let mut v = serde_json::to_value(&u).unwrap_or_else(|_| json!({}));
             if let Some(obj) = v.as_object_mut() {
                 // round to 6 decimal places — fractions of a cent are noise.
@@ -275,6 +276,7 @@ struct ProviderConfigView {
     gemini_key_masked: String,
     chat_provider: String,
     chat_model: String,
+    pricing: crate::pricing::RateCard,
 }
 
 async fn get_config(
@@ -288,6 +290,7 @@ async fn get_config(
         gemini_key_masked: mask(cfg.gemini_key.as_deref()),
         chat_provider: cfg.chat_provider,
         chat_model: cfg.chat_model,
+        pricing: cfg.pricing,
     }))
 }
 
@@ -297,6 +300,9 @@ struct PatchConfig {
     gemini_api_key: Option<String>,
     chat_provider: Option<String>,
     chat_model: Option<String>,
+    /// Full replacement of the rate card. Caller must send the entire map;
+    /// omitted entries are removed. Validated for non-negative numbers.
+    pricing: Option<crate::pricing::RateCard>,
 }
 
 async fn patch_config(
@@ -340,6 +346,22 @@ async fn patch_config(
             changed.push("chat_model");
         }
     }
+    if let Some(card) = req.pricing.as_ref() {
+        // Reject negative or NaN rates; empty cards are allowed (everything
+        // then falls back to pricing::FALLBACK_RATE).
+        for (k, v) in card {
+            if !v.input.is_finite() || !v.output.is_finite() || v.input < 0.0 || v.output < 0.0 {
+                return Err(ApiError::BadRequest(format!(
+                    "pricing[{k}]: input/output must be finite and ≥ 0"
+                )));
+            }
+        }
+        let json = serde_json::to_string(card)
+            .map_err(|e| ApiError::Internal(format!("pricing encode: {e}")))?;
+        db.provider_config_set("pricing_rate_card", &json)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        changed.push("pricing");
+    }
 
     if changed.is_empty() {
         return Err(ApiError::BadRequest("nothing to update".into()));
@@ -364,6 +386,11 @@ async fn patch_config(
         }
         if let Some(m) = stored.get("chat_model") {
             w.chat_model = m.clone();
+        }
+        if let Some(json) = stored.get("pricing_rate_card")
+            && let Ok(card) = serde_json::from_str::<crate::pricing::RateCard>(json)
+        {
+            w.pricing = card;
         }
     }
 

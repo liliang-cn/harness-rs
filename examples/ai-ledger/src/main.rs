@@ -660,9 +660,16 @@ async fn main() -> anyhow::Result<()> {
         if let Some(k) = &gemini_key {
             cfg_db.provider_config_seed_if_missing("gemini_api_key", k)?;
         }
+        // Seed pricing rate card on first launch; admin edits via /api/admin/config.
+        let default_pricing = serde_json::to_string(&pricing::default_rate_card())?;
+        cfg_db.provider_config_seed_if_missing("pricing_rate_card", &default_pricing)?;
         let stored = cfg_db.provider_config_all()?;
         drop(cfg_db);
 
+        let pricing_card: pricing::RateCard = stored
+            .get("pricing_rate_card")
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(pricing::default_rate_card);
         let mut cfg = server::AppConfig {
             default_model_id: stored
                 .get("default_model_id")
@@ -671,6 +678,7 @@ async fn main() -> anyhow::Result<()> {
             available_models,
             deepseek_key: stored.get("deepseek_api_key").cloned().or(deepseek_key),
             gemini_key: stored.get("gemini_api_key").cloned().or(gemini_key),
+            pricing: pricing_card,
         };
         cfg.refresh_availability();
 

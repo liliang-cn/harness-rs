@@ -41,3 +41,4 @@ reqwest            = { workspace = true }
 thiserror          = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip                = { version = "2", default-features = false, features = ["deflate"] }
