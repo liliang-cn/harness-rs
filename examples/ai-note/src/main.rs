@@ -16,6 +16,7 @@ mod auth;
 mod db;
 mod embed_slot;
 mod embed_worker;
+mod pricing;
 mod search;
 mod server;
 mod tools;
