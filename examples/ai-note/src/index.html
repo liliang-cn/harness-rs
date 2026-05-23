@@ -28,6 +28,13 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
+/* Desktop: page sits in a white surface with the inner viewer/sidebar
+   providing the content contrast. Gutters (outside max-width 1280px)
+   become white and merge with the topbar / sidebar visually. */
+@media (min-width: 900px) {
+  body { background: var(--panel); }
+}
+
 /* ─── auth overlay ─── */
 #authOverlay {
   position: fixed; inset: 0; z-index: 9999;
