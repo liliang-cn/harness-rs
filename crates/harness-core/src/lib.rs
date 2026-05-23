@@ -17,6 +17,7 @@ pub mod __export {
 
 pub mod compactor;
 pub mod context;
+pub mod embed;
 pub mod error;
 pub mod event;
 pub mod guide;
@@ -32,6 +33,7 @@ pub mod world;
 
 pub use compactor::*;
 pub use context::*;
+pub use embed::*;
 pub use error::*;
 pub use event::*;
 pub use guide::*;

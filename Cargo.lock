@@ -76,6 +76,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai-note"
+version = "0.0.4"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "futures",
+ "harness-rs",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-models",
+ "harness-rs-permissions",
+ "harness-rs-skills",
+ "hex",
+ "rand 0.8.6",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
