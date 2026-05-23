@@ -28,6 +28,18 @@ use std::sync::Arc;
 
 const INDEX_HTML: &str = include_str!("index.html");
 
+/// Admin-mutable runtime config (mirrors ai-ledger's pattern).
+/// Provider keys / chat provider+model live here and are reflected to the
+/// DB so they survive restart. The actual chat-model adapter is still
+/// built at startup; mid-flight key changes require a restart.
+#[derive(Clone, Debug)]
+pub struct AppConfig {
+    pub deepseek_key: Option<String>,
+    pub gemini_key: Option<String>,
+    pub chat_provider: String,
+    pub chat_model: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db_path: PathBuf,
@@ -38,6 +50,16 @@ pub struct AppState {
     /// IANA tz id (e.g. "Asia/Shanghai"). Planted on the agent's
     /// profile.tz so `current_time` returns the right local clock.
     pub user_tz: Option<String>,
+    /// Hot-readable provider config. Admin endpoints write through this
+    /// under `RwLock` so reads from the user-facing endpoints (info / chat)
+    /// see updates without a restart.
+    pub config: Arc<std::sync::RwLock<AppConfig>>,
+}
+
+impl AppState {
+    pub fn cfg(&self) -> AppConfig {
+        self.config.read().expect("config lock poisoned").clone()
+    }
 }
 
 impl AppState {
@@ -61,7 +83,7 @@ impl AppState {
     }
 }
 
-fn open_db_state(s: &AppState) -> Result<Db, ApiError> {
+pub(crate) fn open_db_state(s: &AppState) -> Result<Db, ApiError> {
     if let Some(parent) = s.db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ApiError::Internal(e.to_string()))?;
     }
@@ -121,7 +143,10 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         )
         .route("/api/notes/:id/export.md", get(export_note_md_handler))
         .route("/api/notes/search", get(search_handler))
-        .route("/api/chat", post(chat_handler))
+        .route("/api/chat", post(chat_handler));
+
+    // Admin endpoints — gated by tier == "admin" in the handlers.
+    let app = crate::admin::register_routes(app)
         .layer(
             tower_http::cors::CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
@@ -212,6 +237,14 @@ async fn register_handler(
     let session = new_session(&user.id);
     db.insert_session(&session)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(
+        Some(&user.id),
+        "register",
+        None,
+        Some(&json!({"email": user.email, "tier": user.tier}).to_string()),
+        0,
+        0,
+    );
     Ok(Json(json!({ "token": session.token, "user": &user })))
 }
 
@@ -229,18 +262,42 @@ async fn login_handler(
     let user = db
         .get_user_by_email(&req.email)
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::Unauthorized(AuthError::BadCredentials.to_string()))?;
+        .ok_or_else(|| {
+            let _ = open_db_state(&s).map(|db| {
+                db.insert_audit(
+                    None,
+                    "login_failed",
+                    None,
+                    Some(&json!({"email": req.email, "reason": "no_such_user"}).to_string()),
+                    0,
+                    0,
+                )
+            });
+            ApiError::Unauthorized(AuthError::BadCredentials.to_string())
+        })?;
     if !verify_password(&req.password, &user.password_hash) {
+        let _ = db.insert_audit(
+            Some(&user.id),
+            "login_failed",
+            None,
+            Some(&json!({"reason": "bad_password"}).to_string()),
+            0,
+            0,
+        );
         return Err(ApiError::Unauthorized(AuthError::BadCredentials.to_string()));
     }
     let session = new_session(&user.id);
     db.insert_session(&session)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(Some(&user.id), "login", None, None, 0, 0);
     Ok(Json(json!({ "token": session.token, "user": &user })))
 }
 
-async fn logout_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
-    let _ = auth.user.id;
+async fn logout_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+) -> Result<Json<Value>, ApiError> {
+    let _ = open_db_state(&s).map(|db| db.insert_audit(Some(&auth.user.id), "logout", None, None, 0, 0));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -309,6 +366,14 @@ async fn change_password_handler(
     let dropped = db
         .delete_other_sessions(&auth.user.id, &auth.token)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let _ = db.insert_audit(
+        Some(&auth.user.id),
+        "password_change",
+        None,
+        Some(&json!({"other_sessions_dropped": dropped}).to_string()),
+        0,
+        0,
+    );
     Ok(Json(json!({ "ok": true, "other_sessions_dropped": dropped })))
 }
 
@@ -600,14 +665,25 @@ async fn chat_handler(
         .run_with_max_iters(task, &mut world, s.max_iters)
         .await
         .map_err(|e| ApiError::Internal(format!("agent: {e}")))?;
-    let (reply, iters, ok) = match outcome {
-        Outcome::Done { text, iters, .. } => (text.unwrap_or_default(), iters, true),
-        Outcome::BudgetExhausted { iters, last_text, .. } => (
+    let (reply, iters, ok, usage) = match outcome {
+        Outcome::Done { text, iters, usage, .. } => (text.unwrap_or_default(), iters, true, usage),
+        Outcome::BudgetExhausted { iters, last_text, usage, .. } => (
             last_text.unwrap_or_else(|| "(budget exhausted)".into()),
             iters,
             false,
+            usage,
         ),
     };
+    if let Ok(db) = open_db_state(&s) {
+        let _ = db.insert_audit(
+            Some(&auth.user.id),
+            "chat_message",
+            None,
+            Some(&json!({"iters": iters, "ok": ok}).to_string()),
+            usage.input_tokens as i64,
+            usage.output_tokens as i64,
+        );
+    }
     Ok(Json(json!({ "reply": reply, "iters": iters, "ok": ok })))
 }
 
