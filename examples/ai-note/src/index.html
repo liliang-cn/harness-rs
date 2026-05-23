@@ -226,12 +226,54 @@ body {
 
 /* mobile */
 @media (max-width: 760px) {
-  #main { grid-template-columns: 1fr; }
-  #sidebar { display: block; }
+  /* Topbar: 1-line, compact. Search grows; buttons shrink to icons. */
+  #topbar { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; min-height: 52px; }
+  .app-title { font-size: 0; line-height: 1; }
+  .app-title::before { content: "📓"; font-size: 22px; line-height: 1; }
+  .search-input { font-size: 16px; max-width: none; min-width: 0; flex: 1; padding: 8px 12px; }
+  /* Hide text labels on action buttons; keep symbols. */
+  .icon-btn { padding: 8px 10px; font-size: 16px; }
+  .icon-btn .lbl { display: none; }
+
+  #main {
+    display: block;
+    height: calc(100dvh - 52px);
+    overflow: hidden;
+  }
+  /* Default: sidebar visible, viewer hidden until a note is opened. */
+  #sidebar { display: block; height: 100%; border-right: none; }
+  #viewer { display: none; height: 100%; }
+  /* When a note is opened, JS swaps these classes. */
   #sidebar.hidden-on-mobile { display: none; }
-  #viewer.hidden-on-mobile { display: none; }
-  .note-view { padding: 20px 16px; }
+  #viewer.visible-on-mobile { display: block; }
+
+  .note-view { padding: 18px 16px 80px; }
+  .note-view .title { font-size: 22px; }
+  .note-view .body { font-size: 16px; }
+  .note-view .actions {
+    flex-wrap: wrap; gap: 6px;
+    padding: 10px 0;
+  }
+  .note-view .actions .icon-btn { padding: 8px 12px; font-size: 13px; }
+
+  /* Chat panel: full screen, slide in from right. */
   #chatPanel { width: 100%; top: 0; }
+  .messages { padding: 14px; }
+  .composer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .composer textarea { font-size: 16px; }  /* prevent iOS zoom on focus */
+
+  /* FAB: respect home-indicator safe area. */
+  #fabChat { bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px)); }
+
+  /* New-note modal: full-width-ish on phone */
+  .modal-bg { padding: 0; align-items: flex-end; }
+  .modal {
+    width: 100%; max-width: none; max-height: 92dvh;
+    border-radius: 16px 16px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+  .field { font-size: 16px; }
+  .modal textarea { font-size: 16px; }
 }
 </style>
 </head>
@@ -261,7 +303,7 @@ body {
   <span class="app-title">📓 AI Note</span>
   <input id="searchInput" class="search-input" placeholder="搜索（语义 · 中英都行）" />
   <span class="grow"></span>
-  <button class="icon-btn" id="btnNew">＋ 新笔记</button>
+  <button class="icon-btn" id="btnNew" title="新笔记">＋<span class="lbl"> 新笔记</span></button>
   <button class="icon-btn" id="btnLogout" title="登出">⎋</button>
 </div>
 
@@ -466,10 +508,11 @@ async function openNote(id) {
     const r = await fetch(`/api/notes/${id}`).then(r => r.json());
     if (!r.note) { $('viewer').innerHTML = `<div class="empty">没找到这条笔记</div>`; return; }
     renderViewer(r.note);
-    // on mobile, hide sidebar
+    // on mobile, hide sidebar and reveal viewer
     if (window.innerWidth <= 760) {
       $('sidebar').classList.add('hidden-on-mobile');
-      $('viewer').classList.remove('hidden-on-mobile');
+      $('viewer').classList.add('visible-on-mobile');
+      window.scrollTo(0, 0);
     }
   } catch (e) {
     $('viewer').innerHTML = `<div class="empty">加载失败</div>`;
@@ -508,7 +551,7 @@ function renderViewer(note) {
   });
   v.querySelector('#backToList')?.addEventListener('click', () => {
     $('sidebar').classList.remove('hidden-on-mobile');
-    $('viewer').classList.add('hidden-on-mobile');
+    $('viewer').classList.remove('visible-on-mobile');
   });
 }
 
