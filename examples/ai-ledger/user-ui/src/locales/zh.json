@@ -1,0 +1,49 @@
+{
+  "brand": "财库",
+  "common": {
+    "logout": "登出",
+    "loading": "加载中…",
+    "refresh": "刷新",
+    "error": "出错了"
+  },
+  "login": {
+    "title": "欢迎回来",
+    "subtitle": "你的 AI 财务管家",
+    "email": "邮箱",
+    "password": "密码",
+    "submit": "登录",
+    "register": "注册账号",
+    "registerCta": "还没有账号？",
+    "loginCta": "已有账号？",
+    "invite": "邀请码（可选）",
+    "registerSubmit": "创建账号"
+  },
+  "dashboard": {
+    "title": "净值",
+    "asOf": "{{date}} 数据",
+    "delta30": "{{value}}（{{pct}}）vs 30 天前",
+    "noHistory": "历史数据还在积累 — 明天再看。",
+    "composition": "构成",
+    "cash": "现金",
+    "investments": "投资",
+    "debt": "负债",
+    "trend12mo": "近 12 个月",
+    "accounts": "账户",
+    "noAccounts": "你还没添加任何账户。",
+    "refreshNow": "立即刷新",
+    "baseCurrency": "显示货币"
+  },
+  "currency": {
+    "USD": "美元",
+    "EUR": "欧元",
+    "GBP": "英镑",
+    "JPY": "日元",
+    "CNY": "人民币",
+    "HKD": "港币",
+    "SGD": "新加坡元",
+    "AUD": "澳元",
+    "CAD": "加元",
+    "CHF": "瑞士法郎",
+    "KRW": "韩元"
+  }
+}

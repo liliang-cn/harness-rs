@@ -1,0 +1,49 @@
+{
+  "brand": "Ledger",
+  "common": {
+    "logout": "Sign out",
+    "loading": "Loading…",
+    "refresh": "Refresh",
+    "error": "Something went wrong"
+  },
+  "login": {
+    "title": "Welcome back",
+    "subtitle": "Your AI financial concierge",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in",
+    "register": "Create account",
+    "registerCta": "Don't have an account?",
+    "loginCta": "Already have an account?",
+    "invite": "Invite code (optional)",
+    "registerSubmit": "Create account"
+  },
+  "dashboard": {
+    "title": "Net worth",
+    "asOf": "as of {{date}}",
+    "delta30": "{{value}} ({{pct}}) vs 30 days ago",
+    "noHistory": "Building your history — check back tomorrow.",
+    "composition": "Composition",
+    "cash": "Cash",
+    "investments": "Investments",
+    "debt": "Debt",
+    "trend12mo": "12-month trend",
+    "accounts": "Accounts",
+    "noAccounts": "You haven't added any accounts yet.",
+    "refreshNow": "Refresh now",
+    "baseCurrency": "Display currency"
+  },
+  "currency": {
+    "USD": "US Dollar",
+    "EUR": "Euro",
+    "GBP": "Pound Sterling",
+    "JPY": "Japanese Yen",
+    "CNY": "Chinese Yuan",
+    "HKD": "Hong Kong Dollar",
+    "SGD": "Singapore Dollar",
+    "AUD": "Australian Dollar",
+    "CAD": "Canadian Dollar",
+    "CHF": "Swiss Franc",
+    "KRW": "Korean Won"
+  }
+}
