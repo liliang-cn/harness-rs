@@ -40,6 +40,14 @@ const INDEX_HTML: &str = include_str!("index.html");
 static ADMIN_DIST: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/admin-ui/dist");
 
+/// Vite-built user-facing SPA (the dashboard + login). Replaces the
+/// old hand-written `index.html` at site root; old HTML stays available
+/// under `/legacy/` for the rest of the v1 features that haven't been
+/// ported yet (流水 / portfolio / chat / 我的). Built by
+/// `cd user-ui && npm run build`.
+static USER_UI_DIST: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/user-ui/dist");
+
 /// Domain-specific guidance prepended to `MemorySynthesizer`'s prompt. Tells
 /// the synth model what counts as a durable fact in the personal-accounting
 /// context — preferences, habits, repeated patterns — and what to skip:
@@ -230,8 +238,18 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
 
     let app = Router::new()
         // ─ public
-        .route("/", get(serve_index))
-        .route("/marked.min.js", get(serve_marked_js))
+        // New user-facing SPA at site root (vite+react+antd+i18next).
+        // SPA fallback under /*ui_path so /login etc. serve the same HTML.
+        .route("/", get(serve_user_ui_index))
+        .route("/assets/*path", get(serve_user_ui_asset))
+        .route("/favicon.svg", get(serve_user_ui_asset_root))
+        .route("/icons.svg", get(serve_user_ui_asset_root))
+        .route("/login", get(serve_user_ui_index))
+        // Old hand-written index.html kept under /legacy/ during migration —
+        // /legacy/marked.min.js is still served the same way.
+        .route("/legacy", get(serve_index))
+        .route("/legacy/", get(serve_index))
+        .route("/legacy/marked.min.js", get(serve_marked_js))
         // Admin SPA: GET /admin → index.html; GET /admin/* → matching asset
         // from the bundled dist, with SPA fallback to index.html.
         .route("/admin", get(serve_admin_index))
@@ -305,6 +323,69 @@ async fn serve_index() -> impl axum::response::IntoResponse {
         [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
         Html(INDEX_HTML),
     )
+}
+
+// ── user-facing SPA serve ──
+
+async fn serve_user_ui_index() -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    let body = USER_UI_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+        .unwrap_or("<h1>user-ui not built — run `cd user-ui && npm run build`</h1>");
+    (
+        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+        Html(body),
+    )
+}
+
+async fn serve_user_ui_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    let full = format!("assets/{path}");
+    if let Some(file) = USER_UI_DIST.get_file(&full) {
+        let mime = mime_for(&full);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                // Vite hashes filenames in /assets, long-cache.
+                (
+                    header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable",
+                ),
+            ],
+            Body::from(file.contents()),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "asset not found").into_response()
+}
+
+/// Serves `/favicon.svg`, `/icons.svg`, etc — files at the top of `dist/`
+/// rather than under `dist/assets/`. Looks at the request path stripped of
+/// the leading `/` and bails if not found.
+async fn serve_user_ui_asset_root(
+    req: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    let path = req.uri().path().trim_start_matches('/');
+    if let Some(file) = USER_UI_DIST.get_file(path) {
+        let mime = mime_for(path);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+            ],
+            Body::from(file.contents()),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 async fn serve_admin_index() -> impl axum::response::IntoResponse {
