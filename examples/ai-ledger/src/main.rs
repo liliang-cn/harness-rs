@@ -80,6 +80,8 @@ pub(crate) const TOOL_NAMES: &[&str] = &[
     "add_loan",
     "record_loan_payment",
     "loan_summary",
+    // ─── receipt attachments (Gemini Vision) ───
+    "extract_receipt",
     // ─── web access (from harness-rs-tools-web) ───
     "web_search",
     "web_fetch",
@@ -549,17 +551,23 @@ fn build_profile(cli: &Cli) -> UserProfile {
 }
 
 pub(crate) fn build_task_description(user_request: &str, history: &[(String, String)]) -> String {
-    build_task_description_with_lang(user_request, history, None)
+    build_task_description_with_lang(user_request, history, None, &[])
 }
 
 /// Same as `build_task_description` but injects a one-line locale
 /// directive at the top so the model speaks the user's UI language by
 /// default. The big SYSTEM_PROMPT body covers EN+ZH content already; this
 /// header just sets the reply language.
+///
+/// `attachment_ids` are surfaced in the task body as an explicit line so the
+/// model actually sees them — `world.profile.extra` is rendered as a one-
+/// liner by `ProfileGuide` that drops the `extra` map. The IDs ALSO live on
+/// `world.profile.extra.attachment_ids` for tools to consume.
 pub(crate) fn build_task_description_with_lang(
     user_request: &str,
     history: &[(String, String)],
     lang: Option<&str>,
+    attachment_ids: &[String],
 ) -> String {
     let mut s = String::new();
     if let Some(l) = lang {
@@ -583,6 +591,12 @@ pub(crate) fn build_task_description_with_lang(
         }
     }
     s.push_str(&format!("\n[user] {user_request}"));
+    if !attachment_ids.is_empty() {
+        s.push_str(&format!(
+            "\n[system] attachments_attached: ids=[{}]. Per rule 14, call extract_receipt on each id BEFORE anything else.",
+            attachment_ids.join(", ")
+        ));
+    }
     s
 }
 

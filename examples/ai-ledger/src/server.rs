@@ -1279,6 +1279,7 @@ async fn chat_handler(
         &req.message,
         &history,
         req.lang.as_deref(),
+        &req.attachment_ids,
     );
     let _ = SYSTEM_PROMPT;
 
@@ -1746,8 +1747,12 @@ async fn session_stream_handler(
         .filter(|m| !(m.role == "user" && m.text == req.message))
         .map(|m| (m.role.clone(), m.text.clone()))
         .collect();
-    let task_desc =
-        build_task_description_with_lang(&req.message, &history, req.lang.as_deref());
+    let task_desc = build_task_description_with_lang(
+        &req.message,
+        &history,
+        req.lang.as_deref(),
+        &req.attachment_ids,
+    );
     drop(db);
 
     let user_id = auth.user.id.clone();
@@ -1946,6 +1951,7 @@ async fn chat_stream_handler(
             .map(|m| (m.role.clone(), m.text.clone()))
             .collect::<Vec<_>>(),
         req.lang.as_deref(),
+        &req.attachment_ids,
     );
 
     let user_id = auth.user.id.clone();

@@ -992,10 +992,10 @@ async fn get_net_worth(args: Value, w: &mut World) -> Result<ToolResult, ToolErr
             "principal":       {"type": "string", "description": "Original amount, positive decimal as string. For receivables, this is what you lent out."},
             "currency":        {"type": "string", "description": "ISO 4217, e.g. \"USD\", \"CNY\"."},
             "apr":             {"type": "string", "description": "Annual percentage rate as decimal, e.g. \"0.045\" for 4.5%. Use \"0\" for interest-free IOUs."},
-            "term_months":     {"type": ["integer", "null"], "description": "Loan duration in months. Use null for open-ended IOUs."},
-            "monthly_payment": {"type": ["string", "null"], "description": "Optional. Recurring payment amount as decimal string."},
+            "term_months":     {"type": "integer", "nullable": true, "description": "Loan duration in months. Use null for open-ended IOUs."},
+            "monthly_payment": {"type": "string", "nullable": true, "description": "Optional. Recurring payment amount as decimal string."},
             "start_date":      {"type": "string", "description": "YYYY-MM-DD. When the loan was originated."},
-            "note":            {"type": ["string", "null"]}
+            "note":            {"type": "string", "nullable": true}
         },
         "required": ["name", "kind", "counterparty", "principal", "currency", "apr", "start_date"]
     }"#
@@ -1125,7 +1125,7 @@ async fn add_loan(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
             "cash_account_id":  {"type": "string", "description": "The user's cash account the payment came from (Loan/Mortgage case) or went to (Receivable case)."},
             "amount":           {"type": "string", "description": "Payment amount, positive decimal as string."},
             "occurred_at":      {"type": "string", "description": "RFC3339 or YYYY-MM-DD. When the payment happened."},
-            "note":             {"type": ["string", "null"]}
+            "note":             {"type": "string", "nullable": true}
         },
         "required": ["loan_account_id", "cash_account_id", "amount", "occurred_at"]
     }"#

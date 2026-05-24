@@ -32,6 +32,7 @@ export async function streamSession(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   lang?: string,
+  attachment_ids?: string[],
 ): Promise<void> {
   let resp: Response;
   try {
@@ -41,7 +42,7 @@ export async function streamSession(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${getToken() ?? ''}`,
       },
-      body: JSON.stringify({ message, lang }),
+      body: JSON.stringify({ message, lang, attachment_ids }),
       signal,
     });
   } catch (e) {
