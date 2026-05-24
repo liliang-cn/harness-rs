@@ -164,6 +164,10 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iters: Option<u32>,
     pub created_at: DateTime<Utc>,
+    /// Attachment ids the user uploaded when sending this message. Empty
+    /// for assistant turns and for messages predating the feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
