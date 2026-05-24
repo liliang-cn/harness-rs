@@ -12,10 +12,12 @@ import {
 } from '@/components/transactions/txn-filters';
 import { BudgetsList } from '@/components/budgets/budgets-list';
 import { SubsList } from '@/components/subscriptions/subs-list';
+import { LoansList } from '@/components/loans/loans-list';
 import {
   ledgerApi,
   type BudgetStatus,
   type CsvExportKind,
+  type Loan,
   type ReportRow,
   type Subscription,
   type Transaction,
@@ -26,6 +28,7 @@ export function Ledger() {
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<BudgetStatus[]>([]);
   const [subs, setSubs] = useState<Subscription[]>([]);
+  const [loans, setLoans] = useState<Loan[] | null>(null);
   const [report, setReport] = useState<ReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('thisMonth');
@@ -37,16 +40,18 @@ export function Ledger() {
     try {
       // Server currently caps to 365 days and ignores from/to — we still pass
       // a generous `limit` and do the period narrowing client-side below.
-      const [txnRes, budgetRes, subRes, reportRes] = await Promise.all([
+      const [txnRes, budgetRes, subRes, reportRes, loansRes] = await Promise.all([
         ledgerApi.transactions({ limit: 500 }),
         ledgerApi.budgets(),
         ledgerApi.subscriptions(),
         ledgerApi.monthlyReport(),
+        ledgerApi.loans(),
       ]);
       setTxns(txnRes.transactions ?? []);
       setBudgets(budgetRes.budgets ?? []);
       setSubs(subRes.subscriptions ?? []);
       setReport(reportRes.by_category ?? []);
+      setLoans(loansRes.loans ?? []);
     } catch (e) {
       toast.error(`${t('common.error')}: ${(e as Error).message}`);
     } finally {
@@ -168,6 +173,15 @@ export function Ledger() {
           ) : (
             <SubsList subs={subs} onCancel={onCancelSub} cancellingId={cancellingId} />
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('loans.title')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <LoansList loans={loading ? null : loans} />
         </CardContent>
       </Card>
 

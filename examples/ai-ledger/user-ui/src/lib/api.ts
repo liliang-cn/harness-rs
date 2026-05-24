@@ -137,6 +137,24 @@ export interface BudgetStatus {
   over_budget: boolean;
 }
 
+export interface Loan {
+  account_id: string;
+  name: string;
+  kind: 'loan' | 'mortgage' | 'receivable';
+  counterparty: string;
+  principal: string;
+  remaining: string; // 2-decimal string
+  currency: string;
+  apr: string; // decimal as string, "0.045" = 4.5%
+  term_months: number | null;
+  monthly_payment: string | null;
+  start_date: string;
+  next_due_date: string | null;
+  progress_pct: number; // 0..100, 2-decimal
+  status: 'active' | 'paid_off';
+  note: string | null;
+}
+
 export type SubscriptionFrequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
 export interface Subscription {
@@ -330,6 +348,7 @@ export const ledgerApi = {
     api<{ cancelled: string }>(`/api/subscriptions/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
     }),
+  loans: () => api<{ loans: Loan[] }>('/api/me/loans'),
   positions: () =>
     api<{ count: number; positions: Position[] }>('/api/portfolio/positions'),
   trades: (asset_symbol?: string, limit?: number) => {
