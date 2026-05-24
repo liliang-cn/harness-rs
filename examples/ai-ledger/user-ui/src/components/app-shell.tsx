@@ -63,7 +63,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
     <div className="bg-muted/20 flex min-h-svh">
       <aside className="border-border bg-background hidden w-56 shrink-0 flex-col border-r md:flex">
         <Link to="/" className="flex h-14 items-center px-4 text-lg font-semibold">
-          Ledger
+          {t('brand')}
         </Link>
         <nav className="flex flex-1 flex-col gap-1 px-2 py-2">
           {NAV.map((item) => {
@@ -72,6 +72,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
               <Link
                 key={item.to}
                 to={item.to}
+                aria-current={active ? 'page' : undefined}
                 className={cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm',
                   active ? 'bg-secondary text-secondary-foreground font-medium'
@@ -96,7 +97,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="border-border bg-background sticky top-0 z-10 flex h-14 items-center gap-2 border-b px-4 md:hidden">
-          <Link to="/" className="text-base font-semibold">Ledger</Link>
+          <Link to="/" className="text-base font-semibold">{t('brand')}</Link>
           <div className="flex-1" />
           <LangSwitch />
           <Button variant="ghost" size="icon" onClick={logout} aria-label={t('common.logout')}>
@@ -116,8 +117,9 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
               <Link
                 key={item.to}
                 to={item.to}
+                aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex flex-col items-center justify-center gap-0.5 px-3 py-1 text-[11px]',
+                  'flex h-full flex-1 flex-col items-center justify-center gap-0.5 px-3 py-1 text-[11px]',
                   active ? 'text-foreground' : 'text-muted-foreground',
                 )}
               >
