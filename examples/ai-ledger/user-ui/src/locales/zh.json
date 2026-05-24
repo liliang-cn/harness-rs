@@ -53,6 +53,36 @@
     "thisYear": "本年",
     "allTime": "全部"
   },
+  "budgets": {
+    "title": "预算",
+    "empty": "还没有预算，去聊天里加一个。",
+    "over": "超出预算"
+  },
+  "subs": {
+    "title": "订阅",
+    "empty": "还没有订阅。",
+    "cancel": "取消",
+    "cancelConfirm": "取消「{{name}}」？",
+    "cancelled": "已取消「{{name}}」",
+    "next": "下次扣款 {{date}}",
+    "freq": {
+      "weekly": "每周",
+      "monthly": "每月",
+      "quarterly": "每季",
+      "yearly": "每年"
+    }
+  },
+  "report": {
+    "title": "本月分类支出",
+    "empty": "本月还没有记录。",
+    "count_other": "{{count}} 笔"
+  },
+  "export": {
+    "title": "导出 CSV",
+    "transactions": "流水",
+    "trades": "交易",
+    "subscriptions": "订阅"
+  },
   "currency": {
     "USD": "美元",
     "EUR": "欧元",
