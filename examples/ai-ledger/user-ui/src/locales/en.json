@@ -84,6 +84,29 @@
     "trades": "Trades",
     "subscriptions": "Subscriptions"
   },
+  "portfolio": {
+    "title": "Portfolio",
+    "positions": "Positions",
+    "trades": "Trades",
+    "allocation": "Allocation",
+    "qty": "Qty",
+    "avg": "Avg",
+    "value": "Value",
+    "unrealized": "Unrealized",
+    "noPrice": "No price",
+    "empty": "Nothing here yet. Add a trade via chat.",
+    "buy": "Buy",
+    "sell": "Sell",
+    "opening": "Opening",
+    "symbol": "Symbol",
+    "class": {
+      "stock": "Stock",
+      "etf": "ETF",
+      "crypto": "Crypto",
+      "commodity": "Commodity",
+      "other": "Other"
+    }
+  },
   "currency": {
     "USD": "US Dollar",
     "EUR": "Euro",
