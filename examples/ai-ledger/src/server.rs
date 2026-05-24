@@ -245,6 +245,15 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/favicon.svg", get(serve_user_ui_asset_root))
         .route("/icons.svg", get(serve_user_ui_asset_root))
         .route("/login", get(serve_user_ui_index))
+        // SPA client-side routes: /ledger, /portfolio, /profile, /app, /...
+        // Direct GETs (refresh / bookmark / share) must return index.html so
+        // React Router can resolve the path. We enumerate each to avoid
+        // colliding with the explicit /api, /admin, /assets, /legacy,
+        // /robots.txt, /sitemap.xml, /llms*.txt routes above.
+        .route("/ledger", get(serve_user_ui_index))
+        .route("/portfolio", get(serve_user_ui_index))
+        .route("/profile", get(serve_user_ui_index))
+        .route("/app", get(serve_user_ui_index))
         // SEO + GEO static text. robots/sitemap for Google/Bing;
         // llms.txt + llms-full.txt for ChatGPT/Claude/Perplexity per
         // the llmstxt.org convention.
