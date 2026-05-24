@@ -1234,6 +1234,150 @@ async fn record_loan_payment(args: Value, w: &mut World) -> Result<ToolResult, T
     })
 }
 
+// ============================================================
+// receipt attachments — Gemini Vision extraction
+// ============================================================
+
+/// POST an image to Gemini's `gemini-3.5-flash:generateContent` with an
+/// inline_data part + a strict `response_schema`. Returns the parsed
+/// structured object (NOT the raw Gemini envelope) — Gemini wraps
+/// `response_mime_type=application/json` output as a JSON string inside
+/// `candidates[0].content.parts[0].text`, so we parse twice.
+async fn gemini_extract_receipt(
+    api_key: &str,
+    mime_type: &str,
+    image_bytes: &[u8],
+) -> anyhow::Result<Value> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+    let body = json!({
+        "contents": [{
+            "parts": [
+                {"text": "Extract the receipt as JSON matching the schema. If a field is unclear, set it to null. Use ISO 4217 currency codes. occurred_at is ISO 8601 (YYYY-MM-DD)."},
+                {"inline_data": {"mime_type": mime_type, "data": b64}}
+            ]
+        }],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "response_schema": {
+                "type": "object",
+                "properties": {
+                    "merchant":      {"type": "string", "nullable": true},
+                    "amount":        {"type": "string"},
+                    "currency":      {"type": "string"},
+                    "occurred_at":   {"type": "string"},
+                    "category_hint": {"type": "string", "nullable": true},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name":  {"type": "string"},
+                                "price": {"type": "string", "nullable": true}
+                            },
+                            "required": ["name"]
+                        }
+                    },
+                    "raw_text":   {"type": "string", "nullable": true},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
+                },
+                "required": ["amount", "currency", "occurred_at", "confidence"]
+            }
+        }
+    });
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| anyhow::anyhow!("reqwest build: {e}"))?;
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("gemini request: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("gemini body: {e}"))?;
+    if !status.is_success() {
+        // Surface the raw response body so the caller sees what Gemini said.
+        return Err(anyhow::anyhow!("gemini {}: {}", status, text));
+    }
+    let envelope: Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("gemini envelope parse: {e}; body={text}"))?;
+    let inner_text = envelope
+        .get("candidates")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("content"))
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.get(0))
+        .and_then(|p| p.get("text"))
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| anyhow::anyhow!("gemini: candidates[0].content.parts[0].text missing; envelope={envelope}"))?;
+    let parsed: Value = serde_json::from_str(inner_text)
+        .map_err(|e| anyhow::anyhow!("gemini structured-text parse: {e}; text={inner_text}"))?;
+    Ok(parsed)
+}
+
+fn uploads_root() -> PathBuf {
+    std::env::var("HARNESS_LEDGER_UPLOADS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./uploads"))
+}
+
+/// Extract structured receipt data from a previously uploaded attachment.
+/// Reads the attachment bytes from disk and POSTs to Gemini Vision with a
+/// strict response schema. v1 only handles images — PDF returns an error
+/// so the agent can fall back to asking the user to type the entry.
+#[harness::tool(
+    name = "extract_receipt",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "attachment_id": {"type": "string", "description": "One of the attachment IDs visible on profile.extra.attachment_ids."}
+        },
+        "required": ["attachment_id"]
+    }"#
+)]
+async fn extract_receipt(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let attachment_id = need_str(&args, "attachment_id")?.to_string();
+    let uid = uid_of(w)?;
+    let db = open_db()?;
+    let rec = db
+        .get_attachment(&uid, &attachment_id)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .ok_or_else(|| ToolError::Exec("attachment not found or not yours".into()))?;
+    if rec.kind != "image" {
+        return Ok(ToolResult {
+            ok: false,
+            content: json!({
+                "error": format!("extract_receipt only handles images in v1 (got kind={})", rec.kind),
+                "hint": "ask the user to type the entry manually, or re-upload as an image",
+            }),
+            trace: None,
+        });
+    }
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .map_err(|_| ToolError::Exec("GEMINI_API_KEY not set in env".into()))?;
+    let full = uploads_root().join(&rec.path);
+    let bytes = std::fs::read(&full)
+        .map_err(|e| ToolError::Exec(format!("read attachment {}: {e}", full.display())))?;
+    let extracted = gemini_extract_receipt(&api_key, &rec.mime_type, &bytes)
+        .await
+        .map_err(|e| ToolError::Exec(format!("gemini: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: extracted,
+        trace: None,
+    })
+}
+
 /// List the user's active loans / mortgages / receivables with remaining
 /// principal, next due date, and progress %. Same shape as `/api/me/loans`.
 /// Use this for overview questions ("我现在有哪些贷款", "how much do I still owe")
