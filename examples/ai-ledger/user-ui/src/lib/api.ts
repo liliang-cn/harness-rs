@@ -77,6 +77,27 @@ export interface Account {
   created_at: string;
 }
 
+export interface Transaction {
+  id: string;
+  kind: 'expense' | 'income' | 'transfer';
+  amount: string; // decimal as string for fidelity
+  currency: string;
+  account_id: string;
+  counter_account_id: string | null;
+  category: string | null;
+  note: string | null;
+  occurred_at: string; // RFC3339
+  created_at: string;
+}
+
+export interface TxnQuery {
+  from?: string; // ISO date — currently ignored server-side (client filter)
+  to?: string;
+  category?: string;
+  account_id?: string;
+  limit?: number;
+}
+
 // ─── endpoints ────────────────────────────────────────────
 
 export const ledgerApi = {
@@ -114,4 +135,28 @@ export const ledgerApi = {
       { method: 'POST', body: JSON.stringify({ currency }) },
     ),
   accounts: () => api<{ count: number; accounts: Account[] }>('/api/accounts'),
+  transactions: (q: TxnQuery = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') p.set(k, String(v));
+    const qs = p.toString() ? `?${p}` : '';
+    return api<{ total_matched?: number; returned?: number; count?: number; transactions: Transaction[] }>(
+      `/api/transactions${qs}`,
+    );
+  },
+  // NOTE: backend currently exposes GET /api/transactions only.
+  // The create/update/delete endpoints below are scaffolded for the next
+  // server-side iteration — they will 404 until the Rust side adds the
+  // matching routes. The UI surfaces those errors via toast.
+  createTransaction: (body: Partial<Transaction>) =>
+    api<{ transaction: Transaction }>(`/api/transactions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateTransaction: (id: string, body: Partial<Transaction>) =>
+    api<{ ok: true }>(`/api/transactions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteTransaction: (id: string) =>
+    api<{ ok: true }>(`/api/transactions/${id}`, { method: 'DELETE' }),
 };
