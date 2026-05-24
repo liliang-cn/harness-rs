@@ -13,13 +13,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
@@ -27,15 +20,7 @@ import {
 } from '@/components/ui/chart';
 import { Area, AreaChart, XAxis, YAxis } from 'recharts';
 import { ledgerApi, type NetWorthSnapshot, type Account } from '@/lib/api';
-
-const TRACKED_CURRENCIES = [
-  'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'HKD', 'SGD', 'AUD', 'CAD', 'CHF', 'KRW',
-];
-
-const CURRENCY_SYMBOL: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥',
-  HKD: 'HK$', SGD: 'S$', AUD: 'A$', CAD: 'C$', CHF: 'CHF ', KRW: '₩',
-};
+import { CurrencyPicker, CURRENCY_SYMBOL } from '@/components/currency-picker';
 
 function formatMoney(amt: number, ccy: string): string {
   const noDecimals = ccy === 'JPY' || ccy === 'KRW';
@@ -187,18 +172,7 @@ export function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={ccy} onValueChange={changeCurrency}>
-              <SelectTrigger size="sm" className="w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TRACKED_CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c} {CURRENCY_SYMBOL[c] ?? ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CurrencyPicker value={ccy} onChange={changeCurrency} />
             <Button
               variant="outline"
               size="icon"
