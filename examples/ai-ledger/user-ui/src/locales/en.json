@@ -146,7 +146,12 @@
     "toolFailed": "{{name}} failed",
     "error": "Stream error: {{message}}",
     "budgetExhausted": "Reply truncated — token budget hit.",
-    "emptyMessages": "Ask anything to get started."
+    "emptyMessages": "Ask anything to get started.",
+    "attach": "Attach a receipt or PDF",
+    "attachUploading": "Uploading…",
+    "attachFailed": "Upload failed",
+    "attachRemove": "Remove",
+    "attachLimitReached": "Up to 3 attachments per message."
   },
   "profile": {
     "title": "Profile",

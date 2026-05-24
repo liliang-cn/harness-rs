@@ -241,6 +241,43 @@ export interface Trade {
 
 // ─── chat ─────────────────────────────────────────────────
 
+export interface Attachment {
+  id: string;
+  mime_type: string;
+  size_bytes: number;
+  kind: 'image' | 'pdf';
+}
+
+export async function uploadAttachment(file: File): Promise<Attachment> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const resp = await fetch('/api/chat/attachments', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+    body: fd,
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => `HTTP ${resp.status}`);
+    throw new Error(text);
+  }
+  return resp.json();
+}
+
+export function attachmentUrl(id: string): string {
+  return `/api/chat/attachments/${encodeURIComponent(id)}`;
+}
+
+/** Bearer-protected blob fetch — use this for <img src> previews since
+ *  the GET endpoint requires the Authorization header. Caller is
+ *  responsible for URL.revokeObjectURL on unmount. */
+export async function fetchAttachmentBlob(id: string): Promise<string> {
+  const resp = await fetch(attachmentUrl(id), {
+    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return URL.createObjectURL(await resp.blob());
+}
+
 export interface ChatSession {
   id: string;
   title: string | null;

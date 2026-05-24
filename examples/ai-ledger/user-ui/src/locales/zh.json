@@ -144,7 +144,12 @@
     "toolFailed": "{{name}} 失败",
     "error": "流式错误：{{message}}",
     "budgetExhausted": "回复被截断 — token 预算用尽。",
-    "emptyMessages": "随便问点什么开始吧。"
+    "emptyMessages": "随便问点什么开始吧。",
+    "attach": "上传小票或 PDF",
+    "attachUploading": "上传中…",
+    "attachFailed": "上传失败",
+    "attachRemove": "移除",
+    "attachLimitReached": "每次最多 3 个附件。"
   },
   "profile": {
     "title": "我的",

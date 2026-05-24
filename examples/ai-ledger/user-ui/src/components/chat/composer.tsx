@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Mic, MicOff, Send, Square } from 'lucide-react';
+import { Mic, MicOff, Send, Square, X, FileText } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { fetchAttachmentBlob, type Attachment } from '@/lib/api';
+import { AttachmentButton } from './attachment-button';
 
 interface ComposerProps {
-  onSend: (text: string) => void;
+  onSend: (text: string, attachment_ids: string[]) => void;
   onStop?: () => void;
   busy: boolean;
 }
+
+const MAX_ATTACHMENTS = 3;
 
 // Minimal type surface for Web Speech API — no @types package needed.
 interface SpeechRecognitionEvent extends Event {
@@ -39,6 +43,7 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
 export function Composer({ onSend, onStop, busy }: ComposerProps) {
   const { t, i18n } = useTranslation();
   const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [listening, setListening] = useState(false);
   const recogRef = useRef<SpeechRecognition | null>(null);
   const SpeechCtor = getSpeechRecognitionCtor();
@@ -56,9 +61,14 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
 
   function trySend() {
     const v = text.trim();
-    if (!v || busy) return;
-    onSend(v);
+    if ((!v && attachments.length === 0) || busy) return;
+    onSend(v, attachments.map((a) => a.id));
     setText('');
+    setAttachments([]);
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((cur) => cur.filter((a) => a.id !== id));
   }
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -112,10 +122,19 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
     }
   }
 
+  const canSend = !busy && (text.trim().length > 0 || attachments.length > 0);
+
   return (
     <div className="border-border bg-background sticky bottom-0 border-t p-3">
-      {/* Pill container — mic / textarea / send sit on the same baseline
-          inside one rounded border. No mismatched standalone buttons. */}
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {attachments.map((a) => (
+            <AttachmentPreview key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
+          ))}
+        </div>
+      )}
+      {/* Pill container — mic / attach / textarea / send sit on the same
+          baseline inside one rounded border. */}
       <div
         className={cn(
           'border-input bg-background flex items-center gap-1 rounded-2xl border pr-1 pl-1 transition-shadow',
@@ -138,6 +157,10 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
             {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
+        <AttachmentButton
+          onAttached={(a) => setAttachments((cur) => [...cur, a])}
+          disabled={busy || attachments.length >= MAX_ATTACHMENTS}
+        />
         <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -164,16 +187,73 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
             type="button"
             aria-label={t('chat.send')}
             onClick={trySend}
-            disabled={busy || !text.trim()}
+            disabled={!canSend}
             className={cn(
               'bg-foreground text-background hover:bg-foreground/90 flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
-              (busy || !text.trim()) && 'bg-muted text-muted-foreground hover:bg-muted cursor-not-allowed',
+              !canSend && 'bg-muted text-muted-foreground hover:bg-muted cursor-not-allowed',
             )}
           >
             <Send className="size-4" />
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function AttachmentPreview({
+  attachment,
+  onRemove,
+}: {
+  attachment: Attachment;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (attachment.kind !== 'image') return;
+    let blobUrl: string | null = null;
+    let cancelled = false;
+    fetchAttachmentBlob(attachment.id)
+      .then((u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+          return;
+        }
+        blobUrl = u;
+        setUrl(u);
+      })
+      .catch(() => {
+        /* leave placeholder */
+      });
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [attachment.id, attachment.kind]);
+
+  return (
+    <div className="relative">
+      {attachment.kind === 'image' ? (
+        <img
+          src={url ?? undefined}
+          alt=""
+          className="bg-muted size-12 rounded-md object-cover"
+        />
+      ) : (
+        <div className="bg-muted text-muted-foreground flex size-12 items-center justify-center rounded-md">
+          <FileText className="size-5" />
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={t('chat.attachRemove')}
+        className="bg-foreground text-background absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full"
+      >
+        <X className="size-3" />
+      </button>
     </div>
   );
 }

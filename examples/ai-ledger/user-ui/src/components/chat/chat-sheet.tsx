@@ -123,7 +123,11 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   }, []);
 
   const handleSend = useCallback(
-    async (text: string, opts: { regenerate?: boolean } = {}) => {
+    async (
+      text: string,
+      attachment_ids: string[] = [],
+      opts: { regenerate?: boolean } = {},
+    ) => {
       if (busy) return;
       // Lazy-create the DB session on the first send of a draft. Avoids
       // leaving 0-message orphans when the user opens chat, clicks "+",
@@ -208,6 +212,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
         },
         ctrl.signal,
         i18n.language,
+        attachment_ids,
       );
 
       // Commit the assistant message. Use server-provided `reply` if non-empty
@@ -256,8 +261,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
     // Drop everything after that user message (the assistant turn we
     // didn't like, plus any stray tool/error messages).
     setMessages((cur) => cur.slice(0, lastUserIdx + 1));
-    // Re-run without appending another user bubble.
-    handleSend(lastUserText, { regenerate: true });
+    // Re-run without appending another user bubble. Pass empty
+    // attachment_ids — we can't re-extract a receipt mid-confirmation.
+    handleSend(lastUserText, [], { regenerate: true });
   }, [busy, messages, handleSend]);
 
   // Show the regenerate affordance only when:
