@@ -10,7 +10,7 @@ use crate::tools::ledger_path;
 use crate::{SYSTEM_PROMPT, build_task_description, build_task_description_with_lang, collect_tools};
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
     response::{Html, Sse, sse::Event as SseEvent, sse::KeepAlive},
     routing::{get, post},
@@ -287,6 +287,19 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/me/export/subscriptions.csv", get(export_subscriptions_csv))
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
+        // Receipt / PDF uploads from the chat composer. The upload route gets
+        // its own 20 MB body-limit override (axum default is 2 MB, which
+        // breaks for any modern phone receipt photo). serve is auth-gated and
+        // scoped to the caller's user_id.
+        .route(
+            "/api/chat/attachments",
+            post(crate::attachments::upload_handler)
+                .layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/attachments/:id",
+            get(crate::attachments::serve_handler),
+        )
         // Session-aware chat: each conversation is persisted in the DB so
         // the user can leave a session and return to continue.
         .route("/api/chat/sessions", get(list_chat_sessions_handler).post(create_chat_session_handler))
