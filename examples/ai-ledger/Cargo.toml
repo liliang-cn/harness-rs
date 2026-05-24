@@ -42,6 +42,7 @@ tower-http      = { version = "0.5", features = ["cors"] }
 tokio-stream    = "0.1"
 futures         = { workspace = true }
 reqwest         = { workspace = true }
+base64          = "0.22"
 thiserror       = { workspace = true }
 schemars        = { workspace = true }
 tracing         = { workspace = true }
