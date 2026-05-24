@@ -83,7 +83,7 @@ export function Portfolio() {
           {loading ? (
             <Skeleton className="mx-auto h-[260px] w-[260px] rounded-full" />
           ) : (
-            <AllocationPie positions={positions} />
+            <AllocationPie />
           )}
         </CardContent>
       </Card>
