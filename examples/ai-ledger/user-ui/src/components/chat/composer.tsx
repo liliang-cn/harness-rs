@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Mic, MicOff, Send, Square } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -115,19 +114,29 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
 
   return (
     <div className="border-border bg-background sticky bottom-0 border-t p-3">
-      <div className="flex items-end gap-2">
+      {/* Pill container — mic / textarea / send sit on the same baseline
+          inside one rounded border. No mismatched standalone buttons. */}
+      <div
+        className={cn(
+          'border-input bg-background flex items-center gap-1 rounded-2xl border pr-1 pl-1 transition-shadow',
+          'focus-within:ring-ring/30 focus-within:ring-2',
+        )}
+      >
         {SpeechCtor && (
-          <Button
+          <button
             type="button"
-            size="icon"
-            variant={listening ? 'destructive' : 'outline'}
             aria-label={listening ? t('chat.micListening') : t('chat.mic')}
             onClick={toggleMic}
             disabled={busy && !listening}
-            className={cn(listening && 'animate-pulse')}
+            className={cn(
+              'flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
+              'text-muted-foreground hover:text-foreground hover:bg-muted',
+              listening && 'text-destructive animate-pulse',
+              busy && !listening && 'cursor-not-allowed opacity-50',
+            )}
           >
             {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-          </Button>
+          </button>
         )}
         <Textarea
           value={text}
@@ -135,29 +144,34 @@ export function Composer({ onSend, onStop, busy }: ComposerProps) {
           onKeyDown={onKey}
           placeholder={t('chat.placeholder')}
           rows={1}
-          className="max-h-40 min-h-10 flex-1 resize-none"
+          className={cn(
+            'max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-1 py-2 text-sm shadow-none',
+            'focus-visible:ring-0',
+          )}
           disabled={busy}
         />
         {busy && onStop ? (
-          <Button
+          <button
             type="button"
-            size="icon"
-            variant="outline"
             aria-label={t('chat.stop')}
             onClick={onStop}
+            className="bg-foreground text-background hover:bg-foreground/90 flex size-9 shrink-0 items-center justify-center rounded-full"
           >
             <Square className="size-4" />
-          </Button>
+          </button>
         ) : (
-          <Button
+          <button
             type="button"
-            size="icon"
             aria-label={t('chat.send')}
             onClick={trySend}
             disabled={busy || !text.trim()}
+            className={cn(
+              'bg-foreground text-background hover:bg-foreground/90 flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
+              (busy || !text.trim()) && 'bg-muted text-muted-foreground hover:bg-muted cursor-not-allowed',
+            )}
           >
             <Send className="size-4" />
-          </Button>
+          </button>
         )}
       </div>
     </div>
