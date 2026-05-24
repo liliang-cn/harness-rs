@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
 // Random 3000+ port per repo convention.
@@ -11,7 +12,7 @@ export default defineConfig({
   // index.html will be relocated to /legacy/ by the backend during
   // migration.
   base: '/',
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

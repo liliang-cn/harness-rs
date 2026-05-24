@@ -1,20 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { TrendingDown, TrendingUp, RotateCw } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Card,
-  Typography,
-  Space,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
   Select,
-  Button,
-  Spin,
-  Tag,
-  message,
-} from 'antd';
-import { ReloadOutlined, RiseOutlined, FallOutlined } from '@ant-design/icons';
-import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { Area, AreaChart, XAxis, YAxis } from 'recharts';
 import { ledgerApi, type NetWorthSnapshot, type Account } from '@/lib/api';
-
-const { Title, Text } = Typography;
 
 const TRACKED_CURRENCIES = [
   'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'HKD', 'SGD', 'AUD', 'CAD', 'CHF', 'KRW',
@@ -26,7 +38,6 @@ const CURRENCY_SYMBOL: Record<string, string> = {
 };
 
 function formatMoney(amt: number, ccy: string): string {
-  // JPY / KRW / CNY: 0 decimals; everything else 2.
   const noDecimals = ccy === 'JPY' || ccy === 'KRW';
   return (
     (CURRENCY_SYMBOL[ccy] ?? `${ccy} `) +
@@ -36,6 +47,13 @@ function formatMoney(amt: number, ccy: string): string {
     })
   );
 }
+
+const chartConfig = {
+  net: {
+    label: 'Net worth',
+    color: 'var(--chart-1)',
+  },
+} satisfies ChartConfig;
 
 export function Dashboard() {
   const { t, i18n } = useTranslation();
@@ -57,7 +75,7 @@ export function Dashboard() {
       setSeries(s.series);
       setAccounts(a.accounts);
     } catch (e) {
-      message.error(`${t('common.error')}: ${(e as Error).message}`);
+      toast.error(`${t('common.error')}: ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -72,11 +90,10 @@ export function Dashboard() {
     try {
       const r = await ledgerApi.setBaseCurrency(ccy);
       setSnap(r.snapshot);
-      // Re-pull series in the new base currency for chart continuity
       const s = await ledgerApi.netWorthSeries();
       setSeries(s.series);
     } catch (e) {
-      message.error(`${t('common.error')}: ${(e as Error).message}`);
+      toast.error(`${t('common.error')}: ${(e as Error).message}`);
     }
   }
 
@@ -88,7 +105,7 @@ export function Dashboard() {
       const s = await ledgerApi.netWorthSeries();
       setSeries(s.series);
     } catch (e) {
-      message.error(`${t('common.error')}: ${(e as Error).message}`);
+      toast.error(`${t('common.error')}: ${(e as Error).message}`);
     } finally {
       setRefreshing(false);
     }
@@ -96,20 +113,22 @@ export function Dashboard() {
 
   if (loading || !snap) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
-        <Spin size="large" />
+      <div className="space-y-6">
+        <Skeleton className="h-44 w-full" />
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-72 w-full" />
       </div>
     );
   }
 
   const ccy = snap.base_currency;
 
-  // 30d delta — find the snapshot ~30 days ago in series (closest by date).
-  let delta30Pct: number | null = null;
+  // 30d delta vs the earliest snapshot ≥ 30 days ago (or first row if shorter
+  // history).
   let delta30Abs: number | null = null;
+  let delta30Pct: number | null = null;
   if (series.length > 1) {
-    const today = new Date(snap.snapshot_date);
-    const target = new Date(today);
+    const target = new Date(snap.snapshot_date);
     target.setDate(target.getDate() - 30);
     const targetISO = target.toISOString().slice(0, 10);
     const past = series.find((s) => s.snapshot_date >= targetISO) ?? series[0];
@@ -121,9 +140,9 @@ export function Dashboard() {
   const up = (delta30Abs ?? 0) >= 0;
 
   const composition = [
-    { label: t('dashboard.cash'), value: snap.cash_amt, color: '#52c41a' },
-    { label: t('dashboard.investments'), value: snap.investments_amt, color: '#1677ff' },
-    { label: t('dashboard.debt'), value: -snap.debt_amt, color: '#ff4d4f' },
+    { label: t('dashboard.cash'), value: snap.cash_amt, color: 'bg-emerald-500' },
+    { label: t('dashboard.investments'), value: snap.investments_amt, color: 'bg-sky-500' },
+    { label: t('dashboard.debt'), value: -snap.debt_amt, color: 'bg-rose-500' },
   ];
   const totalAbs =
     Math.abs(snap.cash_amt) + Math.abs(snap.investments_amt) + Math.abs(snap.debt_amt);
@@ -134,176 +153,197 @@ export function Dashboard() {
   }));
 
   return (
-    <Space direction="vertical" size={24} style={{ width: '100%' }}>
+    <div className="space-y-6">
+      {/* Net worth hero */}
       <Card>
-        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-          <Space style={{ width: '100%', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-            <Title level={5} style={{ margin: 0, color: 'var(--ant-color-text-secondary)', fontWeight: 500 }}>
-              {t('dashboard.title')}
-            </Title>
-            <Space>
-              <Select
-                size="small"
-                value={ccy}
-                style={{ width: 110 }}
-                onChange={changeCurrency}
-                options={TRACKED_CURRENCIES.map((c) => ({
-                  value: c,
-                  label: `${c} ${CURRENCY_SYMBOL[c] ?? ''}`,
-                }))}
-              />
-              <Button
-                size="small"
-                icon={<ReloadOutlined />}
-                onClick={refreshNow}
-                loading={refreshing}
-                title={t('dashboard.refreshNow')}
-              />
-            </Space>
-          </Space>
-          <Title level={1} style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}>
-            {formatMoney(snap.net_amt, ccy)}
-          </Title>
-          {delta30Pct !== null && delta30Abs !== null ? (
-            <Text type={up ? 'success' : 'danger'} style={{ fontSize: 14 }}>
-              {up ? <RiseOutlined /> : <FallOutlined />}{' '}
-              {t('dashboard.delta30', {
-                value: `${up ? '+' : ''}${formatMoney(delta30Abs, ccy)}`,
-                pct: `${up ? '+' : ''}${delta30Pct.toFixed(2)}%`,
+        <CardHeader className="flex flex-row items-start justify-between space-y-0">
+          <div>
+            <CardDescription>{t('dashboard.title')}</CardDescription>
+            <CardTitle className="mt-1 text-4xl font-bold tabular-nums">
+              {formatMoney(snap.net_amt, ccy)}
+            </CardTitle>
+            <div className="mt-2 text-sm">
+              {delta30Abs !== null && delta30Pct !== null ? (
+                <span
+                  className={cn_inline(
+                    'inline-flex items-center gap-1',
+                    up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
+                  )}
+                >
+                  {up ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />}
+                  {t('dashboard.delta30', {
+                    value: `${up ? '+' : ''}${formatMoney(delta30Abs, ccy)}`,
+                    pct: `${up ? '+' : ''}${delta30Pct.toFixed(2)}%`,
+                  })}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{t('dashboard.noHistory')}</span>
+              )}
+            </div>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {t('dashboard.asOf', {
+                date: new Date(snap.snapshot_date).toLocaleDateString(i18n.language),
               })}
-            </Text>
-          ) : (
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              {t('dashboard.noHistory')}
-            </Text>
-          )}
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('dashboard.asOf', {
-              date: new Date(snap.snapshot_date).toLocaleDateString(i18n.language),
-            })}
-          </Text>
-        </Space>
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={ccy} onValueChange={changeCurrency}>
+              <SelectTrigger size="sm" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRACKED_CURRENCIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c} {CURRENCY_SYMBOL[c] ?? ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={refreshNow}
+              disabled={refreshing}
+              title={t('dashboard.refreshNow')}
+            >
+              <RotateCw className={refreshing ? 'animate-spin' : ''} />
+            </Button>
+          </div>
+        </CardHeader>
       </Card>
 
-      <Card title={t('dashboard.composition')}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {/* Composition */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('dashboard.composition')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           {composition.map((row) => {
             const pct = totalAbs > 0 ? (Math.abs(row.value) / totalAbs) * 100 : 0;
             return (
               <div key={row.label}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text>
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        width: 8,
-                        height: 8,
-                        borderRadius: 4,
-                        background: row.color,
-                        marginRight: 8,
-                      }}
-                    />
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span className="inline-flex items-center gap-2">
+                    <span className={`size-2 rounded-full ${row.color}`} />
                     {row.label}
-                  </Text>
-                  <Text style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  </span>
+                  <span className="tabular-nums">
                     {formatMoney(row.value, ccy)}{' '}
-                    <Text type="secondary" style={{ fontSize: 12 }}>
+                    <span className="text-muted-foreground text-xs">
                       ({pct.toFixed(1)}%)
-                    </Text>
-                  </Text>
+                    </span>
+                  </span>
                 </div>
-                <div
-                  style={{
-                    height: 6,
-                    borderRadius: 3,
-                    background: 'var(--ant-color-fill-secondary)',
-                    overflow: 'hidden',
-                  }}
-                >
+                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
                   <div
-                    style={{
-                      width: `${pct}%`,
-                      height: '100%',
-                      background: row.color,
-                      transition: 'width 0.3s',
-                    }}
+                    className={`h-full ${row.color} transition-all`}
+                    style={{ width: `${pct}%` }}
                   />
                 </div>
               </div>
             );
           })}
-        </Space>
+        </CardContent>
       </Card>
 
+      {/* Trend chart */}
       {chartData.length > 1 && (
-        <Card title={t('dashboard.trend12mo')}>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={chartData}>
-              <XAxis
-                dataKey="date"
-                tickFormatter={(d) =>
-                  new Date(d).toLocaleDateString(i18n.language, {
-                    month: 'short',
-                    day: 'numeric',
-                  })
-                }
-                tick={{ fontSize: 11 }}
-              />
-              <YAxis
-                domain={['auto', 'auto']}
-                tick={{ fontSize: 11 }}
-                tickFormatter={(v) => {
-                  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
-                  if (v >= 1e3) return `${(v / 1e3).toFixed(0)}k`;
-                  return String(v);
-                }}
-                width={48}
-              />
-              <Tooltip
-                formatter={(v) => (typeof v === 'number' ? formatMoney(v, ccy) : String(v))}
-              />
-              <Line
-                type="monotone"
-                dataKey="net"
-                stroke="var(--ant-color-primary)"
-                strokeWidth={2}
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t('dashboard.trend12mo')}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer config={chartConfig} className="h-56 w-full">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="netGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  tickFormatter={(d) =>
+                    new Date(d).toLocaleDateString(i18n.language, {
+                      month: 'short',
+                      day: 'numeric',
+                    })
+                  }
+                  style={{ fontSize: 11 }}
+                />
+                <YAxis
+                  width={48}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v) => {
+                    if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+                    if (v >= 1e3) return `${(v / 1e3).toFixed(0)}k`;
+                    return String(v);
+                  }}
+                  style={{ fontSize: 11 }}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(v) =>
+                        typeof v === 'number' ? formatMoney(v, ccy) : String(v)
+                      }
+                    />
+                  }
+                />
+                <Area
+                  type="monotone"
+                  dataKey="net"
+                  stroke="var(--chart-1)"
+                  strokeWidth={2}
+                  fill="url(#netGradient)"
+                />
+              </AreaChart>
+            </ChartContainer>
+          </CardContent>
         </Card>
       )}
 
-      <Card title={`${t('dashboard.accounts')} (${accounts.length})`}>
-        {accounts.length === 0 ? (
-          <Text type="secondary">{t('dashboard.noAccounts')}</Text>
-        ) : (
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            {accounts.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  padding: '8px 0',
-                  borderBottom: '1px solid var(--ant-color-border-secondary)',
-                }}
-              >
-                <Space>
-                  <Text strong>{a.name}</Text>
-                  <Tag>{a.kind}</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {a.currency}
-                  </Text>
-                </Space>
-                <Text style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {Number(a.opening_balance).toLocaleString()}
-                </Text>
-              </div>
-            ))}
-          </Space>
-        )}
+      {/* Accounts */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            {t('dashboard.accounts')} ({accounts.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {accounts.length === 0 ? (
+            <p className="text-muted-foreground text-sm">{t('dashboard.noAccounts')}</p>
+          ) : (
+            <ul className="divide-border divide-y">
+              {accounts.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{a.name}</span>
+                    <Badge variant="secondary">{a.kind}</Badge>
+                    <span className="text-muted-foreground text-xs">{a.currency}</span>
+                  </div>
+                  <span className="tabular-nums">
+                    {Number(a.opening_balance).toLocaleString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
       </Card>
-    </Space>
+    </div>
   );
+}
+
+// Tiny inline cn wrapper — Dashboard uses this in two spots and importing
+// the shared one is overkill here.
+function cn_inline(...xs: (string | undefined | false)[]) {
+  return xs.filter(Boolean).join(' ');
 }
