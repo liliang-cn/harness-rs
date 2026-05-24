@@ -33,17 +33,14 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
 
-const INDEX_HTML: &str = include_str!("index.html");
-
 /// Vite-built admin SPA, embedded into the binary so deploys stay
 /// single-artifact. Built by `cd admin-ui && npm run build`.
 static ADMIN_DIST: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/admin-ui/dist");
 
-/// Vite-built user-facing SPA (the dashboard + login). Replaces the
-/// old hand-written `index.html` at site root; old HTML stays available
-/// under `/legacy/` for the rest of the v1 features that haven't been
-/// ported yet (流水 / portfolio / chat / 我的). Built by
+/// Vite-built user-facing SPA (dashboard, ledger, portfolio, profile,
+/// chat, login). The new SPA fully replaces the old hand-written
+/// `index.html` — there is no `/legacy/` mount anymore. Built by
 /// `cd user-ui && npm run build`.
 static USER_UI_DIST: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/user-ui/dist");
@@ -77,10 +74,6 @@ requires citing a specific number to make sense, it's transient — skip it.\n\
 If the session was just routine logging with no observable preference, \
 return [].\
 ";
-/// Vendored copy of `marked` v15 (~40KB). Bundled in the binary so the chat
-/// UI's markdown rendering works without a third-party CDN (some deployments
-/// sit on networks where jsdelivr / unpkg are intermittently blocked).
-const MARKED_JS: &str = include_str!("marked.min.js");
 
 /// One row in the model picker. `available=false` rows render greyed-out
 /// so the user knows why a model isn't selectable (server missing the key).
@@ -248,7 +241,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         // SPA client-side routes: /ledger, /portfolio, /profile, /app, /...
         // Direct GETs (refresh / bookmark / share) must return index.html so
         // React Router can resolve the path. We enumerate each to avoid
-        // colliding with the explicit /api, /admin, /assets, /legacy,
+        // colliding with the explicit /api, /admin, /assets,
         // /robots.txt, /sitemap.xml, /llms*.txt routes above.
         .route("/ledger", get(serve_user_ui_index))
         .route("/portfolio", get(serve_user_ui_index))
@@ -261,11 +254,6 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/sitemap.xml", get(crate::seo::sitemap))
         .route("/llms.txt", get(crate::seo::llms))
         .route("/llms-full.txt", get(crate::seo::llms_full))
-        // Old hand-written index.html kept under /legacy/ during migration —
-        // /legacy/marked.min.js is still served the same way.
-        .route("/legacy", get(serve_index))
-        .route("/legacy/", get(serve_index))
-        .route("/legacy/marked.min.js", get(serve_marked_js))
         // Admin SPA: GET /admin → index.html; GET /admin/* → matching asset
         // from the bundled dist, with SPA fallback to index.html.
         .route("/admin", get(serve_admin_index))
@@ -331,14 +319,6 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
     eprintln!("→ listening on http://{}", addr);
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-async fn serve_index() -> impl axum::response::IntoResponse {
-    use axum::http::header;
-    (
-        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
-        Html(INDEX_HTML),
-    )
 }
 
 // ── user-facing SPA serve ──
@@ -472,18 +452,6 @@ fn mime_for(path: &str) -> &'static str {
         "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
-}
-
-async fn serve_marked_js() -> impl axum::response::IntoResponse {
-    use axum::http::header;
-    (
-        [
-            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
-            // Pinned vendored copy — fine to cache aggressively.
-            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
-        ],
-        MARKED_JS,
-    )
 }
 
 async fn info_handler(State(s): State<AppState>) -> Json<Value> {
