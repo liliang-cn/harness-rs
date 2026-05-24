@@ -106,6 +106,31 @@
       "other": "其他"
     }
   },
+  "chat": {
+    "fab": "和 AI 聊聊",
+    "title": "聊天",
+    "newChat": "新对话",
+    "back": "返回会话列表",
+    "sessionsEmpty": "还没有对话，新开一个吧。",
+    "untitled": "未命名",
+    "msgCount_other": "{{count}} 条消息",
+    "delete": "删除",
+    "deleteConfirm": "删除此对话？",
+    "deleted": "对话已删除",
+    "placeholder": "随便问 — 记一笔账、做预算、查看投资组合…",
+    "send": "发送",
+    "stop": "停止",
+    "mic": "语音输入",
+    "micListening": "正在听 — 点击停止",
+    "micUnsupported": "当前浏览器不支持语音输入",
+    "thinking": "思考中…",
+    "toolCalling": "正在调用 {{name}}…",
+    "toolDone": "已使用 {{name}}",
+    "toolFailed": "{{name}} 失败",
+    "error": "流式错误：{{message}}",
+    "budgetExhausted": "回复被截断 — token 预算用尽。",
+    "emptyMessages": "随便问点什么开始吧。"
+  },
   "currency": {
     "USD": "美元",
     "EUR": "欧元",
