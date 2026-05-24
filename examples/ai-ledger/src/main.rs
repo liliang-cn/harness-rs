@@ -16,6 +16,7 @@ mod admin;
 mod auth;
 mod db;
 mod fx;
+mod loans;
 mod model;
 mod net_worth;
 mod portfolio;
@@ -725,7 +726,8 @@ async fn main() -> anyhow::Result<()> {
             std::env::var("HARNESS_LEDGER_DB").unwrap_or_else(|_| "ledger.db".into()),
         );
         fx::spawn_refresher(db_path.clone());
-        net_worth::spawn_snapshot_cron(db_path);
+        net_worth::spawn_snapshot_cron(db_path.clone());
+        loans::spawn_accrual_cron(db_path);
 
         return server::serve(state, addr).await;
     }
