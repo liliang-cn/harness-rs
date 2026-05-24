@@ -341,6 +341,13 @@ export const ledgerApi = {
   },
   assets: () =>
     api<{ count: number; assets: AssetWithPrice[] }>('/api/portfolio/assets'),
+  allocation: () =>
+    api<{
+      base_currency: string;
+      total: number;
+      by_class: { class: string; value: number; pct: number }[];
+      missing_rate_for: string[];
+    }>('/api/portfolio/allocation'),
   monthlyReport: (year?: number, month?: number) => {
     const p = new URLSearchParams();
     if (year !== undefined) p.set('year', String(year));

@@ -305,6 +305,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/me/net-worth/refresh", post(net_worth_refresh_handler))
         .route("/api/me/base-currency", post(set_base_currency_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
+        .route("/api/portfolio/allocation", get(portfolio_allocation_handler))
         .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler));
 
     // Mount admin endpoints — all gated by `require_admin` in the handlers.
@@ -2192,6 +2193,66 @@ async fn portfolio_summary_handler(auth: AuthCtx) -> Result<Json<Value>, ApiErro
         "market_value_by_class_currency": to_json(value_by_class),
         "missing_prices_for": missing_prices,
         "position_count": positions.iter().filter(|p| p.qty > rust_decimal::Decimal::ZERO).count(),
+    })))
+}
+
+/// Allocation pie / bar feeder: positions bucketed by asset_class with
+/// all market values converted to the user's `base_currency` using the
+/// cached FX rates. The old portfolio_summary_handler kept positions
+/// split per native currency which made cross-currency portfolios
+/// (e.g. USD stocks + CNY gold) look catastrophically skewed when
+/// plotted naively.
+async fn portfolio_allocation_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
+    use rust_decimal::Decimal;
+    use rust_decimal::prelude::ToPrimitive;
+    use std::collections::HashMap;
+    let db = open_db()?;
+    let base = auth.user.base_currency.clone();
+    let positions = positions_with_prices(&db, &auth.user.id)?;
+    let mut by_class: HashMap<String, f64> = HashMap::new();
+    let mut total: f64 = 0.0;
+    let mut missing_rate_for: Vec<String> = Vec::new();
+    for p in &positions {
+        if p.qty <= Decimal::ZERO {
+            continue;
+        }
+        let Some(mv) = p.market_value else { continue };
+        let mv_native = mv.to_f64().unwrap_or(0.0);
+        if mv_native <= 0.0 {
+            continue;
+        }
+        // Convert to base. fx::convert returns Some(amount) when both
+        // currencies are the same OR a cached rate exists; None if the
+        // pair has never been fetched. We fall back to the native amount
+        // and flag the position so the UI can show a warning.
+        let converted = match crate::fx::convert(&db, mv_native, &p.currency, &base) {
+            Ok(Some(v)) => v,
+            _ => {
+                missing_rate_for.push(format!("{}:{}", p.symbol, p.currency));
+                mv_native // best-effort, still shows up in the right bucket
+            }
+        };
+        let cls = p.asset_class.as_str().to_string();
+        *by_class.entry(cls).or_insert(0.0) += converted;
+        total += converted;
+    }
+    let mut rows: Vec<Value> = by_class
+        .into_iter()
+        .map(|(class, value)| {
+            let pct = if total > 0.0 { (value / total) * 100.0 } else { 0.0 };
+            json!({"class": class, "value": value, "pct": pct})
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        let av = a["value"].as_f64().unwrap_or(0.0);
+        let bv = b["value"].as_f64().unwrap_or(0.0);
+        bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(Json(json!({
+        "base_currency": base,
+        "total": total,
+        "by_class": rows,
+        "missing_rate_for": missing_rate_for,
     })))
 }
 

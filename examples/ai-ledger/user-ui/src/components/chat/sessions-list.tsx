@@ -25,7 +25,13 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
     ledgerApi
       .chatSessions()
       .then((j) => {
-        if (!cancelled) setSessions(j.sessions);
+        if (cancelled) return;
+        // Empty sessions are noise in the list — every "+ new chat"
+        // historically created a row before the user typed anything.
+        // We now defer creation in ChatSheet, but legacy rows + any race
+        // (sheet closed mid-create) leave stale 0-message entries in
+        // the DB. Hide them at render time.
+        setSessions(j.sessions.filter((s) => s.message_count > 0));
       })
       .catch(() => {
         if (!cancelled) setSessions([]);

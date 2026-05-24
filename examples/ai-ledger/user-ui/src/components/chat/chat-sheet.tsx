@@ -45,8 +45,16 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [sessionsKey, setSessionsKey] = useState(0);
+  // "Draft" — user clicked "+ New chat" but hasn't sent anything yet.
+  // We hold off on creating the DB session until the first real message
+  // arrives, so empty FAB-clicks don't leave 0-message rows behind.
+  const [drafting, setDrafting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const toolIdRef = useRef(0);
+  // Set when handleSend just lazy-created the session — we already know
+  // it's empty on the server and we're about to optimistically append a
+  // user bubble. Skip the load-effect's GET to avoid racing it.
+  const skipNextLoad = useRef(false);
 
   // Load messages whenever a session is selected.
   useEffect(() => {
@@ -55,6 +63,10 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       setMessages([]);
       setStreaming(null);
       setToolEvents([]);
+      return;
+    }
+    if (skipNextLoad.current) {
+      skipNextLoad.current = false;
       return;
     }
     let cancelled = false;
@@ -74,28 +86,33 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   }, [activeId]);
 
   // If the sheet closes mid-stream, abort the fetch so we don't keep the
-  // generator running in the background.
+  // generator running in the background. Also reset draft state so the
+  // next open lands on the sessions list (otherwise a drafted-but-never-
+  // sent chat would silently re-open).
   useEffect(() => {
     if (!open) {
       abortRef.current?.abort();
       abortRef.current = null;
+      setDrafting(false);
     }
   }, [open]);
 
-  const handleNew = useCallback(async () => {
-    try {
-      const j = await ledgerApi.createChatSession();
-      setActiveId(j.session.id);
-      setSessionsKey((k) => k + 1);
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
+  // Enter draft mode — no API call yet. handleSend creates the session
+  // lazily on first message.
+  const handleNew = useCallback(() => {
+    setActiveId(null);
+    setSession(null);
+    setMessages([]);
+    setStreaming(null);
+    setToolEvents([]);
+    setDrafting(true);
   }, []);
 
   const handleBack = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setActiveId(null);
+    setDrafting(false);
     setBusy(false);
     setSessionsKey((k) => k + 1);
   }, []);
@@ -107,14 +124,30 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
 
   const handleSend = useCallback(
     async (text: string, opts: { regenerate?: boolean } = {}) => {
-      if (!activeId || busy) return;
+      if (busy) return;
+      // Lazy-create the DB session on the first send of a draft. Avoids
+      // leaving 0-message orphans when the user opens chat, clicks "+",
+      // and closes without typing.
+      let sessionId = activeId;
+      if (!sessionId) {
+        try {
+          const j = await ledgerApi.createChatSession();
+          sessionId = j.session.id;
+          skipNextLoad.current = true;
+          setActiveId(sessionId);
+          setDrafting(false);
+        } catch (e) {
+          toast.error((e as Error).message);
+          return;
+        }
+      }
       // Append the user bubble only on a fresh send. Regenerate keeps the
       // existing user message (it was already shown last turn) and just
       // re-runs the agent against it.
       if (!opts.regenerate) {
         const optimistic: ChatMessage = {
           id: `local-${Date.now()}`,
-          session_id: activeId,
+          session_id: sessionId,
           role: 'user',
           text,
           created_at: new Date().toISOString(),
@@ -131,7 +164,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       let gotDone = false;
 
       await streamSession(
-        activeId,
+        sessionId,
         text,
         (ev) => {
           switch (ev.type) {
@@ -184,7 +217,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       if (replyText) {
         const assistant: ChatMessage = {
           id: `stream-${Date.now()}`,
-          session_id: activeId,
+          session_id: sessionId,
           role: 'asst',
           text: replyText,
           created_at: new Date().toISOString(),
@@ -236,7 +269,10 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
     !busy &&
     messages.some((m) => m.role === 'user');
 
-  const showSessions = !activeId;
+  // Show the sessions picker only when we have no session AND aren't
+  // composing a new one. Drafting means user clicked "+ New chat" — we
+  // give them the empty chat view + composer immediately.
+  const showSessions = !activeId && !drafting;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
