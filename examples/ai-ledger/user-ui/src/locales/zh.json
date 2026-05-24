@@ -33,6 +33,13 @@
     "refreshNow": "立即刷新",
     "baseCurrency": "显示货币"
   },
+  "nav": {
+    "dashboard": "净值",
+    "ledger": "记账",
+    "portfolio": "投资",
+    "profile": "我的",
+    "chat": "聊天"
+  },
   "currency": {
     "USD": "美元",
     "EUR": "欧元",
