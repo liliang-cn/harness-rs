@@ -53,6 +53,37 @@
     "thisYear": "This year",
     "allTime": "All time"
   },
+  "budgets": {
+    "title": "Budgets",
+    "empty": "No budgets set. Ask the chat to add one.",
+    "over": "Over budget"
+  },
+  "subs": {
+    "title": "Subscriptions",
+    "empty": "No subscriptions tracked.",
+    "cancel": "Cancel",
+    "cancelConfirm": "Cancel {{name}}?",
+    "cancelled": "Cancelled {{name}}",
+    "next": "Next charge {{date}}",
+    "freq": {
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "quarterly": "Quarterly",
+      "yearly": "Yearly"
+    }
+  },
+  "report": {
+    "title": "This month by category",
+    "empty": "Nothing recorded this month yet.",
+    "count_one": "{{count}} txn",
+    "count_other": "{{count}} txns"
+  },
+  "export": {
+    "title": "Export CSV",
+    "transactions": "Transactions",
+    "trades": "Trades",
+    "subscriptions": "Subscriptions"
+  },
   "currency": {
     "USD": "US Dollar",
     "EUR": "Euro",
