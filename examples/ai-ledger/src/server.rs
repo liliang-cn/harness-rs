@@ -272,6 +272,14 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/portfolio/assets", get(portfolio_assets_handler))
         .route("/api/portfolio/trades", get(portfolio_trades_handler))
         .route("/api/portfolio/positions", get(portfolio_positions_handler))
+        // Net-worth dashboard endpoints. /net-worth returns the latest
+        // snapshot (or recomputes on the fly if none exists yet);
+        // /series feeds the trend chart; /refresh forces a recompute
+        // for users who just added an account and want immediate feedback.
+        .route("/api/me/net-worth", get(net_worth_handler))
+        .route("/api/me/net-worth/series", get(net_worth_series_handler))
+        .route("/api/me/net-worth/refresh", post(net_worth_refresh_handler))
+        .route("/api/me/base-currency", post(set_base_currency_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
         .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler));
 
@@ -466,6 +474,9 @@ async fn register_handler(Json(req): Json<RegisterReq>) -> Result<Json<Value>, A
         invite_code_used: invite_used,
         created_at: Utc::now(),
         preferred_model: None,
+        // Default to USD; users change it later in profile. The DB column
+        // has the same default so this is belt-and-braces.
+        base_currency: "USD".into(),
     };
     db.insert_user(&user)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1972,6 +1983,87 @@ async fn portfolio_positions_handler(auth: AuthCtx) -> Result<Json<Value>, ApiEr
     let db = open_db()?;
     let positions = positions_with_prices(&db, &auth.user.id)?;
     Ok(Json(json!({"count": positions.len(), "positions": positions})))
+}
+
+// ───── net-worth dashboard ─────
+
+/// Latest snapshot for the user. If no row exists yet (e.g. brand-new
+/// account before the first cron fires), compute one inline so the
+/// dashboard never shows a blank.
+async fn net_worth_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let snap = match db.latest_net_worth_snapshot(&auth.user.id).map_err(api_err)? {
+        Some(s) => s,
+        None => crate::net_worth::snapshot_now(&db, &auth.user.id, &auth.user.base_currency)
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+    };
+    Ok(Json(json!({"snapshot": snap})))
+}
+
+#[derive(serde::Deserialize)]
+struct SeriesQuery {
+    /// Inclusive ISO date (YYYY-MM-DD). Defaults to 12 months ago.
+    from: Option<String>,
+    /// Inclusive ISO date. Defaults to today.
+    to: Option<String>,
+}
+
+async fn net_worth_series_handler(
+    auth: AuthCtx,
+    Query(q): Query<SeriesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let default_from = (Utc::now() - chrono::Duration::days(365))
+        .format("%Y-%m-%d")
+        .to_string();
+    let from = q.from.unwrap_or(default_from);
+    let to = q.to.unwrap_or(today);
+    let series = db.net_worth_series(&auth.user.id, &from, &to).map_err(api_err)?;
+    Ok(Json(json!({
+        "from": from,
+        "to": to,
+        "count": series.len(),
+        "series": series,
+    })))
+}
+
+/// Force a recompute now. Mounted as POST so it can't be cached or
+/// CSRF'd via a stray <img>. Used by the dashboard "refresh" button.
+async fn net_worth_refresh_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let snap = crate::net_worth::snapshot_now(&db, &auth.user.id, &auth.user.base_currency)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({"snapshot": snap})))
+}
+
+#[derive(serde::Deserialize)]
+struct SetBaseCurrency {
+    currency: String,
+}
+
+/// Change the user's display / aggregation currency. Snapshot is
+/// recomputed immediately so the dashboard reflects the new unit on the
+/// next reload.
+async fn set_base_currency_handler(
+    auth: AuthCtx,
+    Json(req): Json<SetBaseCurrency>,
+) -> Result<Json<Value>, ApiError> {
+    let c = req.currency.trim().to_uppercase();
+    if c.len() != 3 || !c.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return Err(ApiError::BadRequest(
+            "currency must be a 3-letter ISO code like USD".into(),
+        ));
+    }
+    let db = open_db()?;
+    db.set_user_base_currency(&auth.user.id, &c).map_err(api_err)?;
+    let snap = crate::net_worth::snapshot_now(&db, &auth.user.id, &c)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({"ok": true, "base_currency": c, "snapshot": snap})))
+}
+
+fn api_err(e: rusqlite::Error) -> ApiError {
+    ApiError::Internal(e.to_string())
 }
 
 async fn portfolio_summary_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {

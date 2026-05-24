@@ -15,7 +15,9 @@
 mod admin;
 mod auth;
 mod db;
+mod fx;
 mod model;
+mod net_worth;
 mod portfolio;
 mod pricing;
 mod server;
@@ -688,6 +690,17 @@ async fn main() -> anyhow::Result<()> {
             task_store,
             config: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
         };
+
+        // Net-worth pipeline: refresh FX rates from exchangerate.host in
+        // the background, then run the daily snapshot cron. Both open
+        // their own DB connections (rusqlite Connection is !Send), so we
+        // just hand them the path.
+        let db_path = std::path::PathBuf::from(
+            std::env::var("HARNESS_LEDGER_DB").unwrap_or_else(|_| "ledger.db".into()),
+        );
+        fx::spawn_refresher(db_path.clone());
+        net_worth::spawn_snapshot_cron(db_path);
+
         return server::serve(state, addr).await;
     }
 

@@ -31,6 +31,16 @@ pub struct User {
     /// the default. Paid/admin users may pick from `AppState.available_models`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_model: Option<String>,
+    /// User's display / aggregation currency for the net-worth dashboard
+    /// and the AI financial-manager reports. ISO 4217 code (e.g. "USD",
+    /// "CNY", "JPY"). Defaults to "USD" via DB column default; users can
+    /// change it from settings.
+    #[serde(default = "default_base_currency")]
+    pub base_currency: String,
+}
+
+fn default_base_currency() -> String {
+    "USD".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
