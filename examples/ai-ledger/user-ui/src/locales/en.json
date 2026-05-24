@@ -33,6 +33,13 @@
     "refreshNow": "Refresh now",
     "baseCurrency": "Display currency"
   },
+  "nav": {
+    "dashboard": "Dashboard",
+    "ledger": "Ledger",
+    "portfolio": "Portfolio",
+    "profile": "Profile",
+    "chat": "Chat"
+  },
   "currency": {
     "USD": "US Dollar",
     "EUR": "Euro",
