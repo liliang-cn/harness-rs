@@ -192,6 +192,27 @@ export interface Trade {
   created_at: string;
 }
 
+// ─── chat ─────────────────────────────────────────────────
+
+export interface ChatSession {
+  id: string;
+  title: string | null;
+  model_id: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  /** "user" | "asst" — server uses "asst" not "assistant" */
+  role: 'user' | 'asst' | string;
+  text: string;
+  iters?: number;
+  created_at: string;
+}
+
 // ─── endpoints ────────────────────────────────────────────
 
 export const ledgerApi = {
@@ -282,6 +303,18 @@ export const ledgerApi = {
       grand_total_by_currency: Record<string, string>;
     }>(`/api/report${qs}`);
   },
+  chatSessions: () =>
+    api<{ count: number; sessions: ChatSession[] }>('/api/chat/sessions'),
+  createChatSession: () =>
+    api<{ session: ChatSession }>('/api/chat/sessions', { method: 'POST' }),
+  getChatSession: (id: string) =>
+    api<{ session: ChatSession; messages: ChatMessage[] }>(
+      `/api/chat/sessions/${encodeURIComponent(id)}`,
+    ),
+  deleteChatSession: (id: string) =>
+    api<{ deleted: string }>(`/api/chat/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   /**
    * CSV download is a special-case: the server returns text/csv with a
    * Content-Disposition filename, not JSON. We do an authenticated fetch,

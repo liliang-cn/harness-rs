@@ -107,6 +107,32 @@
       "other": "Other"
     }
   },
+  "chat": {
+    "fab": "Chat with AI",
+    "title": "Chat",
+    "newChat": "New chat",
+    "back": "Back to sessions",
+    "sessionsEmpty": "No conversations yet. Start a new one.",
+    "untitled": "Untitled",
+    "msgCount_one": "{{count}} message",
+    "msgCount_other": "{{count}} messages",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this conversation?",
+    "deleted": "Conversation deleted",
+    "placeholder": "Ask anything — log an expense, plan a budget, check your portfolio…",
+    "send": "Send",
+    "stop": "Stop",
+    "mic": "Voice input",
+    "micListening": "Listening — tap to stop",
+    "micUnsupported": "Voice input not supported in this browser",
+    "thinking": "Thinking…",
+    "toolCalling": "Calling {{name}}…",
+    "toolDone": "Used {{name}}",
+    "toolFailed": "{{name}} failed",
+    "error": "Stream error: {{message}}",
+    "budgetExhausted": "Reply truncated — token budget hit.",
+    "emptyMessages": "Ask anything to get started."
+  },
   "currency": {
     "USD": "US Dollar",
     "EUR": "Euro",

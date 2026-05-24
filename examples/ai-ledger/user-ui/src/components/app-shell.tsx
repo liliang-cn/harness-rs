@@ -9,6 +9,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Toaster } from '@/components/ui/sonner';
+import { ChatFab } from '@/components/chat/chat-fab';
 import { ledgerApi, setToken } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -131,6 +132,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
         </nav>
       </div>
       {chatSlot}
+      <ChatFab />
       <Toaster richColors closeButton position="top-center" />
     </div>
   );
