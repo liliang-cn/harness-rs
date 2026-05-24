@@ -967,3 +967,303 @@ async fn get_net_worth(args: Value, w: &mut World) -> Result<ToolResult, ToolErr
         trace: None,
     })
 }
+
+// ============================================================
+// loans / mortgages / receivables
+// ============================================================
+
+/// Create a new loan, mortgage, or receivable. Creates the underlying account
+/// row AND the loans row in one shot. Sign of `opening_balance` is flipped
+/// per kind: Loan/Mortgage → negative (you owe); Receivable → positive
+/// (someone owes you).
+///
+/// Ask the user to confirm principal + APR + start_date before calling.
+/// Do NOT invent term_months or monthly_payment — leave them null if the
+/// user didn't volunteer them.
+#[harness::tool(
+    name = "add_loan",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "name":            {"type": "string", "description": "Short label shown in the UI, e.g. \"Home mortgage\", \"Toyota Corolla loan\", \"Lent to Alice\"."},
+            "kind":            {"type": "string", "enum": ["loan", "mortgage", "receivable"], "description": "loan = generic borrowing; mortgage = home loan with amortization; receivable = someone owes you."},
+            "counterparty":    {"type": "string", "description": "Bank / lender / friend's name."},
+            "principal":       {"type": "string", "description": "Original amount, positive decimal as string. For receivables, this is what you lent out."},
+            "currency":        {"type": "string", "description": "ISO 4217, e.g. \"USD\", \"CNY\"."},
+            "apr":             {"type": "string", "description": "Annual percentage rate as decimal, e.g. \"0.045\" for 4.5%. Use \"0\" for interest-free IOUs."},
+            "term_months":     {"type": ["integer", "null"], "description": "Loan duration in months. Use null for open-ended IOUs."},
+            "monthly_payment": {"type": ["string", "null"], "description": "Optional. Recurring payment amount as decimal string."},
+            "start_date":      {"type": "string", "description": "YYYY-MM-DD. When the loan was originated."},
+            "note":            {"type": ["string", "null"]}
+        },
+        "required": ["name", "kind", "counterparty", "principal", "currency", "apr", "start_date"]
+    }"#
+)]
+async fn add_loan(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let name = need_str(&args, "name")?.to_string();
+    let kind_s = need_str(&args, "kind")?;
+    let kind: AccountKind = match kind_s {
+        "loan" | "mortgage" | "receivable" => {
+            serde_json::from_str(&format!("\"{kind_s}\"")).map_err(|_| ToolError::InvalidArgs {
+                name: "ledger".into(),
+                reason: format!("unknown kind `{kind_s}`"),
+            })?
+        }
+        other => {
+            return Err(ToolError::InvalidArgs {
+                name: "ledger".into(),
+                reason: format!(
+                    "kind `{other}` not allowed for add_loan — use loan / mortgage / receivable"
+                ),
+            });
+        }
+    };
+    let counterparty = need_str(&args, "counterparty")?.to_string();
+    let principal_val = args
+        .get("principal")
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: "principal required".into(),
+        })?;
+    let principal = parse_decimal(principal_val, "principal")?;
+    if principal <= Decimal::ZERO {
+        return Err(ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: "principal must be positive".into(),
+        });
+    }
+    let currency = need_str(&args, "currency")?.to_uppercase();
+    let apr_s = need_str(&args, "apr")?.to_string();
+    let _apr_check: f64 = apr_s.parse().map_err(|_| ToolError::InvalidArgs {
+        name: "ledger".into(),
+        reason: format!("apr `{apr_s}` is not a decimal"),
+    })?;
+    let term_months = args.get("term_months").and_then(|v| v.as_i64());
+    let monthly_payment = args
+        .get("monthly_payment")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let start_date = need_str(&args, "start_date")?.to_string();
+    // Validate start_date format up-front so we don't half-insert.
+    chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d").map_err(|_| {
+        ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: format!("start_date `{start_date}` must be YYYY-MM-DD"),
+        }
+    })?;
+    let note = args.get("note").and_then(|v| v.as_str()).map(String::from);
+
+    // Sign convention: Loan/Mortgage → -principal (you owe). Receivable → +principal.
+    let opening = match kind {
+        AccountKind::Receivable => principal,
+        _ => -principal,
+    };
+
+    let acct = Account {
+        id: mk_id(),
+        name: name.clone(),
+        kind,
+        currency: currency.clone(),
+        opening_balance: opening,
+        created_at: Utc::now(),
+    };
+
+    let db = open_db()?;
+    let uid = crate::tools::uid_of(w)?;
+    db.insert_account(&uid, &acct)
+        .map_err(|e| ToolError::Exec(format!("insert_account: {e}")))?;
+    // If the loans-row insert fails the account still exists; report the
+    // error so the user can decide whether to retry. record_loan_payment
+    // would be inert against an orphaned account anyway.
+    db.insert_loan(
+        &acct.id,
+        &uid,
+        &counterparty,
+        &principal.to_string(),
+        &apr_s,
+        term_months,
+        monthly_payment.as_deref(),
+        &start_date,
+        note.as_deref(),
+    )
+    .map_err(|e| ToolError::Exec(format!("insert_loan: {e}")))?;
+
+    let kind_label = match kind {
+        AccountKind::Mortgage => "mortgage",
+        AccountKind::Receivable => "receivable",
+        _ => "loan",
+    };
+    let summary = format!(
+        "added {kind_label} `{name}` ({counterparty}) — principal {} {currency} @ {} APR",
+        principal, apr_s
+    );
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "account_id":   acct.id,
+            "kind":         acct.kind,
+            "summary":      summary,
+        }),
+        trace: None,
+    })
+}
+
+/// Record a loan / mortgage / receivable payment. Writes ONE Transfer
+/// transaction with account_id/counter_account_id flipped depending on
+/// direction:
+///   * Loan / Mortgage  →  cash → loan       (cash decreases, debt moves toward 0)
+///   * Receivable        →  receivable → cash (their debt to you decreases, cash up)
+/// Look up the loan first via `loan_summary` if you only have a friendly name.
+#[harness::tool(
+    name = "record_loan_payment",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "loan_account_id":  {"type": "string", "description": "The id of the Loan/Mortgage/Receivable account."},
+            "cash_account_id":  {"type": "string", "description": "The user's cash account the payment came from (Loan/Mortgage case) or went to (Receivable case)."},
+            "amount":           {"type": "string", "description": "Payment amount, positive decimal as string."},
+            "occurred_at":      {"type": "string", "description": "RFC3339 or YYYY-MM-DD. When the payment happened."},
+            "note":             {"type": ["string", "null"]}
+        },
+        "required": ["loan_account_id", "cash_account_id", "amount", "occurred_at"]
+    }"#
+)]
+async fn record_loan_payment(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let loan_id = need_str(&args, "loan_account_id")?.to_string();
+    let cash_id = need_str(&args, "cash_account_id")?.to_string();
+    if loan_id == cash_id {
+        return Err(ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: "loan_account_id and cash_account_id must differ".into(),
+        });
+    }
+    let amount_val = args.get("amount").ok_or_else(|| ToolError::InvalidArgs {
+        name: "ledger".into(),
+        reason: "amount required".into(),
+    })?;
+    let amount = parse_decimal(amount_val, "amount")?;
+    if amount <= Decimal::ZERO {
+        return Err(ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: "amount must be positive".into(),
+        });
+    }
+    let occurred_at_s = need_str(&args, "occurred_at")?;
+    let occurred_at = parse_iso(occurred_at_s).ok_or_else(|| ToolError::InvalidArgs {
+        name: "ledger".into(),
+        reason: format!("could not parse `{occurred_at_s}` — use RFC3339 or YYYY-MM-DD"),
+    })?;
+    let note = args.get("note").and_then(|v| v.as_str()).map(String::from);
+
+    let db = open_db()?;
+    let uid = crate::tools::uid_of(w)?;
+
+    let loan_acct = db
+        .get_account(&uid, &loan_id)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: format!("loan_account_id `{loan_id}` does not exist"),
+        })?;
+    let cash_acct = db
+        .get_account(&uid, &cash_id)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "ledger".into(),
+            reason: format!("cash_account_id `{cash_id}` does not exist"),
+        })?;
+
+    // Pick from/to per the direction rule above.
+    let (from, to) = match loan_acct.kind {
+        AccountKind::Loan | AccountKind::Mortgage => (cash_id.clone(), loan_id.clone()),
+        AccountKind::Receivable => (loan_id.clone(), cash_id.clone()),
+        other => {
+            return Err(ToolError::InvalidArgs {
+                name: "ledger".into(),
+                reason: format!(
+                    "loan_account_id `{loan_id}` is a `{:?}` account, not a Loan/Mortgage/Receivable",
+                    other
+                ),
+            });
+        }
+    };
+
+    // ONE Transfer row. compute_account_balance / net_worth fold both legs
+    // off this single row (own = -amt outgoing, counter = +amt incoming),
+    // so we never double-count.
+    let txn = Transaction {
+        id: mk_id(),
+        kind: TxnKind::Transfer,
+        amount,
+        currency: loan_acct.currency.clone(),
+        account_id: from,
+        counter_account_id: Some(to),
+        category: Some("loan_payment".into()),
+        note,
+        occurred_at,
+        created_at: Utc::now(),
+    };
+
+    if is_trial(w) {
+        let n = db
+            .count_user_transactions(&uid)
+            .map_err(|e| ToolError::Exec(e.to_string()))?;
+        if n >= 50 {
+            return Ok(trial_limit_result("transactions", n, 50));
+        }
+    }
+    db.insert_transaction(&uid, &txn)
+        .map_err(|e| ToolError::Exec(e.to_string()))?;
+    // Note: we deliberately do NOT auto-flip the loan to `paid_off` here —
+    // tiny rounding from daily interest accrual would otherwise leave the
+    // status flapping. The user can retire it via the REST endpoint.
+    let new_balance = db
+        .compute_account_balance(&uid, &loan_acct.id)
+        .map_err(|e| ToolError::Exec(e.to_string()))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "logged": txn,
+            "loan_balance_after": format!("{:.2}", new_balance),
+            "cash_account":       cash_acct.name,
+            "loan_account":       loan_acct.name,
+        }),
+        trace: None,
+    })
+}
+
+/// List the user's active loans / mortgages / receivables with remaining
+/// principal, next due date, and progress %. Same shape as `/api/me/loans`.
+/// Use this for overview questions ("我现在有哪些贷款", "how much do I still owe")
+/// and to look up an `account_id` before calling `record_loan_payment`.
+#[harness::tool(
+    name = "loan_summary",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "include_paid_off": {"type": "boolean", "default": false, "description": "If true, also include paid_off / cancelled loans. Defaults to active-only."}
+        }
+    }"#
+)]
+async fn loan_summary(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let include_paid_off = args
+        .get("include_paid_off")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let db = open_db()?;
+    let uid = crate::tools::uid_of(w)?;
+    let loans = crate::loans::summarise(&db, &uid, include_paid_off)
+        .map_err(|e| ToolError::Exec(e.to_string()))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "count": loans.len(),
+            "include_paid_off": include_paid_off,
+            "loans": loans,
+        }),
+        trace: None,
+    })
+}

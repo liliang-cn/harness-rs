@@ -8,7 +8,9 @@
 
 use crate::db::Db;
 use chrono::{Duration, NaiveDate, Utc};
+use rusqlite::Result as SqlResult;
 use rust_decimal::Decimal;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -105,4 +107,75 @@ fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Compose the per-loan JSON view used by both `/api/me/loans` and the
+/// `loan_summary` agent tool — joining each `loans` row with its
+/// `accounts` row + derived `remaining` / `progress_pct` / `next_due_date`.
+/// Keeping a single code path here means the agent and the REST API can
+/// never disagree about what counts as "outstanding".
+pub fn summarise(db: &Db, user_id: &str, include_paid_off: bool) -> SqlResult<Vec<Value>> {
+    use chrono::{Datelike, Months};
+    let loans = db.list_loans(user_id)?;
+    let today = Utc::now().date_naive();
+    let mut out: Vec<Value> = Vec::with_capacity(loans.len());
+    for l in &loans {
+        if !include_paid_off && l.status != "active" {
+            continue;
+        }
+        // Skip orphaned loan rows whose account was deleted.
+        let Some(acct) = db.get_account(user_id, &l.account_id)? else {
+            continue;
+        };
+        let balance = db.compute_account_balance(user_id, &l.account_id)?;
+
+        // Sign convention: debt accounts (Loan/Mortgage) carry a negative
+        // balance, Receivables carry a positive one. `remaining` is the
+        // unsigned "how much is still outstanding".
+        let remaining_f = match acct.kind {
+            crate::model::AccountKind::Receivable => balance.max(0.0),
+            _ => balance.abs(),
+        };
+
+        let principal_f: f64 = l.principal.parse().unwrap_or(0.0);
+        let progress_pct = if principal_f > 0.0 {
+            ((principal_f - remaining_f) / principal_f * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+
+        let next_due_date: Option<String> = match (l.monthly_payment.as_ref(), l.term_months) {
+            (Some(_), Some(term)) if term > 0 => {
+                NaiveDate::parse_from_str(&l.start_date, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|start| {
+                        let elapsed = (today.year() as i64 * 12 + today.month() as i64)
+                            - (start.year() as i64 * 12 + start.month() as i64);
+                        let next_n = (elapsed.max(0) + 1).min(term).max(0) as u32;
+                        start.checked_add_months(Months::new(next_n))
+                    })
+                    .map(|d| d.format("%Y-%m-%d").to_string())
+            }
+            _ => None,
+        };
+
+        out.push(json!({
+            "account_id":      l.account_id,
+            "name":             acct.name,
+            "kind":             acct.kind,
+            "counterparty":     l.counterparty,
+            "principal":        l.principal,
+            "remaining":        format!("{:.2}", remaining_f),
+            "currency":         acct.currency,
+            "apr":              l.apr,
+            "term_months":      l.term_months,
+            "monthly_payment":  l.monthly_payment,
+            "start_date":       l.start_date,
+            "next_due_date":    next_due_date,
+            "progress_pct":     (progress_pct * 100.0).round() / 100.0,
+            "status":           l.status,
+            "note":             l.note,
+        }));
+    }
+    Ok(out)
 }
