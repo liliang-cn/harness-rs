@@ -1733,8 +1733,15 @@ async fn session_stream_handler(
     // Persist the user message NOW (so a network hiccup mid-stream still
     // leaves the transcript intact). Also makes `message_count` + `title`
     // updates land before any reply is computed.
-    db.append_chat_message(&auth.user.id, &session_id, "user", &req.message, None)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    db.append_chat_message(
+        &auth.user.id,
+        &session_id,
+        "user",
+        &req.message,
+        None,
+        &req.attachment_ids,
+    )
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     // Build agent history from the persisted message log — last 40 turns
     // is plenty given the compactor will further squash later.
@@ -1878,6 +1885,7 @@ async fn session_stream_handler(
                         "asst",
                         &reply,
                         Some(iters),
+                        &[],
                     );
                     let _ = db.update_chat_session_model(
                         &user_id_for_task,
@@ -1906,6 +1914,7 @@ async fn session_stream_handler(
                         "asst",
                         &reply,
                         Some(iters),
+                        &[],
                     );
                     let _ = db.insert_audit(
                         Some(&user_id_for_task),

@@ -351,6 +351,10 @@ impl Db {
         // without a separate migration framework (no rusqlite_migration).
         self.ensure_column("users", "preferred_model", "TEXT")?;
         self.ensure_column("users", "base_currency", "TEXT NOT NULL DEFAULT 'USD'")?;
+        // JSON array of attachment ids the user attached when sending the
+        // message. Stored as text so it round-trips through SQLite without
+        // a JSON column type. Nullable for messages that predate this column.
+        self.ensure_column("chat_messages", "attachment_ids", "TEXT")?;
         Ok(())
     }
 
@@ -1830,7 +1834,7 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, text, iters, created_at
+            "SELECT id, session_id, role, text, iters, created_at, attachment_ids
              FROM chat_messages
              WHERE user_id = ?1 AND session_id = ?2
              ORDER BY created_at ASC
@@ -1840,6 +1844,11 @@ impl Db {
             params![user_id, session_id, limit as i64],
             |r| {
                 let created_s: String = r.get(5)?;
+                // attachment_ids is JSON text; older rows have NULL.
+                let att: Vec<String> = match r.get::<_, Option<String>>(6)? {
+                    Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+                    None => Vec::new(),
+                };
                 Ok(ChatMessage {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
@@ -1847,6 +1856,7 @@ impl Db {
                     text: r.get(3)?,
                     iters: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
                     created_at: parse_rfc3339(&created_s),
+                    attachment_ids: att,
                 })
             },
         )?;
@@ -1863,15 +1873,21 @@ impl Db {
         role: &str,
         text: &str,
         iters: Option<u32>,
+        attachment_ids: &[String],
     ) -> SqlResult<String> {
         use uuid::Uuid;
         let id = Uuid::new_v4().to_string()[..8].to_string();
         let now = Utc::now().to_rfc3339();
+        let att_json = if attachment_ids.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(attachment_ids).unwrap_or_else(|_| "[]".into()))
+        };
         self.conn.execute(
             "INSERT INTO chat_messages(
-                id, session_id, user_id, role, text, iters, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now],
+                id, session_id, user_id, role, text, iters, created_at, attachment_ids
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now, att_json],
         )?;
         self.conn.execute(
             "UPDATE chat_sessions

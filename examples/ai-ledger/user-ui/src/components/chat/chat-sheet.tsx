@@ -155,6 +155,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
           role: 'user',
           text,
           created_at: new Date().toISOString(),
+          attachment_ids,
         };
         setMessages((cur) => [...cur, optimistic]);
       }

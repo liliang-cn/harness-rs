@@ -295,6 +295,9 @@ export interface ChatMessage {
   text: string;
   iters?: number;
   created_at: string;
+  /** Attachment ids the user uploaded with this message. Empty for asst
+   *  turns and for messages predating the feature. */
+  attachment_ids?: string[];
 }
 
 // ─── endpoints ────────────────────────────────────────────
