@@ -57,6 +57,35 @@ export interface User {
   tier: string;
   base_currency: string;
   preferred_model?: string | null;
+  created_at?: string;
+  invited_by?: string | null;
+  invite_code_used?: string | null;
+}
+
+// /api/info shape — only the fields user-ui needs right now.
+export interface ModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  available: boolean;
+}
+
+export interface ServerInfo {
+  provider: string;
+  model: string;
+  default_model_id: string;
+  available_models: ModelOption[];
+}
+
+// Backend uses harness-core MemoryEntry (memory.rs): content / source /
+// created_ms (ms since epoch) / optional tags / optional expires_ms.
+export interface MemoryEntry {
+  id: string;
+  content: string;
+  tags?: string[];
+  source?: string | null;
+  created_ms: number;
+  expires_ms?: number | null;
 }
 
 export interface NetWorthSnapshot {
@@ -226,7 +255,28 @@ export const ledgerApi = {
       method: 'POST',
       body: JSON.stringify({ email, password, invite_code }),
     }),
-  me: () => api<{ user: User }>('/api/me'),
+  me: () =>
+    api<{ user: User; effective_model_id: string }>('/api/me'),
+  info: () => api<ServerInfo>('/api/info'),
+  changePassword: (old_password: string, new_password: string) =>
+    api<{ ok: true; other_sessions_dropped: number }>('/api/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password, new_password }),
+    }),
+  setModel: (model: string | null) =>
+    api<{ preferred_model: string | null; effective_model_id: string }>(
+      '/api/me/model',
+      { method: 'POST', body: JSON.stringify({ model }) },
+    ),
+  memories: () =>
+    api<{ count: number; memories: MemoryEntry[] }>('/api/me/memories'),
+  deleteMemory: (id: string) =>
+    api<{ deleted: string }>(
+      `/api/me/memories/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
+  clearMemories: () =>
+    api<{ deleted: number }>('/api/me/memories', { method: 'DELETE' }),
   netWorth: () => api<{ snapshot: NetWorthSnapshot }>('/api/me/net-worth'),
   netWorthSeries: (from?: string, to?: string) => {
     const q = new URLSearchParams();

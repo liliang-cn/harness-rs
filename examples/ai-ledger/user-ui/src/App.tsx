@@ -5,6 +5,7 @@ import { Marketing } from '@/pages/Marketing';
 import { Dashboard } from '@/pages/Dashboard';
 import { Ledger } from '@/pages/Ledger';
 import { Portfolio } from '@/pages/Portfolio';
+import { Profile } from '@/pages/Profile';
 import { AppShell } from '@/components/app-shell';
 
 export default function App() {
@@ -17,14 +18,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="ledger" element={<Ledger />} />
           <Route path="portfolio" element={<Portfolio />} />
-          <Route
-            path="profile"
-            element={
-              <div className="text-muted-foreground py-8 text-center text-sm">
-                Profile (Task 6 placeholder)
-              </div>
-            }
-          />
+          <Route path="profile" element={<Profile />} />
         </Route>
       ) : (
         <Route path="/" element={<Marketing />} />
