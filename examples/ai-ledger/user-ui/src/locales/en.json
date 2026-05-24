@@ -72,6 +72,20 @@
       "yearly": "Yearly"
     }
   },
+  "loans": {
+    "title": "Loans & receivables",
+    "empty": "Nothing tracked. Add via chat.",
+    "principal": "Original",
+    "remaining": "Remaining",
+    "owedToYou": "Owed to you",
+    "monthlyPayment": "Monthly",
+    "nextDue": "Next {{date}}",
+    "apr": "{{rate}}% APR",
+    "kindLoan": "Loan",
+    "kindMortgage": "Mortgage",
+    "kindReceivable": "Receivable",
+    "paidOff": "Paid off"
+  },
   "report": {
     "title": "This month by category",
     "empty": "Nothing recorded this month yet.",

@@ -72,6 +72,20 @@
       "yearly": "每年"
     }
   },
+  "loans": {
+    "title": "负债 / 应收",
+    "empty": "还没有登记。可以让 AI 帮你记。",
+    "principal": "本金",
+    "remaining": "余下",
+    "owedToYou": "对方欠你",
+    "monthlyPayment": "月供",
+    "nextDue": "下次 {{date}}",
+    "apr": "年化 {{rate}}%",
+    "kindLoan": "贷款",
+    "kindMortgage": "房贷",
+    "kindReceivable": "应收",
+    "paidOff": "已还清"
+  },
   "report": {
     "title": "本月分类支出",
     "empty": "本月还没有记录。",
