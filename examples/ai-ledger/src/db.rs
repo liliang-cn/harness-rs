@@ -729,6 +729,103 @@ impl Db {
         Ok(())
     }
 
+    /// Current balance of an account = `opening_balance` + net of every
+    /// transaction touching it. Mirrors the per-account fold inside
+    /// `net_worth::snapshot_now`, but returns one f64 for callers (the
+    /// daily-interest cron) that just need today's number.
+    ///
+    /// Sign convention: for a debt account (Loan/Mortgage/Credit) the
+    /// opening_balance is stored negative, and each "expense" booked on
+    /// that account further decreases the balance — so the returned f64
+    /// is negative for debt and positive for cash.
+    pub fn compute_account_balance(&self, user_id: &str, account_id: &str) -> SqlResult<f64> {
+        use rust_decimal::prelude::ToPrimitive;
+        // Opening balance.
+        let mut stmt = self.conn.prepare(
+            "SELECT opening_balance FROM accounts WHERE user_id = ?1 AND id = ?2",
+        )?;
+        let opening: Option<String> = stmt
+            .query_row(params![user_id, account_id], |r| r.get::<_, String>(0))
+            .optional()?;
+        let Some(opening_s) = opening else { return Ok(0.0) };
+        let mut bal: f64 = Decimal::from_str(&opening_s)
+            .unwrap_or(Decimal::ZERO)
+            .to_f64()
+            .unwrap_or(0.0);
+
+        // Fold every txn that mentions this account (own leg or counter leg).
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, amount, account_id, counter_account_id
+             FROM transactions
+             WHERE user_id = ?1
+               AND (account_id = ?2 OR counter_account_id = ?2)",
+        )?;
+        let rows = stmt.query_map(params![user_id, account_id], |r| {
+            let kind: String = r.get(0)?;
+            let amt: String = r.get(1)?;
+            let own: String = r.get(2)?;
+            let counter: Option<String> = r.get(3)?;
+            Ok((kind, amt, own, counter))
+        })?;
+        for row in rows {
+            let (kind, amt_s, own, counter) = row?;
+            let amt = Decimal::from_str(&amt_s)
+                .unwrap_or(Decimal::ZERO)
+                .to_f64()
+                .unwrap_or(0.0);
+            if own == account_id {
+                match kind.as_str() {
+                    "income" => bal += amt,
+                    "expense" => bal -= amt,
+                    "transfer" => bal -= amt, // outgoing leg
+                    _ => {}
+                }
+            } else if counter.as_deref() == Some(account_id) && kind == "transfer" {
+                bal += amt; // incoming leg
+            }
+        }
+        Ok(bal)
+    }
+
+    /// Book a system-generated interest expense transaction on a loan
+    /// account. Called by the daily accrual cron — keeps the txn history
+    /// honest so the existing per-account fold in `net_worth::snapshot_now`
+    /// naturally arrives at the post-interest balance.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_system_interest_transaction(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        currency: &str,
+        amount: Decimal,
+        apr: f64,
+        days: i64,
+        date_iso: &str,
+    ) -> SqlResult<()> {
+        use uuid::Uuid;
+        let id = Uuid::new_v4().to_string()[..8].to_string();
+        let note = format!("daily accrual {days}d @ {:.4}% APR", apr * 100.0);
+        let occurred_at = format!("{date_iso}T12:00:00Z");
+        let created_at = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO transactions(
+                id, user_id, kind, amount, currency, account_id, counter_account_id,
+                category, note, occurred_at, created_at
+             ) VALUES (?1, ?2, 'expense', ?3, ?4, ?5, NULL, 'interest', ?6, ?7, ?8)",
+            params![
+                id,
+                user_id,
+                amount.to_string(),
+                currency,
+                account_id,
+                note,
+                occurred_at,
+                created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_session(&self, s: &crate::auth::Session) -> SqlResult<()> {
         self.conn.execute(
             "INSERT INTO sessions(token, user_id, created_at, last_seen_at, expires_at)
