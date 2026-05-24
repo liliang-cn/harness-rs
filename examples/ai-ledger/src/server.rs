@@ -1255,6 +1255,11 @@ struct ChatRequest {
     /// EN/ZH content lets the model match the user's input language.
     #[serde(default)]
     lang: Option<String>,
+    /// IDs of `chat_attachments` rows the user attached to this turn.
+    /// Planted on `profile.extra.attachment_ids` so the `extract_receipt`
+    /// tool can resolve them. Ownership is verified inside the tool.
+    #[serde(default)]
+    attachment_ids: Vec<String>,
 }
 
 async fn chat_handler(
@@ -1297,6 +1302,18 @@ async fn chat_handler(
     profile
         .extra
         .insert("tier".into(), serde_json::Value::String(auth.user.tier.clone()));
+    if !req.attachment_ids.is_empty() {
+        profile.extra.insert(
+            "attachment_ids".into(),
+            serde_json::Value::Array(
+                req.attachment_ids
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
     let mut world = with_profile(".", profile);
     let task = Task {
         description: task_description,
@@ -1681,6 +1698,11 @@ struct SessionStreamReq {
     /// BCP-47 locale for default reply language (mirrors ChatRequest.lang).
     #[serde(default)]
     lang: Option<String>,
+    /// IDs of `chat_attachments` rows the user attached to this turn.
+    /// Mirrors ChatRequest.attachment_ids — planted on profile.extra so
+    /// the `extract_receipt` tool can resolve them.
+    #[serde(default)]
+    attachment_ids: Vec<String>,
 }
 
 /// Per-session streaming chat handler — replaces the old session-less
@@ -1735,6 +1757,9 @@ async fn session_stream_handler(
     let session_id_for_task = session_id.clone();
     let user_id_for_task = user_id.clone();
     let model_id_for_task = model_id.clone();
+    // Move attachment_ids into the spawned future so the extract_receipt
+    // tool can see them on profile.extra below.
+    let attachment_ids = req.attachment_ids.clone();
 
     tokio::spawn(async move {
         let model = match s.build_model_for(&model_id_for_task) {
@@ -1818,6 +1843,18 @@ async fn session_stream_handler(
         let mut profile = s.profile.clone();
         profile.extra.insert("user_id".into(), serde_json::Value::String(user_id_for_task.clone()));
         profile.extra.insert("tier".into(), serde_json::Value::String(user_tier.clone()));
+        if !attachment_ids.is_empty() {
+            profile.extra.insert(
+                "attachment_ids".into(),
+                serde_json::Value::Array(
+                    attachment_ids
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
         let mut world = with_profile(".", profile);
         let task = Task {
             description: task_desc,
@@ -1918,6 +1955,9 @@ async fn chat_stream_handler(
     // might never reach.
     let model_id = s.effective_model_for(&auth.user);
     let tx_for_done = tx.clone();
+    // Move attachment_ids into the spawned future so the extract_receipt
+    // tool can see them on profile.extra below.
+    let attachment_ids = req.attachment_ids.clone();
     tokio::spawn(async move {
         let model = match s.build_model_for(&model_id) {
             Ok(m) => m,
@@ -1947,6 +1987,18 @@ async fn chat_stream_handler(
         profile
             .extra
             .insert("tier".into(), serde_json::Value::String(user_tier));
+        if !attachment_ids.is_empty() {
+            profile.extra.insert(
+                "attachment_ids".into(),
+                serde_json::Value::Array(
+                    attachment_ids
+                        .iter()
+                        .cloned()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
         let mut world = with_profile(".", profile);
         let task = Task {
             description: task_desc,
