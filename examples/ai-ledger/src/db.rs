@@ -19,6 +19,18 @@ pub struct CachedQuote {
     pub fetched_at: DateTime<Utc>,
 }
 
+/// One row of the per-user daily net-worth journal. Amounts are in
+/// `base_currency` (already FX-converted at write time).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetWorthSnapshot {
+    pub snapshot_date: String,    // YYYY-MM-DD
+    pub base_currency: String,
+    pub cash_amt: f64,
+    pub investments_amt: f64,
+    pub debt_amt: f64,
+    pub net_amt: f64,
+}
+
 impl Db {
     pub fn open(path: &Path) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
@@ -237,11 +249,45 @@ impl Db {
                 value       TEXT NOT NULL,
                 updated_ms  INTEGER NOT NULL
             );
+
+            -- FX rate cache. One row per (base, quote, fetched_date). We
+            -- fetch daily mid prices from exchangerate.host and key by ISO
+            -- date so historical net-worth snapshots can be reproduced.
+            CREATE TABLE IF NOT EXISTS fx_rates (
+                base          TEXT NOT NULL,
+                quote         TEXT NOT NULL,
+                rate          TEXT NOT NULL,   -- decimal as text, USD -> EUR = "0.92"
+                fetched_date  TEXT NOT NULL,   -- YYYY-MM-DD (UTC)
+                source        TEXT NOT NULL,   -- 'exchangerate.host' | 'manual' | ...
+                PRIMARY KEY (base, quote, fetched_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fx_pair_date
+                ON fx_rates(base, quote, fetched_date DESC);
+
+            -- Per-user daily net-worth snapshot. Populated by a tokio cron
+            -- around 00:05 UTC. Older rows are immutable; if the user
+            -- backfills a missed account today's value won't retroactively
+            -- change yesterday's snapshot — which is the correct accounting
+            -- behavior for a journal.
+            CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+                user_id          TEXT NOT NULL,
+                snapshot_date    TEXT NOT NULL,    -- YYYY-MM-DD (UTC)
+                base_currency    TEXT NOT NULL,
+                cash_amt         TEXT NOT NULL,    -- sum of cash-kind accounts, in base
+                investments_amt  TEXT NOT NULL,    -- sum of (qty * latest_price), in base
+                debt_amt         TEXT NOT NULL,    -- sum of liability-kind accounts (positive number), in base
+                net_amt          TEXT NOT NULL,    -- cash + investments - debt
+                computed_at      TEXT NOT NULL,
+                PRIMARY KEY (user_id, snapshot_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_nws_user_date
+                ON net_worth_snapshots(user_id, snapshot_date DESC);
             "#,
         )?;
         // Idempotent column adds — keeps already-migrated databases working
         // without a separate migration framework (no rusqlite_migration).
         self.ensure_column("users", "preferred_model", "TEXT")?;
+        self.ensure_column("users", "base_currency", "TEXT NOT NULL DEFAULT 'USD'")?;
         Ok(())
     }
 
@@ -311,8 +357,8 @@ impl Db {
         self.conn.execute(
             "INSERT INTO users(
                 id, email, password_hash, tier, invited_by, invite_code_used,
-                created_at, preferred_model
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                created_at, preferred_model, base_currency
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 u.id,
                 u.email,
@@ -322,6 +368,7 @@ impl Db {
                 u.invite_code_used,
                 u.created_at.to_rfc3339(),
                 u.preferred_model,
+                u.base_currency,
             ],
         )?;
         Ok(())
@@ -340,13 +387,14 @@ impl Db {
                 .map(|d| d.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
             preferred_model: r.get(7).ok().flatten(),
+            base_currency: r.get::<_, Option<String>>(8).ok().flatten().unwrap_or_else(|| "USD".into()),
         })
     }
 
     pub fn get_user_by_email(&self, email: &str) -> SqlResult<Option<crate::auth::User>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, email, password_hash, tier, invited_by, invite_code_used,
-                    created_at, preferred_model
+                    created_at, preferred_model, base_currency
              FROM users WHERE email = ?1 COLLATE NOCASE",
         )?;
         stmt.query_row(params![email], Self::row_to_user).optional()
@@ -355,10 +403,19 @@ impl Db {
     pub fn get_user_by_id(&self, id: &str) -> SqlResult<Option<crate::auth::User>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, email, password_hash, tier, invited_by, invite_code_used,
-                    created_at, preferred_model
+                    created_at, preferred_model, base_currency
              FROM users WHERE id = ?1",
         )?;
         stmt.query_row(params![id], Self::row_to_user).optional()
+    }
+
+    /// Update the user's base_currency. Validated as ISO 4217 (3 uppercase
+    /// letters) by the HTTP handler.
+    pub fn set_user_base_currency(&self, user_id: &str, currency: &str) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE users SET base_currency = ?1 WHERE id = ?2",
+            params![currency, user_id],
+        )? as u32)
     }
 
     /// Set the user's preferred model (or clear it with `None`). Paid/admin
@@ -394,6 +451,141 @@ impl Db {
         self.conn
             .query_row("SELECT COUNT(*) FROM users", [], |r| r.get::<_, i64>(0))
             .map(|n| n as u32)
+    }
+
+    pub fn list_all_user_ids(&self) -> SqlResult<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM users")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    // ───── FX rates ─────
+
+    /// Look up the cached rate for (base → quote) on a specific UTC date.
+    /// Returns None if not cached; caller decides whether to fetch.
+    pub fn get_fx_rate(&self, base: &str, quote: &str, date: &str) -> SqlResult<Option<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rate FROM fx_rates
+             WHERE base = ?1 AND quote = ?2 AND fetched_date = ?3",
+        )?;
+        let row: Option<String> = stmt
+            .query_row(params![base, quote, date], |r| r.get(0))
+            .optional()?;
+        Ok(row.and_then(|s| s.parse::<f64>().ok()))
+    }
+
+    /// Latest cached rate for the pair on or before `date`. Used when today's
+    /// fetch failed but yesterday's value is good enough.
+    pub fn latest_fx_rate(&self, base: &str, quote: &str, on_or_before: &str) -> SqlResult<Option<f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rate FROM fx_rates
+             WHERE base = ?1 AND quote = ?2 AND fetched_date <= ?3
+             ORDER BY fetched_date DESC LIMIT 1",
+        )?;
+        let row: Option<String> = stmt
+            .query_row(params![base, quote, on_or_before], |r| r.get(0))
+            .optional()?;
+        Ok(row.and_then(|s| s.parse::<f64>().ok()))
+    }
+
+    pub fn insert_fx_rate(
+        &self,
+        base: &str,
+        quote: &str,
+        rate: f64,
+        date: &str,
+        source: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO fx_rates(base, quote, rate, fetched_date, source)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(base, quote, fetched_date) DO UPDATE SET
+                rate = excluded.rate, source = excluded.source",
+            params![base, quote, rate.to_string(), date, source],
+        )?;
+        Ok(())
+    }
+
+    // ───── net-worth snapshots ─────
+
+    /// Insert (or replace) today's snapshot. Composite key (user_id, date)
+    /// means re-running the cron mid-day overwrites — that's what we want
+    /// when the user backfills accounts late.
+    pub fn upsert_net_worth_snapshot(
+        &self,
+        user_id: &str,
+        snapshot_date: &str,
+        base_currency: &str,
+        cash: f64,
+        investments: f64,
+        debt: f64,
+    ) -> SqlResult<()> {
+        let net = cash + investments - debt;
+        self.conn.execute(
+            "INSERT INTO net_worth_snapshots(
+                user_id, snapshot_date, base_currency,
+                cash_amt, investments_amt, debt_amt, net_amt, computed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
+                base_currency = excluded.base_currency,
+                cash_amt = excluded.cash_amt,
+                investments_amt = excluded.investments_amt,
+                debt_amt = excluded.debt_amt,
+                net_amt = excluded.net_amt,
+                computed_at = excluded.computed_at",
+            params![
+                user_id,
+                snapshot_date,
+                base_currency,
+                cash.to_string(),
+                investments.to_string(),
+                debt.to_string(),
+                net.to_string(),
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn latest_net_worth_snapshot(&self, user_id: &str) -> SqlResult<Option<NetWorthSnapshot>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT snapshot_date, base_currency, cash_amt, investments_amt, debt_amt, net_amt
+             FROM net_worth_snapshots
+             WHERE user_id = ?1
+             ORDER BY snapshot_date DESC LIMIT 1",
+        )?;
+        stmt.query_row(params![user_id], Self::row_to_snapshot).optional()
+    }
+
+    pub fn net_worth_series(
+        &self,
+        user_id: &str,
+        from_date: &str,
+        to_date: &str,
+    ) -> SqlResult<Vec<NetWorthSnapshot>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT snapshot_date, base_currency, cash_amt, investments_amt, debt_amt, net_amt
+             FROM net_worth_snapshots
+             WHERE user_id = ?1 AND snapshot_date BETWEEN ?2 AND ?3
+             ORDER BY snapshot_date ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![user_id, from_date, to_date],
+            Self::row_to_snapshot,
+        )?;
+        rows.collect()
+    }
+
+    fn row_to_snapshot(r: &rusqlite::Row<'_>) -> SqlResult<NetWorthSnapshot> {
+        let parse_dec = |s: String| s.parse::<f64>().unwrap_or(0.0);
+        Ok(NetWorthSnapshot {
+            snapshot_date: r.get(0)?,
+            base_currency: r.get(1)?,
+            cash_amt: parse_dec(r.get(2)?),
+            investments_amt: parse_dec(r.get(3)?),
+            debt_amt: parse_dec(r.get(4)?),
+            net_amt: parse_dec(r.get(5)?),
+        })
     }
 
     pub fn insert_session(&self, s: &crate::auth::Session) -> SqlResult<()> {
