@@ -1,12 +1,7 @@
 import { useTranslation } from 'react-i18next';
-import { Badge } from '@/components/ui/badge';
+import { ArrowLeftRight } from 'lucide-react';
 import type { Transaction } from '@/lib/api';
-
-const KIND_TONE: Record<Transaction['kind'], string> = {
-  income: 'text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900',
-  expense: 'text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900',
-  transfer: 'text-muted-foreground border-border',
-};
+import { cn } from '@/lib/utils';
 
 export function TxnList({ txns }: { txns: Transaction[] }) {
   const { t, i18n } = useTranslation();
@@ -17,7 +12,7 @@ export function TxnList({ txns }: { txns: Transaction[] }) {
     );
   }
 
-  // Group by YYYY-MM-DD
+  // Group by YYYY-MM-DD descending.
   const groups = new Map<string, Transaction[]>();
   for (const tx of txns) {
     const k = tx.occurred_at.slice(0, 10);
@@ -28,57 +23,61 @@ export function TxnList({ txns }: { txns: Transaction[] }) {
   const sortedKeys = [...groups.keys()].sort().reverse();
 
   return (
-    <div className="divide-border divide-y">
+    <div className="space-y-5">
       {sortedKeys.map((dateKey) => (
-        <div key={dateKey} className="py-3 first:pt-0 last:pb-0">
-          <div className="text-muted-foreground mb-1 text-xs">
+        <section key={dateKey}>
+          <header className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
             {new Date(dateKey).toLocaleDateString(i18n.language, {
               year: 'numeric',
               month: 'short',
               day: 'numeric',
               weekday: 'short',
             })}
-          </div>
-          <ul className="space-y-1">
+          </header>
+          <ul className="divide-border divide-y rounded-lg border">
             {groups.get(dateKey)!.map((tx) => (
-              <li
-                key={tx.id}
-                className="hover:bg-muted/40 flex items-center justify-between gap-2 rounded-md px-2 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className={KIND_TONE[tx.kind]}>
-                      {t(`ledger.${tx.kind}`)}
-                    </Badge>
-                    <span className="text-muted-foreground truncate text-xs">
-                      {tx.category ?? '—'}
-                    </span>
-                  </div>
-                  {tx.note && (
-                    <div className="text-muted-foreground mt-0.5 truncate text-xs">
-                      {tx.note}
-                    </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <span
-                    className={`text-sm tabular-nums ${
-                      tx.kind === 'expense'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : tx.kind === 'income'
-                          ? 'text-emerald-600 dark:text-emerald-400'
-                          : ''
-                    }`}
-                  >
-                    {tx.kind === 'expense' ? '-' : tx.kind === 'income' ? '+' : ''}
-                    {tx.amount} {tx.currency}
-                  </span>
-                </div>
-              </li>
+              <Row key={tx.id} tx={tx} />
             ))}
           </ul>
-        </div>
+        </section>
       ))}
     </div>
+  );
+}
+
+function Row({ tx }: { tx: Transaction }) {
+  // Primary text: the user's own description if they wrote one ("买域名",
+  // "冰粉"), otherwise fall back to the category. That keeps the row
+  // anchored to the specific thing rather than the bucket.
+  const primary = tx.note?.trim() || tx.category?.trim() || '—';
+  const secondary = tx.note?.trim() ? tx.category?.trim() : null;
+
+  const isExpense = tx.kind === 'expense';
+  const isIncome = tx.kind === 'income';
+  const sign = isExpense ? '-' : isIncome ? '+' : '';
+  const amountTone = isExpense
+    ? 'text-rose-600 dark:text-rose-400'
+    : isIncome
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : 'text-foreground';
+
+  return (
+    <li className="hover:bg-muted/40 flex items-center justify-between gap-3 px-3 py-2.5 transition-colors first:rounded-t-lg last:rounded-b-lg">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-sm">
+          {tx.kind === 'transfer' && (
+            <ArrowLeftRight className="text-muted-foreground size-3.5 shrink-0" />
+          )}
+          <span className="truncate font-medium">{primary}</span>
+        </div>
+        {secondary && (
+          <div className="text-muted-foreground mt-0.5 truncate text-xs">{secondary}</div>
+        )}
+      </div>
+      <span className={cn('text-sm tabular-nums whitespace-nowrap', amountTone)}>
+        {sign}
+        {tx.amount} <span className="text-muted-foreground text-xs">{tx.currency}</span>
+      </span>
+    </li>
   );
 }
