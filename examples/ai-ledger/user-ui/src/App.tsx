@@ -8,21 +8,34 @@ import { Portfolio } from '@/pages/Portfolio';
 import { Profile } from '@/pages/Profile';
 import { AppShell } from '@/components/app-shell';
 
+// `/` is always the Marketing page — one URL, one content. Authenticated
+// app lives under `/app/*` (the shell + nested routes). A logged-in user
+// visiting `/` sees Marketing too (they can click `Open app` to jump
+// in); login redirects to `/app`. This keeps the SEO landing stable
+// regardless of session state and avoids the "same URL different content"
+// surprise.
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  return getToken() ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
 export default function App() {
-  const authed = getToken();
   return (
     <Routes>
+      <Route path="/" element={<Marketing />} />
       <Route path="/login" element={<Login />} />
-      {authed ? (
-        <Route path="/" element={<AppShell />}>
-          <Route index element={<Dashboard />} />
-          <Route path="ledger" element={<Ledger />} />
-          <Route path="portfolio" element={<Portfolio />} />
-          <Route path="profile" element={<Profile />} />
-        </Route>
-      ) : (
-        <Route path="/" element={<Marketing />} />
-      )}
+      <Route
+        path="/app"
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="ledger" element={<Ledger />} />
+        <Route path="portfolio" element={<Portfolio />} />
+        <Route path="profile" element={<Profile />} />
+      </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -14,10 +14,10 @@ import { ledgerApi, setToken } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const NAV = [
-  { to: '/', key: 'dashboard', icon: Home },
-  { to: '/ledger', key: 'ledger', icon: Wallet },
-  { to: '/portfolio', key: 'portfolio', icon: TrendingUp },
-  { to: '/profile', key: 'profile', icon: User },
+  { to: '/app', key: 'dashboard', icon: Home },
+  { to: '/app/ledger', key: 'ledger', icon: Wallet },
+  { to: '/app/portfolio', key: 'portfolio', icon: TrendingUp },
+  { to: '/app/profile', key: 'profile', icon: User },
 ] as const;
 
 function LangSwitch() {
@@ -63,7 +63,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
   return (
     <div className="bg-muted/20 flex min-h-svh">
       <aside className="border-border bg-background hidden w-56 shrink-0 flex-col border-r md:flex">
-        <Link to="/" className="flex h-14 items-center px-4 text-lg font-semibold">
+        <Link to="/app" className="flex h-14 items-center px-4 text-lg font-semibold">
           {t('brand')}
         </Link>
         <nav className="flex flex-1 flex-col gap-1 px-2 py-2">
@@ -139,6 +139,8 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
 }
 
 function isActive(pathname: string, to: string): boolean {
-  if (to === '/') return pathname === '/';
+  // /app is the dashboard "index" — only active when path is exactly /app
+  // (or /app/), not when on /app/ledger etc.
+  if (to === '/app') return pathname === '/app' || pathname === '/app/';
   return pathname.startsWith(to);
 }

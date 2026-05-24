@@ -7,7 +7,7 @@ use crate::db::{Db, today_year_month};
 use crate::portfolio::model::build_positions;
 use crate::portfolio::quotes;
 use crate::tools::ledger_path;
-use crate::{SYSTEM_PROMPT, build_task_description, collect_tools};
+use crate::{SYSTEM_PROMPT, build_task_description, build_task_description_with_lang, collect_tools};
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -247,6 +247,8 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/portfolio", get(serve_user_ui_index))
         .route("/profile", get(serve_user_ui_index))
         .route("/app", get(serve_user_ui_index))
+        .route("/app/", get(serve_user_ui_index))
+        .route("/app/*rest", get(serve_user_ui_index))
         // SEO + GEO static text. robots/sitemap for Google/Bing;
         // llms.txt + llms-full.txt for ChatGPT/Claude/Perplexity per
         // the llmstxt.org convention.
@@ -1232,6 +1234,11 @@ struct ChatRequest {
     message: String,
     #[serde(default)]
     history: Vec<ChatMsg>,
+    /// Optional BCP-47-ish locale ("en", "zh-CN", ...). Sets the agent's
+    /// default reply language. If absent, the system prompt's mixed
+    /// EN/ZH content lets the model match the user's input language.
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 async fn chat_handler(
@@ -1247,7 +1254,11 @@ async fn chat_handler(
         .into_iter()
         .map(|m| (m.role, m.text))
         .collect();
-    let task_description = build_task_description(&req.message, &history);
+    let task_description = build_task_description_with_lang(
+        &req.message,
+        &history,
+        req.lang.as_deref(),
+    );
     let _ = SYSTEM_PROMPT;
 
     let model_id = s.effective_model_for(&auth.user);
@@ -1651,6 +1662,9 @@ pub(crate) fn memory_path_for(user_id: &str) -> std::path::PathBuf {
 #[derive(Deserialize)]
 struct SessionStreamReq {
     message: String,
+    /// BCP-47 locale for default reply language (mirrors ChatRequest.lang).
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 /// Per-session streaming chat handler — replaces the old session-less
@@ -1694,7 +1708,8 @@ async fn session_stream_handler(
         .filter(|m| !(m.role == "user" && m.text == req.message))
         .map(|m| (m.role.clone(), m.text.clone()))
         .collect();
-    let task_desc = build_task_description(&req.message, &history);
+    let task_desc =
+        build_task_description_with_lang(&req.message, &history, req.lang.as_deref());
     drop(db);
 
     let user_id = auth.user.id.clone();
@@ -1871,12 +1886,13 @@ async fn chat_stream_handler(
     let (tx, rx) = mpsc::unbounded_channel::<Value>();
     let _ = SYSTEM_PROMPT;
 
-    let task_desc = build_task_description(
+    let task_desc = build_task_description_with_lang(
         &req.message,
         &req.history
-            .into_iter()
-            .map(|m| (m.role, m.text))
+            .iter()
+            .map(|m| (m.role.clone(), m.text.clone()))
             .collect::<Vec<_>>(),
+        req.lang.as_deref(),
     );
 
     let user_id = auth.user.id.clone();

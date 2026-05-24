@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -13,7 +12,6 @@ export function LoginForm({
   ...props
 }: React.ComponentProps<'div'>) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -34,7 +32,10 @@ export function LoginForm({
           ? await ledgerApi.login(email, password)
           : await ledgerApi.register(email, password, invite || undefined);
       setToken(r.token);
-      navigate('/');
+      // `/` is always Marketing; auth lives under `/app`. After login
+      // bounce to the dashboard. Full-page assign so RequireAuth sees
+      // the new token immediately.
+      window.location.assign('/app');
     } catch (err) {
       setError(String((err as Error).message || err));
     } finally {
