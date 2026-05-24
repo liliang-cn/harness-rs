@@ -20,6 +20,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { getToken, setToken, ledgerApi } from '@/lib/api';
 import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
+import { Marketing } from '@/pages/Marketing';
 
 function LangSwitch() {
   const { i18n } = useTranslation();
@@ -91,13 +92,28 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return getToken() ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
+/// Root route: anonymous visitors get the marketing landing (SEO/GEO
+/// content); authenticated users see the dashboard inside the shell.
+/// Splitting per-state at the root keeps the unauth path crawler-friendly
+/// while logged-in users land straight on their data.
+function Root() {
+  return getToken() ? (
+    <Shell>
+      <Dashboard />
+    </Shell>
+  ) : (
+    <Marketing />
+  );
+}
+
 export default function App() {
   return (
     <>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Root />} />
         <Route
-          path="/"
+          path="/app"
           element={
             <RequireAuth>
               <Shell>

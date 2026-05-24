@@ -245,6 +245,13 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/favicon.svg", get(serve_user_ui_asset_root))
         .route("/icons.svg", get(serve_user_ui_asset_root))
         .route("/login", get(serve_user_ui_index))
+        // SEO + GEO static text. robots/sitemap for Google/Bing;
+        // llms.txt + llms-full.txt for ChatGPT/Claude/Perplexity per
+        // the llmstxt.org convention.
+        .route("/robots.txt", get(crate::seo::robots))
+        .route("/sitemap.xml", get(crate::seo::sitemap))
+        .route("/llms.txt", get(crate::seo::llms))
+        .route("/llms-full.txt", get(crate::seo::llms_full))
         // Old hand-written index.html kept under /legacy/ during migration —
         // /legacy/marked.min.js is still served the same way.
         .route("/legacy", get(serve_index))
