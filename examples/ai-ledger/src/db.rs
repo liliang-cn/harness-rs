@@ -31,6 +31,22 @@ pub struct NetWorthSnapshot {
     pub net_amt: f64,
 }
 
+/// One row of the loans table. Used by the loans API and agent tools.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LoanRecord {
+    pub account_id: String,
+    pub user_id: String,
+    pub counterparty: String,
+    pub principal: String,
+    pub apr: String,
+    pub term_months: Option<i64>,
+    pub monthly_payment: Option<String>,
+    pub start_date: String,
+    pub last_accrued_date: String,
+    pub status: String,
+    pub note: Option<String>,
+}
+
 impl Db {
     pub fn open(path: &Path) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
@@ -239,6 +255,23 @@ impl Db {
                 ON audit_events(user_id, created_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_audit_kind_time
                 ON audit_events(kind, created_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS loans (
+                account_id        TEXT PRIMARY KEY,
+                user_id           TEXT NOT NULL,
+                counterparty      TEXT NOT NULL,
+                principal         TEXT NOT NULL,
+                apr               TEXT NOT NULL,
+                term_months       INTEGER,
+                monthly_payment   TEXT,
+                start_date        TEXT NOT NULL,
+                last_accrued_date TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'active',
+                note              TEXT,
+                created_at        TEXT NOT NULL,
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_loans_user_status ON loans(user_id, status);
 
             -- KV table for admin-mutable provider config. Keys:
             --   deepseek_api_key, gemini_api_key, model_for_trial, model_for_paid
@@ -586,6 +619,114 @@ impl Db {
             debt_amt: parse_dec(r.get(4)?),
             net_amt: parse_dec(r.get(5)?),
         })
+    }
+
+    // ───── loans ─────
+
+    /// Insert a new loan row keyed by `account_id`. The loan's
+    /// `last_accrued_date` cursor is initialized to `start_date`, and the
+    /// status is `'active'`. Caller is expected to have already created the
+    /// matching `accounts` row (the FK references it).
+    pub fn insert_loan(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        counterparty: &str,
+        principal: &str,
+        apr: &str,
+        term_months: Option<i64>,
+        monthly_payment: Option<&str>,
+        start_date: &str,
+        note: Option<&str>,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO loans(
+                account_id, user_id, counterparty, principal, apr,
+                term_months, monthly_payment, start_date, last_accrued_date,
+                status, note, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active', ?10, ?11)",
+            params![
+                account_id,
+                user_id,
+                counterparty,
+                principal,
+                apr,
+                term_months,
+                monthly_payment,
+                start_date,
+                start_date, // last_accrued_date defaults to start_date
+                note,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_loan(r: &rusqlite::Row<'_>) -> SqlResult<LoanRecord> {
+        Ok(LoanRecord {
+            account_id: r.get(0)?,
+            user_id: r.get(1)?,
+            counterparty: r.get(2)?,
+            principal: r.get(3)?,
+            apr: r.get(4)?,
+            term_months: r.get::<_, Option<i64>>(5)?,
+            monthly_payment: r.get::<_, Option<String>>(6)?,
+            start_date: r.get(7)?,
+            last_accrued_date: r.get(8)?,
+            status: r.get(9)?,
+            note: r.get::<_, Option<String>>(10)?,
+        })
+    }
+
+    /// List all loans for `user_id`, including non-active (paid_off / cancelled),
+    /// newest first. The UI/API can filter by status.
+    pub fn list_loans(&self, user_id: &str) -> SqlResult<Vec<LoanRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT account_id, user_id, counterparty, principal, apr,
+                    term_months, monthly_payment, start_date, last_accrued_date,
+                    status, note
+             FROM loans
+             WHERE user_id = ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![user_id], Self::row_to_loan)?;
+        rows.collect()
+    }
+
+    pub fn get_loan_by_account(
+        &self,
+        user_id: &str,
+        account_id: &str,
+    ) -> SqlResult<Option<LoanRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT account_id, user_id, counterparty, principal, apr,
+                    term_months, monthly_payment, start_date, last_accrued_date,
+                    status, note
+             FROM loans
+             WHERE user_id = ?1 AND account_id = ?2",
+        )?;
+        stmt.query_row(params![user_id, account_id], Self::row_to_loan)
+            .optional()
+    }
+
+    /// Advance the loan's accrual cursor. Called by the daily interest cron
+    /// after it has posted the interest transaction(s) up to `date`.
+    pub fn set_loan_last_accrued(&self, account_id: &str, date: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE loans SET last_accrued_date = ?1 WHERE account_id = ?2",
+            params![date, account_id],
+        )?;
+        Ok(())
+    }
+
+    /// Flip status — typically `'active'` → `'paid_off'` once the balance
+    /// hits zero, or `'cancelled'` when the user deletes the loan.
+    pub fn set_loan_status(&self, account_id: &str, status: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE loans SET status = ?1 WHERE account_id = ?2",
+            params![status, account_id],
+        )?;
+        Ok(())
     }
 
     pub fn insert_session(&self, s: &crate::auth::Session) -> SqlResult<()> {

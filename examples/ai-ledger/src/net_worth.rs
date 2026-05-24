@@ -61,8 +61,11 @@ pub fn snapshot_now(db: &Db, user_id: &str, base_currency: &str) -> anyhow::Resu
             }
         }
         let bucket = match a.kind {
-            AccountKind::Cash | AccountKind::Debit | AccountKind::Wallet => &mut cash_native,
-            AccountKind::Credit => &mut debt_native,
+            AccountKind::Cash
+            | AccountKind::Debit
+            | AccountKind::Wallet
+            | AccountKind::Receivable => &mut cash_native,
+            AccountKind::Credit | AccountKind::Loan | AccountKind::Mortgage => &mut debt_native,
             AccountKind::Other => continue,
         };
         *bucket.entry(a.currency.clone()).or_insert(0.0) += bal;
