@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { getToken } from '@/lib/api';
 import {
   ArrowRight,
   Globe2,
@@ -104,6 +105,7 @@ const FAQ = [
 ];
 
 export function Marketing() {
+  const authed = !!getToken();
   return (
     <div className="bg-background min-h-svh">
       {/* Top bar */}
@@ -115,20 +117,30 @@ export function Marketing() {
           AI financial concierge
         </span>
         <div className="flex-1" />
-        <Button asChild variant="ghost" size="sm">
-          <Link to="/login">Sign in</Link>
-        </Button>
-        <Button asChild size="sm">
-          <Link to="/login">
-            Start free <ArrowRight className="size-4" />
-          </Link>
-        </Button>
+        {authed ? (
+          <Button asChild size="sm">
+            <Link to="/app">
+              Open app <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+        ) : (
+          <>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/login">Sign in</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link to="/login">
+                Start free <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </>
+        )}
       </header>
 
       {/* Hero */}
       <section className="mx-auto max-w-4xl px-4 pt-16 pb-12 text-center sm:pt-24 sm:pb-20">
         <Badge variant="secondary" className="mb-6">
-          For individuals and families · 海外用户
+          Built for individuals and families
         </Badge>
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
           Your AI financial concierge.

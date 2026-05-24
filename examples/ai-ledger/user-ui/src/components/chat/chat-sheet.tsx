@@ -37,7 +37,7 @@ interface ChatSheetProps {
  * props.
  */
 export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -169,6 +169,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
           }
         },
         ctrl.signal,
+        i18n.language,
       );
 
       // Commit the assistant message. Use server-provided `reply` if non-empty

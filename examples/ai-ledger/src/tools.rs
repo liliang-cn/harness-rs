@@ -880,3 +880,90 @@ async fn apply_category_merge(args: Value, w: &mut World) -> Result<ToolResult, 
         trace: None,
     })
 }
+
+/// Get the user's current net worth: cash + investments − debt, aggregated
+/// to their base_currency. Use this when the user asks "how am I doing?" /
+/// "what's my net worth?" / "我现在多少身家" / "this month vs last month".
+///
+/// Returns the latest snapshot plus a delta vs `compare_days` ago (default
+/// 30). If no historical snapshot exists for the comparison date, returns
+/// the absolute number without a delta.
+#[harness::tool(
+    name = "get_net_worth",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "compare_days": {
+                "type": "integer",
+                "description": "Days ago to compare against for delta (default 30). Use 7 for week-over-week, 30 for monthly, 365 for year-over-year.",
+                "default": 30
+            }
+        }
+    }"#
+)]
+async fn get_net_worth(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let compare_days = args
+        .get("compare_days")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(30)
+        .clamp(1, 3650) as i64;
+    let db = open_db()?;
+    let uid = crate::tools::uid_of(w)?;
+    // Pull the user to get their base_currency (canonical). Profile.extra
+    // doesn't carry it.
+    let user = db
+        .get_user_by_id(&uid)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .ok_or_else(|| ToolError::Exec("user gone".into()))?;
+    let base = user.base_currency.clone();
+
+    // Latest snapshot — if missing (brand-new user, cron hasn't run),
+    // compute one now so the agent has something to say.
+    let snap = match db
+        .latest_net_worth_snapshot(&uid)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+    {
+        Some(s) => s,
+        None => crate::net_worth::snapshot_now(&db, &uid, &base)
+            .map_err(|e| ToolError::Exec(format!("snapshot: {e}")))?,
+    };
+
+    // Past snapshot for delta — pick the first row on or after the target
+    // date. If none exists yet (history shorter than compare_days), skip.
+    let target = (chrono::Utc::now() - chrono::Duration::days(compare_days))
+        .format("%Y-%m-%d")
+        .to_string();
+    let series = db
+        .net_worth_series(&uid, &target, &snap.snapshot_date)
+        .map_err(|e| ToolError::Exec(e.to_string()))?;
+    let past = series
+        .iter()
+        .find(|s| s.snapshot_date >= target && s.snapshot_date < snap.snapshot_date);
+
+    let (delta_abs, delta_pct, past_date) = match past {
+        Some(p) if p.net_amt != 0.0 => {
+            let abs = snap.net_amt - p.net_amt;
+            let pct = (abs / p.net_amt.abs()) * 100.0;
+            (Some(abs), Some(pct), Some(p.snapshot_date.clone()))
+        }
+        _ => (None, None, None),
+    };
+
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "as_of": snap.snapshot_date,
+            "base_currency": base,
+            "net": snap.net_amt,
+            "cash": snap.cash_amt,
+            "investments": snap.investments_amt,
+            "debt": snap.debt_amt,
+            "compare_days": compare_days,
+            "compared_to": past_date,
+            "delta_abs": delta_abs,
+            "delta_pct": delta_pct,
+        }),
+        trace: None,
+    })
+}

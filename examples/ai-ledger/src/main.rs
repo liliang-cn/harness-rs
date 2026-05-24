@@ -514,7 +514,32 @@ fn build_profile(cli: &Cli) -> UserProfile {
 }
 
 pub(crate) fn build_task_description(user_request: &str, history: &[(String, String)]) -> String {
-    let mut s = SYSTEM_PROMPT.to_string();
+    build_task_description_with_lang(user_request, history, None)
+}
+
+/// Same as `build_task_description` but injects a one-line locale
+/// directive at the top so the model speaks the user's UI language by
+/// default. The big SYSTEM_PROMPT body covers EN+ZH content already; this
+/// header just sets the reply language.
+pub(crate) fn build_task_description_with_lang(
+    user_request: &str,
+    history: &[(String, String)],
+    lang: Option<&str>,
+) -> String {
+    let mut s = String::new();
+    if let Some(l) = lang {
+        let header = match l {
+            "zh" | "zh-CN" | "zh-Hans" | "zh-TW" => {
+                "Default reply language: Chinese (Simplified). If the user writes in another language, follow their language instead.\n\n"
+            }
+            "en" | "en-US" | "en-GB" => {
+                "Default reply language: English. If the user writes in another language, follow their language instead.\n\n"
+            }
+            _ => "",
+        };
+        s.push_str(header);
+    }
+    s.push_str(SYSTEM_PROMPT);
     if !history.is_empty() {
         s.push_str("\n\nPrior conversation (oldest first):\n");
         for (role, text) in history {
