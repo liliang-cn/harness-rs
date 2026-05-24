@@ -20,6 +20,7 @@ mod model;
 mod net_worth;
 mod portfolio;
 mod pricing;
+mod seo;
 mod server;
 mod skills;
 mod subscription;
