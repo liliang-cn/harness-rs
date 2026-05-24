@@ -13,6 +13,7 @@
 //! ```
 
 mod admin;
+mod attachments;
 mod auth;
 mod db;
 mod fx;

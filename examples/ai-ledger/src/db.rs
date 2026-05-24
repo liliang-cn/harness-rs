@@ -31,6 +31,21 @@ pub struct NetWorthSnapshot {
     pub net_amt: f64,
 }
 
+/// One row of the attachments table. Receipt photo / PDF uploaded
+/// from the chat composer; the bytes live under HARNESS_LEDGER_UPLOADS,
+/// `path` is relative to that root.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AttachmentRecord {
+    pub id: String,
+    pub user_id: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub original_name: Option<String>,
+    pub path: String,
+    pub kind: String,
+    pub created_at: String,
+}
+
 /// One row of the loans table. Used by the loans API and agent tools.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LoanRecord {
@@ -272,6 +287,21 @@ impl Db {
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
             CREATE INDEX IF NOT EXISTS idx_loans_user_status ON loans(user_id, status);
+
+            -- Chat attachments: receipt photos / PDFs uploaded from the chat
+            -- composer. The bytes live on disk under HARNESS_LEDGER_UPLOADS;
+            -- the DB just tracks who owns what + the relative path + mime.
+            CREATE TABLE IF NOT EXISTS attachments (
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                mime_type       TEXT NOT NULL,
+                size_bytes      INTEGER NOT NULL,
+                original_name   TEXT,
+                path            TEXT NOT NULL,
+                kind            TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_id, created_at DESC);
 
             -- KV table for admin-mutable provider config. Keys:
             --   deepseek_api_key, gemini_api_key, model_for_trial, model_for_paid
@@ -727,6 +757,65 @@ impl Db {
             params![status, account_id],
         )?;
         Ok(())
+    }
+
+    // ───── attachments (chat receipt uploads) ─────
+
+    pub fn insert_attachment(
+        &self,
+        id: &str,
+        user_id: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        original_name: Option<&str>,
+        path: &str,
+        kind: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO attachments(
+                id, user_id, mime_type, size_bytes, original_name,
+                path, kind, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                user_id,
+                mime_type,
+                size_bytes,
+                original_name,
+                path,
+                kind,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Look up one attachment, scoped to `user_id` so a forged id from
+    /// another user just returns None.
+    pub fn get_attachment(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> SqlResult<Option<AttachmentRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, user_id, mime_type, size_bytes, original_name,
+                    path, kind, created_at
+             FROM attachments
+             WHERE user_id = ?1 AND id = ?2",
+        )?;
+        stmt.query_row(params![user_id, id], |r| {
+            Ok(AttachmentRecord {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                mime_type: r.get(2)?,
+                size_bytes: r.get(3)?,
+                original_name: r.get::<_, Option<String>>(4)?,
+                path: r.get(5)?,
+                kind: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })
+        .optional()
     }
 
     /// Current balance of an account = `opening_balance` + net of every
