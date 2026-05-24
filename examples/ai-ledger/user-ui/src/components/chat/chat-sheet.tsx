@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Plus, X } from 'lucide-react';
+import { ArrowLeft, Plus, RotateCcw, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Sheet,
@@ -106,16 +106,21 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   }, []);
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, opts: { regenerate?: boolean } = {}) => {
       if (!activeId || busy) return;
-      const optimistic: ChatMessage = {
-        id: `local-${Date.now()}`,
-        session_id: activeId,
-        role: 'user',
-        text,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((cur) => [...cur, optimistic]);
+      // Append the user bubble only on a fresh send. Regenerate keeps the
+      // existing user message (it was already shown last turn) and just
+      // re-runs the agent against it.
+      if (!opts.regenerate) {
+        const optimistic: ChatMessage = {
+          id: `local-${Date.now()}`,
+          session_id: activeId,
+          role: 'user',
+          text,
+          created_at: new Date().toISOString(),
+        };
+        setMessages((cur) => [...cur, optimistic]);
+      }
       setStreaming('');
       setToolEvents([]);
       setBusy(true);
@@ -198,8 +203,38 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       // Refresh sessions list (message_count + updated_at moved).
       setSessionsKey((k) => k + 1);
     },
-    [activeId, busy, t],
+    [activeId, busy, t, i18n.language],
   );
+
+  /** Drop the trailing assistant turn (if any) and re-run the last user
+   *  message. Shown only when there IS a last user message and we're idle. */
+  const handleRegenerate = useCallback(() => {
+    if (busy) return;
+    // Walk from the end to find the last user message.
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return;
+    const lastUserText = messages[lastUserIdx].text;
+    // Drop everything after that user message (the assistant turn we
+    // didn't like, plus any stray tool/error messages).
+    setMessages((cur) => cur.slice(0, lastUserIdx + 1));
+    // Re-run without appending another user bubble.
+    handleSend(lastUserText, { regenerate: true });
+  }, [busy, messages, handleSend]);
+
+  // Show the regenerate affordance only when:
+  //   - we have an active session (i.e. not on the sessions list)
+  //   - there's at least one user message in the transcript
+  //   - we're not currently streaming
+  const canRegenerate =
+    !!activeId &&
+    !busy &&
+    messages.some((m) => m.role === 'user');
 
   const showSessions = !activeId;
 
@@ -262,6 +297,19 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
               toolEvents={toolEvents}
               busy={busy}
             />
+            {canRegenerate && (
+              <div className="border-border flex justify-center border-t bg-background/60 px-3 py-1.5 backdrop-blur">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground gap-1.5 text-xs"
+                  onClick={handleRegenerate}
+                >
+                  <RotateCcw className="size-3.5" />
+                  {t('chat.regenerate')}
+                </Button>
+              </div>
+            )}
             <Composer onSend={handleSend} onStop={handleStop} busy={busy} />
           </>
         )}
