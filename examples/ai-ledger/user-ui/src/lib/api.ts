@@ -143,20 +143,4 @@ export const ledgerApi = {
       `/api/transactions${qs}`,
     );
   },
-  // NOTE: backend currently exposes GET /api/transactions only.
-  // The create/update/delete endpoints below are scaffolded for the next
-  // server-side iteration — they will 404 until the Rust side adds the
-  // matching routes. The UI surfaces those errors via toast.
-  createTransaction: (body: Partial<Transaction>) =>
-    api<{ transaction: Transaction }>(`/api/transactions`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  updateTransaction: (id: string, body: Partial<Transaction>) =>
-    api<{ ok: true }>(`/api/transactions/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
-  deleteTransaction: (id: string) =>
-    api<{ ok: true }>(`/api/transactions/${id}`, { method: 'DELETE' }),
 };

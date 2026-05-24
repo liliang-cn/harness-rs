@@ -1,7 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Pencil, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import type { Transaction } from '@/lib/api';
 
 const KIND_TONE: Record<Transaction['kind'], string> = {
@@ -10,15 +8,7 @@ const KIND_TONE: Record<Transaction['kind'], string> = {
   transfer: 'text-muted-foreground border-border',
 };
 
-export function TxnList({
-  txns,
-  onEdit,
-  onDelete,
-}: {
-  txns: Transaction[];
-  onEdit: (t: Transaction) => void;
-  onDelete: (t: Transaction) => void;
-}) {
+export function TxnList({ txns }: { txns: Transaction[] }) {
   const { t, i18n } = useTranslation();
 
   if (txns.length === 0) {
@@ -83,22 +73,6 @@ export function TxnList({
                     {tx.kind === 'expense' ? '-' : tx.kind === 'income' ? '+' : ''}
                     {tx.amount} {tx.currency}
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onEdit(tx)}
-                    aria-label={t('ledger.edit')}
-                  >
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onDelete(tx)}
-                    aria-label={t('ledger.delete')}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
                 </div>
               </li>
             ))}
