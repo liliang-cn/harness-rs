@@ -3,6 +3,7 @@ import { getToken } from '@/lib/api';
 import { Login } from '@/pages/Login';
 import { Marketing } from '@/pages/Marketing';
 import { Dashboard } from '@/pages/Dashboard';
+import { Ledger } from '@/pages/Ledger';
 import { AppShell } from '@/components/app-shell';
 
 export default function App() {
@@ -13,14 +14,7 @@ export default function App() {
       {authed ? (
         <Route path="/" element={<AppShell />}>
           <Route index element={<Dashboard />} />
-          <Route
-            path="ledger"
-            element={
-              <div className="text-muted-foreground py-8 text-center text-sm">
-                Ledger (Task 2 placeholder)
-              </div>
-            }
-          />
+          <Route path="ledger" element={<Ledger />} />
           <Route
             path="portfolio"
             element={
