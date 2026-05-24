@@ -122,6 +122,7 @@
     "placeholder": "Ask anything…",
     "send": "Send",
     "stop": "Stop",
+    "regenerate": "Regenerate",
     "mic": "Voice input",
     "micListening": "Listening — tap to stop",
     "micUnsupported": "Voice input not supported in this browser",

@@ -120,6 +120,7 @@
     "placeholder": "随便问…",
     "send": "发送",
     "stop": "停止",
+    "regenerate": "重试",
     "mic": "语音输入",
     "micListening": "正在听 — 点击停止",
     "micUnsupported": "当前浏览器不支持语音输入",
