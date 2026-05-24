@@ -139,50 +139,51 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Net worth hero */}
+      {/* Net worth hero — actions on the label row so the big number
+          always gets full card width (otherwise mobile pinches it). */}
       <Card>
-        <CardHeader className="flex flex-row items-start justify-between space-y-0">
-          <div>
+        <CardHeader className="space-y-0">
+          <div className="flex items-center justify-between gap-2">
             <CardDescription>{t('dashboard.title')}</CardDescription>
-            <CardTitle className="mt-1 text-4xl font-bold tabular-nums">
-              {formatMoney(snap.net_amt, ccy)}
-            </CardTitle>
-            <div className="mt-2 text-sm">
-              {delta30Abs !== null && delta30Pct !== null ? (
-                <span
-                  className={cn_inline(
-                    'inline-flex items-center gap-1',
-                    up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
-                  )}
-                >
-                  {up ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />}
-                  {t('dashboard.delta30', {
-                    value: `${up ? '+' : ''}${formatMoney(delta30Abs, ccy)}`,
-                    pct: `${up ? '+' : ''}${delta30Pct.toFixed(2)}%`,
-                  })}
-                </span>
-              ) : (
-                <span className="text-muted-foreground">{t('dashboard.noHistory')}</span>
-              )}
+            <div className="flex items-center gap-2">
+              <CurrencyPicker value={ccy} onChange={changeCurrency} />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={refreshNow}
+                disabled={refreshing}
+                title={t('dashboard.refreshNow')}
+              >
+                <RotateCw className={refreshing ? 'animate-spin' : ''} />
+              </Button>
             </div>
-            <p className="text-muted-foreground mt-1 text-xs">
-              {t('dashboard.asOf', {
-                date: new Date(snap.snapshot_date).toLocaleDateString(i18n.language),
-              })}
-            </p>
           </div>
-          <div className="flex items-center gap-2">
-            <CurrencyPicker value={ccy} onChange={changeCurrency} />
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={refreshNow}
-              disabled={refreshing}
-              title={t('dashboard.refreshNow')}
-            >
-              <RotateCw className={refreshing ? 'animate-spin' : ''} />
-            </Button>
+          <CardTitle className="mt-2 text-3xl font-bold tabular-nums sm:text-4xl">
+            {formatMoney(snap.net_amt, ccy)}
+          </CardTitle>
+          <div className="mt-2 text-sm">
+            {delta30Abs !== null && delta30Pct !== null ? (
+              <span
+                className={cn_inline(
+                  'inline-flex items-center gap-1',
+                  up ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400',
+                )}
+              >
+                {up ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />}
+                {t('dashboard.delta30', {
+                  value: `${up ? '+' : ''}${formatMoney(delta30Abs, ccy)}`,
+                  pct: `${up ? '+' : ''}${delta30Pct.toFixed(2)}%`,
+                })}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">{t('dashboard.noHistory')}</span>
+            )}
           </div>
+          <p className="text-muted-foreground mt-1 text-xs">
+            {t('dashboard.asOf', {
+              date: new Date(snap.snapshot_date).toLocaleDateString(i18n.language),
+            })}
+          </p>
         </CardHeader>
       </Card>
 
