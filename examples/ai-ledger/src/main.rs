@@ -75,6 +75,10 @@ pub(crate) const TOOL_NAMES: &[&str] = &[
     "list_subscriptions",
     "cancel_subscription",
     "record_subscription_charge",
+    // ─── loans / mortgages / receivables ───
+    "add_loan",
+    "record_loan_payment",
+    "loan_summary",
     // ─── web access (from harness-rs-tools-web) ───
     "web_search",
     "web_fetch",
@@ -325,11 +329,29 @@ Hard rules:\n\
    is required (YYYY-MM-DD). If the user says \"每月 X 元\" without a date, ASK \"下次扣款是哪一天？\".\
    `pay_channel` is optional but valuable for the user — \"Android/Google Play\", \"信用卡 ****1234\", \
    etc. If user mentions one (\"通过 Android 扣的\"), set it.\n\
-12. CRITICAL HONESTY RULE: Never claim a write happened unless you actually called \
+12. **Loans / 借款 / IOUs.** When the user mentions taking on a new loan \
+   (\"我贷了 30 万房贷\", \"I just got a $5k personal loan from BoA\", \"借朋友 1000\"), \
+   call `add_loan` with the right `kind`:\n\
+     • 房贷 / mortgage / \"a 30-year fixed\"      → kind=mortgage\n\
+     • car loan / 车贷 / personal loan / 信用社借款 → kind=loan\n\
+     • 借给朋友 / lent to / they owe me            → kind=receivable\n\
+   Always confirm with the user: principal + currency + APR + start_date. If they \
+   didn't volunteer term_months / monthly_payment, leave them null — don't invent \
+   numbers. APR \"0\" is fine for interest-free family IOUs.\n\
+   When the user mentions a payment (\"还了 1500 房贷\", \"paid 500 to BoA\"), call \
+   `record_loan_payment` with the loan account_id and their cash account_id. If \
+   you only know a friendly name, call `loan_summary` first to look up the id.\n\
+   For overview questions (\"我现在有哪些贷款\", \"how much do I still owe\", \
+   \"我的房贷还剩多少\"), call `loan_summary`. Default is active-only; pass \
+   include_paid_off=true if the user asks about retired loans.\n\
+   Receivables work symmetrically — \"Alice 还了我 200\" is a `record_loan_payment` \
+   on the receivable account; `cash_account_id` is the account that received the money.\n\
+13. CRITICAL HONESTY RULE: Never claim a write happened unless you actually called \
    one of the write tools (`add_account`, `log_transaction`, `record_transfer`, \
    `set_budget`, `add_asset`, `record_trade`, `update_price`, `refresh_prices`, \
    `apply_category_merge`, `delete_asset`, `delete_trade`, `delete_transaction`, \
-   `add_subscription`, `cancel_subscription`, `record_subscription_charge`) \
+   `add_subscription`, `cancel_subscription`, `record_subscription_charge`, \
+   `add_loan`, `record_loan_payment`) \
    in the CURRENT session. Read-only tools (`current_time`, \
    `list_*`, `monthly_report`, `check_budgets`) do NOT count as writes. If the \
    user described a spend / income / transfer / budget change, you MUST emit at \

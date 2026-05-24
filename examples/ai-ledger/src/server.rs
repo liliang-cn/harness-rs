@@ -2153,81 +2153,10 @@ async fn set_base_currency_handler(
 // so the dashboard doesn't have to fan out to N endpoints per loan.
 
 async fn list_loans_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
-    use chrono::{Datelike, Months, NaiveDate};
     let db = open_db()?;
-    let loans = db.list_loans(&auth.user.id).map_err(api_err)?;
-    let today = Utc::now().date_naive();
-    let mut out: Vec<Value> = Vec::with_capacity(loans.len());
-    for l in &loans {
-        // Skip orphaned loan rows whose account was deleted. Defensive —
-        // we don't currently let the user delete a loan account directly,
-        // but if they ever do, we don't want the API to 500.
-        let Some(acct) = db
-            .get_account(&auth.user.id, &l.account_id)
-            .map_err(api_err)?
-        else {
-            continue;
-        };
-
-        let balance = db
-            .compute_account_balance(&auth.user.id, &l.account_id)
-            .map_err(api_err)?;
-
-        // Sign convention: debt accounts (Loan/Mortgage) carry a negative
-        // balance, Receivables carry a positive one. `remaining` is the
-        // unsigned "how much is still outstanding" the user thinks in.
-        let remaining_f = match acct.kind {
-            crate::model::AccountKind::Receivable => balance.max(0.0),
-            _ => balance.abs(),
-        };
-
-        let principal_f: f64 = l.principal.parse().unwrap_or(0.0);
-        // (principal − remaining) / principal × 100, clamped to [0, 100].
-        // Same formula for debts and receivables: how much of the original
-        // balance has been resolved.
-        let progress_pct = if principal_f > 0.0 {
-            ((principal_f - remaining_f) / principal_f * 100.0).clamp(0.0, 100.0)
-        } else {
-            0.0
-        };
-
-        // next_due_date: only meaningful when we have both a monthly payment
-        // amount and a term. Months since start_date + 1, clamped to
-        // term_months. chrono's checked_add_months handles month-end
-        // clamping (e.g. Jan 31 + 1 month → Feb 28) so we don't have to.
-        let next_due_date: Option<String> = match (l.monthly_payment.as_ref(), l.term_months) {
-            (Some(_), Some(term)) if term > 0 => {
-                NaiveDate::parse_from_str(&l.start_date, "%Y-%m-%d")
-                    .ok()
-                    .and_then(|start| {
-                        let elapsed = (today.year() as i64 * 12 + today.month() as i64)
-                            - (start.year() as i64 * 12 + start.month() as i64);
-                        let next_n = (elapsed.max(0) + 1).min(term).max(0) as u32;
-                        start.checked_add_months(Months::new(next_n))
-                    })
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-            }
-            _ => None,
-        };
-
-        out.push(json!({
-            "account_id":      l.account_id,
-            "name":            acct.name,
-            "kind":            acct.kind,
-            "counterparty":    l.counterparty,
-            "principal":       l.principal,
-            "remaining":       format!("{:.2}", remaining_f),
-            "currency":        acct.currency,
-            "apr":             l.apr,
-            "term_months":     l.term_months,
-            "monthly_payment": l.monthly_payment,
-            "start_date":      l.start_date,
-            "next_due_date":   next_due_date,
-            "progress_pct":    (progress_pct * 100.0).round() / 100.0,
-            "status":          l.status,
-            "note":            l.note,
-        }));
-    }
+    // Default include_paid_off=true here so the UI can show retired loans
+    // greyed-out; the agent tool defaults the other way (active-only).
+    let out = crate::loans::summarise(&db, &auth.user.id, true).map_err(api_err)?;
     Ok(Json(json!({"loans": out})))
 }
 
