@@ -1,7 +1,8 @@
 //! FX rate fetcher backing the net-worth dashboard.
 //!
-//! We use exchangerate.host's free `/latest` endpoint (no API key, daily
-//! ECB-derived mid prices). Results land in the `fx_rates` SQLite table,
+//! We use Frankfurter's `/latest` endpoint — ECB official mid prices,
+//! no API key, free. (exchangerate.host moved to key-gated tiers in
+//! 2024.) Results land in the `fx_rates` SQLite table,
 //! keyed by (base, quote, date). The snapshot cron and on-demand
 //! conversions both read from that cache so we never block on the network
 //! during a request.
@@ -25,7 +26,7 @@ pub const TRACKED_CURRENCIES: &[&str] = &[
     "USD", "EUR", "GBP", "JPY", "CNY", "HKD", "SGD", "AUD", "CAD", "CHF", "KRW",
 ];
 
-const SOURCE: &str = "exchangerate.host";
+const SOURCE: &str = "frankfurter";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Deserialize)]
@@ -53,10 +54,16 @@ pub fn convert(db: &Db, amount: f64, from: &str, to: &str) -> rusqlite::Result<O
 /// multiple times. Used both at startup (warm cache) and by the daily
 /// cron.
 pub async fn refresh_for_base(db_path: &PathBuf, base: &str) -> anyhow::Result<usize> {
+    // Frankfurter (ECB rates) — drops only the requested base from the
+    // symbol list so we don't get back a redundant 1.0.
+    let symbols: Vec<&&str> = TRACKED_CURRENCIES
+        .iter()
+        .filter(|c| !c.eq_ignore_ascii_case(base))
+        .collect();
     let url = format!(
-        "https://api.exchangerate.host/latest?base={}&symbols={}",
+        "https://api.frankfurter.dev/v1/latest?base={}&symbols={}",
         base,
-        TRACKED_CURRENCIES.join(",")
+        symbols.iter().map(|s| **s).collect::<Vec<_>>().join(",")
     );
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
