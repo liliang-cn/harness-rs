@@ -83,6 +83,29 @@
     "trades": "交易",
     "subscriptions": "订阅"
   },
+  "portfolio": {
+    "title": "投资",
+    "positions": "持仓",
+    "trades": "交易记录",
+    "allocation": "资产配置",
+    "qty": "数量",
+    "avg": "均价",
+    "value": "市值",
+    "unrealized": "浮动盈亏",
+    "noPrice": "暂无报价",
+    "empty": "还没有数据，去聊天里加一笔交易。",
+    "buy": "买入",
+    "sell": "卖出",
+    "opening": "建仓",
+    "symbol": "代码",
+    "class": {
+      "stock": "股票",
+      "etf": "ETF",
+      "crypto": "加密货币",
+      "commodity": "商品",
+      "other": "其他"
+    }
+  },
   "currency": {
     "USD": "美元",
     "EUR": "欧元",

@@ -136,6 +136,62 @@ export interface ReportRow {
 
 export type CsvExportKind = 'transactions' | 'trades' | 'subscriptions';
 
+export type AssetClass = 'stock' | 'etf' | 'commodity' | 'crypto' | 'other';
+export type TradeKind = 'buy' | 'sell' | 'opening';
+
+export interface Asset {
+  id: string;
+  symbol: string;
+  name: string;
+  asset_class: AssetClass;
+  provider_id: string | null;
+  currency: string;
+  created_at: string;
+}
+
+export interface PriceQuote {
+  asset_id: string;
+  price: string;
+  currency: string;
+  fetched_at: string;
+  source: string;
+}
+
+// /api/portfolio/assets returns enriched rows: `{ asset, latest_price }`.
+export interface AssetWithPrice {
+  asset: Asset;
+  latest_price: PriceQuote | null;
+}
+
+export interface Position {
+  asset_id: string;
+  symbol: string;
+  name: string;
+  asset_class: AssetClass;
+  currency: string;
+  qty: string;
+  avg_cost: string;
+  realized_pl: string;
+  last_price: string | null;
+  last_price_at: string | null;
+  last_price_source: string | null;
+  market_value: string | null;
+  unrealized_pl: string | null;
+}
+
+export interface Trade {
+  id: string;
+  asset_id: string;
+  kind: TradeKind;
+  qty: string;
+  price_per_unit: string;
+  currency: string;
+  fees: string;
+  occurred_at: string;
+  note: string | null;
+  created_at: string;
+}
+
 // ─── endpoints ────────────────────────────────────────────
 
 export const ledgerApi = {
@@ -203,6 +259,17 @@ export const ledgerApi = {
     api<{ cancelled: string }>(`/api/subscriptions/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
     }),
+  positions: () =>
+    api<{ count: number; positions: Position[] }>('/api/portfolio/positions'),
+  trades: (asset_symbol?: string, limit?: number) => {
+    const p = new URLSearchParams();
+    if (asset_symbol) p.set('asset_symbol', asset_symbol);
+    if (limit !== undefined) p.set('limit', String(limit));
+    const qs = p.toString() ? `?${p}` : '';
+    return api<{ count: number; trades: Trade[] }>(`/api/portfolio/trades${qs}`);
+  },
+  assets: () =>
+    api<{ count: number; assets: AssetWithPrice[] }>('/api/portfolio/assets'),
   monthlyReport: (year?: number, month?: number) => {
     const p = new URLSearchParams();
     if (year !== undefined) p.set('year', String(year));
