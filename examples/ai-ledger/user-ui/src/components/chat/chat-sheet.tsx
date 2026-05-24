@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Sheet,
@@ -212,7 +212,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       >
         <SheetTitle className="sr-only">{t('chat.title')}</SheetTitle>
         <SheetDescription className="sr-only">{t('chat.fab')}</SheetDescription>
-        <div className="border-border flex h-12 items-center gap-2 border-b px-3">
+        <div className="border-border flex h-14 items-center gap-1 border-b px-3">
           {!showSessions && (
             <Button
               variant="ghost"
@@ -223,16 +223,17 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
               <ArrowLeft className="size-4" />
             </Button>
           )}
-          <div className="min-w-0 flex-1 truncate text-sm font-medium">
+          <div className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
             {showSessions
               ? t('chat.title')
               : session?.title?.trim() || t('chat.untitled')}
           </div>
-          {showSessions ? null : (
+          {!showSessions && (
             <Button
               variant="ghost"
               size="icon-sm"
               aria-label={t('chat.newChat')}
+              title={t('chat.newChat')}
               onClick={handleNew}
             >
               <Plus className="size-4" />
@@ -241,10 +242,10 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="close"
+            aria-label={t('chat.close', { defaultValue: 'close' })}
             onClick={() => onOpenChange(false)}
           >
-            <span aria-hidden>×</span>
+            <X className="size-4" />
           </Button>
         </div>
         {showSessions ? (
