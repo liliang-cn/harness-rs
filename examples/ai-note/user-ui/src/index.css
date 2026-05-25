@@ -193,3 +193,14 @@
   border: 0;
   border-top: 1px solid var(--border);
 }
+
+/* WYSIWYG note editor (MDXEditor): its toolbar defaults to a floating rounded
+   "pill". Flush it into a full-width header bar so it sits cleanly inside our
+   bordered container instead of nesting a second rounded shape. The hashed
+   class always contains `_toolbarRoot_`, so match on a substring. */
+.note-md [class*='_toolbarRoot_'] {
+  border-radius: 0;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid var(--baseBorder);
+}
