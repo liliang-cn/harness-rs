@@ -2,11 +2,11 @@ import { Link } from 'react-router-dom';
 import { getToken } from '@/lib/api';
 import {
   ArrowRight,
-  Globe2,
-  LineChart,
+  Search,
   MessageSquare,
+  Layers,
   ShieldCheck,
-  Coins,
+  BookOpen,
   Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -20,87 +20,86 @@ import {
 } from '@/components/ui/accordion';
 
 // Marketing copy intentionally lives in plain JSX (not i18n keys) so it
-// renders identically on a cold crawl — important for SEO + GEO. EN-first
-// per the 海外 positioning; a /zh route can be added later if traffic
-// from the CN search engines justifies it.
+// renders identically on a cold crawl — important for SEO + GEO. CN-first
+// per the positioning; bilingual copy where helpful.
 
 const FEATURES = [
   {
-    icon: LineChart,
-    title: 'One number, every account',
-    body: 'Cash, brokerage, credit, loans — aggregated into your net worth, refreshed daily. Switch currencies and every figure re-converts at the latest ECB mid rate.',
+    icon: Search,
+    title: '语义搜索 · Semantic search',
+    body: '不用记关键词。用自然语言描述你的想法，ai-note 会在所有笔记中找到最接近的内容 — 哪怕措辞完全不同。',
+  },
+  {
+    icon: Layers,
+    title: '工作·生活分区 · Work · Life spaces',
+    body: '工作笔记和生活笔记各自独立，互不干扰。切换 Space 即刻切换上下文；AI 助手只在当前分区内搜索和记录。',
   },
   {
     icon: MessageSquare,
-    title: 'AI that reads your ledger',
-    body: 'Ask "how much did I spend on rent last quarter?" The assistant has tools to query your actual transactions and holdings — answers from your data, not generic finance heuristics.',
-  },
-  {
-    icon: Globe2,
-    title: 'Multi-currency by default',
-    body: 'USD, EUR, JPY, CNY, GBP, HKD, SGD, AUD, CAD, CHF, KRW. Per-account currencies aggregate to your chosen display unit. Historical snapshots remain at their original rate.',
+    title: '流式对话捕捉 · Streaming chat capture',
+    body: '和 AI 说一句话就能记下一条笔记。对话历史持久保存，随时重打开继续。AI 读懂你的笔记，答案来自你自己写的内容。',
   },
   {
     icon: ShieldCheck,
-    title: 'Self-hosted, single binary',
-    body: 'Ledger is one static Rust binary plus an embedded UI. Run it on a $5 VPS. All data lives in one SQLite file you control. Nothing leaves your infrastructure.',
+    title: '自托管，单二进制 · Self-hosted, single binary',
+    body: 'ai-note 是一个静态 Rust 二进制加嵌入式 UI。跑在 $5 VPS 上。所有数据存在一个你掌控的 SQLite 文件里，不依赖任何第三方云。',
   },
 ];
 
 const HOW = [
   {
     n: '1',
-    title: 'Sign up',
-    body: 'Email + password. Optional invite code unlocks the paid tier.',
+    title: '注册 / Sign up',
+    body: '邮箱 + 密码即可，可选邀请码解锁付费功能。',
   },
   {
     n: '2',
-    title: 'Add accounts',
-    body: 'Manual entry or CSV import. Each account carries its own currency.',
+    title: '选择分区 · Choose a space',
+    body: '工作 or 生活 — 一键切换，笔记和对话各自隔离。',
   },
   {
     n: '3',
-    title: 'Ask the AI',
-    body: 'Chat in English or Chinese. The assistant reads your actual numbers.',
+    title: '说一句，记下来',
+    body: '直接打字给 AI，它帮你记；或自己写笔记，再问 AI。',
   },
 ];
 
 const COMPARISON = [
-  ['Net-worth view', 'Cash only / single currency', 'All accounts · multi-currency'],
-  ['Insight delivery', 'You read charts', 'AI surfaces patterns'],
-  ['Query interface', 'Filter UI', 'Natural language (EN / ZH)'],
-  ['Investment tracking', 'Limited or none', 'Trades · holdings · live prices'],
-  ['Data ownership', 'Vendor cloud', 'Self-hostable · one SQLite file'],
+  ['捕捉方式', '手动打开 App 写', 'AI 对话即可捕捉'],
+  ['搜索方式', '关键词过滤', '自然语言语义搜索'],
+  ['对话记忆', '无', '会话持久，随时续接'],
+  ['空间隔离', '单一收件箱', '工作 · 生活双分区'],
+  ['数据所有权', '厂商云端', '自托管 · 一个 SQLite 文件'],
 ];
 
 const FAQ = [
   {
-    q: 'Is Ledger a bank or a financial advisor?',
-    a: 'No. Ledger does not hold funds, execute trades, or give regulated financial advice. It is a data-aggregation and AI-query layer over information you enter yourself.',
+    q: 'ai-note 是什么？',
+    a: 'ai-note 是一个 AI 驱动的笔记工具。你可以通过自然语言对话快速捕捉想法，也可以直接写笔记；语义搜索让你用自己的语言找到任何内容。',
   },
   {
-    q: 'Does Ledger connect to my bank?',
-    a: 'Not yet. The current release uses manual entry or CSV import. Direct integrations (Plaid, TrueLayer, SaltEdge) are on the paid-tier roadmap.',
+    q: '工作和生活分区有什么用？',
+    a: '分区将笔记、搜索、对话历史完全隔离。切换到工作空间时，AI 只看工作笔记；生活笔记不会出现在工作上下文里，反之亦然。',
   },
   {
-    q: 'Where is my data stored?',
-    a: 'In a single SQLite file on the server you run Ledger on. Self-host and it never leaves your infrastructure. The hosted version stores data on dedicated servers in Asia-Pacific (Tokyo).',
+    q: '数据存在哪里？',
+    a: '存在你运行 ai-note 的服务器上的一个 SQLite 文件里。自托管则数据完全不离开你的基础设施。托管版数据存储于亚太地区（东京）的专用服务器。',
   },
   {
-    q: 'Which AI model powers the assistant?',
-    a: 'Default is DeepSeek v4-flash with Gemini 3.5-flash as the embedding model. Paid users can switch to DeepSeek v4-pro or Gemini 3.5-pro from their profile.',
+    q: '哪个 AI 模型驱动助手？',
+    a: '默认是 DeepSeek v4-flash，嵌入模型使用 Gemini 3.5-flash。付费用户可以在个人资料页切换至 DeepSeek v4-pro 或 Gemini 3.5-pro。',
   },
   {
-    q: 'How much does it cost?',
-    a: 'The trial tier is free with limits on accounts and transactions. The paid tier removes limits and unlocks model upgrades, scheduled monthly reports, and bank-account integrations once they ship.',
+    q: '费用是多少？',
+    a: '试用层免费，有笔记条数和对话次数限制。付费层去掉限制，并解锁模型升级选项。',
   },
   {
-    q: 'What languages does the UI support?',
-    a: 'English and Chinese (Simplified). The AI assistant understands both and replies in whichever language the user wrote in.',
+    q: 'UI 支持哪些语言？',
+    a: '界面支持中文和英文。AI 助手理解两种语言，并用用户输入的语言回复。',
   },
   {
-    q: 'Can I export my data?',
-    a: 'Yes. Transactions, trades, and subscriptions all export to CSV from the user menu.',
+    q: '可以导出数据吗？',
+    a: '可以。在个人资料页一键导出所有笔记为 .zip 压缩包。',
   },
 ];
 
@@ -111,26 +110,26 @@ export function Marketing() {
       {/* Top bar */}
       <header className="border-border sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur sm:px-8">
         <Link to="/" className="text-lg font-semibold tracking-tight">
-          Ledger
+          ai-note
         </Link>
         <span className="text-muted-foreground hidden text-xs sm:inline">
-          AI financial concierge
+          AI 语义笔记
         </span>
         <div className="flex-1" />
         {authed ? (
           <Button asChild size="sm">
             <Link to="/app">
-              Open app <ArrowRight className="size-4" />
+              打开应用 <ArrowRight className="size-4" />
             </Link>
           </Button>
         ) : (
           <>
             <Button asChild variant="ghost" size="sm">
-              <Link to="/login">Sign in</Link>
+              <Link to="/login">登录</Link>
             </Button>
             <Button asChild size="sm">
               <Link to="/login">
-                Start free <ArrowRight className="size-4" />
+                免费开始 <ArrowRight className="size-4" />
               </Link>
             </Button>
           </>
@@ -140,27 +139,28 @@ export function Marketing() {
       {/* Hero */}
       <section className="mx-auto max-w-4xl px-4 pt-16 pb-12 text-center sm:pt-24 sm:pb-20">
         <Badge variant="secondary" className="mb-6">
-          Built for individuals and families
+          为个人和小团队打造
         </Badge>
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-          Your AI financial concierge.
+          你的 AI 笔记 —<br />
+          说一句就记下，问一句就找到。
         </h1>
         <p className="text-muted-foreground mx-auto mt-6 max-w-2xl text-lg sm:text-xl">
-          One number for your whole financial life — across currencies, accounts,
-          and continents. With AI that actually knows your numbers.
+          工作和生活双分区隔离；语义搜索让你用自己的语言找到任何内容；AI
+          对话即可捕捉想法，会话历史永久保存。
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Button asChild size="lg">
             <Link to="/login">
-              Start free <ArrowRight />
+              免费开始 <ArrowRight />
             </Link>
           </Button>
           <Button asChild size="lg" variant="outline">
-            <a href="#how">See how it works</a>
+            <a href="#how">了解工作原理</a>
           </Button>
         </div>
         <p className="text-muted-foreground mt-4 text-xs">
-          Free trial · No credit card · Bilingual (English / 中文)
+          免费试用 · 无需信用卡 · 中文 / English
         </p>
       </section>
 
@@ -184,8 +184,8 @@ export function Marketing() {
       {/* How it works */}
       <section id="how" className="mx-auto max-w-4xl px-4 py-12 sm:py-20">
         <div className="mb-10 text-center">
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">How it works</h2>
-          <p className="text-muted-foreground mt-3">From zero to net worth in three steps.</p>
+          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">工作原理</h2>
+          <p className="text-muted-foreground mt-3">三步，从零到 AI 笔记。</p>
         </div>
         <ol className="grid gap-6 sm:grid-cols-3">
           {HOW.map((step) => (
@@ -205,20 +205,20 @@ export function Marketing() {
         <div className="mx-auto max-w-5xl px-4">
           <div className="mb-10 text-center">
             <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              How Ledger differs from passive trackers
+              ai-note 与普通笔记应用的区别
             </h2>
             <p className="text-muted-foreground mt-3">
-              Mint, 随手记, YNAB are journals. Ledger is a concierge.
+              印象笔记、Notion、Bear 是存储工具。ai-note 是会思考的助手。
             </p>
           </div>
           <Card>
             <CardContent className="p-0">
               <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-border text-sm">
-                <div className="bg-card text-muted-foreground p-4 font-medium">Capability</div>
+                <div className="bg-card text-muted-foreground p-4 font-medium">能力</div>
                 <div className="bg-card text-muted-foreground p-4 font-medium">
-                  Passive trackers
+                  普通笔记应用
                 </div>
-                <div className="bg-card text-foreground p-4 font-semibold">Ledger</div>
+                <div className="bg-card text-foreground p-4 font-semibold">ai-note</div>
                 {COMPARISON.map(([cap, theirs, ours]) => (
                   <div className="contents" key={cap}>
                     <div className="bg-card p-4">{cap}</div>
@@ -241,7 +241,7 @@ export function Marketing() {
       <section className="mx-auto max-w-3xl px-4 py-12 sm:py-20">
         <div className="mb-10 text-center">
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Frequently asked questions
+            常见问题
           </h2>
         </div>
         <Accordion type="single" collapsible className="w-full">
@@ -257,16 +257,16 @@ export function Marketing() {
       {/* CTA */}
       <section className="border-border bg-card border-y py-12 sm:py-20">
         <div className="mx-auto max-w-3xl px-4 text-center">
-          <Coins className="text-muted-foreground mx-auto mb-4 size-10" />
+          <BookOpen className="text-muted-foreground mx-auto mb-4 size-10" />
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Stop guessing what you're worth.
+            别让想法溜走。
           </h2>
           <p className="text-muted-foreground mx-auto mt-3 max-w-xl">
-            Sign up in 30 seconds. Free trial. No credit card.
+            30 秒注册，免费试用，无需信用卡。
           </p>
           <Button asChild size="lg" className="mt-6">
             <Link to="/login">
-              Start free <ArrowRight />
+              免费开始 <ArrowRight />
             </Link>
           </Button>
         </div>
@@ -274,7 +274,7 @@ export function Marketing() {
 
       {/* Footer */}
       <footer className="text-muted-foreground mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs sm:flex-row">
-        <span>© {new Date().getFullYear()} Ledger · superleo.app</span>
+        <span>© {new Date().getFullYear()} ai-note · superleo.app</span>
         <div className="flex gap-4">
           <a href="/llms.txt" target="_blank" rel="noopener">
             llms.txt
@@ -282,7 +282,7 @@ export function Marketing() {
           <a href="/sitemap.xml" target="_blank" rel="noopener">
             sitemap
           </a>
-          <Link to="/login">Sign in</Link>
+          <Link to="/login">登录</Link>
         </div>
       </footer>
     </div>
