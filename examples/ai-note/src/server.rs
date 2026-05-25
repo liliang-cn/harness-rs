@@ -31,13 +31,14 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 
-const INDEX_HTML: &str = include_str!("index.html");
-const MARKED_JS: &str = include_str!("marked.min.js");
-
 /// Vite-built admin SPA, embedded into the binary so deploys stay
 /// single-artifact. Built by `cd admin-ui && npm run build`.
 static ADMIN_DIST: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/admin-ui/dist");
+
+/// Vite-built user SPA (React + shadcn). Built by `cd user-ui && npm run build`.
+static USER_DIST: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/user-ui/dist");
 
 /// Max notes a `tier == "trial"` user may have at once. Paid / admin are
 /// unbounded. Edit / delete don't count — only the inserts.
@@ -264,8 +265,14 @@ fn random_session_id() -> String {
 
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
-        .route("/", get(serve_index))
-        .route("/marked.min.js", get(serve_marked_js))
+        // User SPA routes (/, /login, /app, /app/*, assets, etc.)
+        .route("/", get(serve_user_index))
+        .route("/login", get(serve_user_index))
+        .route("/app", get(serve_user_index))
+        .route("/app/*rest", get(serve_user_index))
+        .route("/assets/*path", get(serve_user_asset))
+        .route("/favicon.svg", get(serve_user_asset))
+        .route("/robots.txt", get(serve_user_asset))
         // Admin SPA: GET /admin or /admin/ → index.html; /admin/* → asset
         // file, with SPA fallback to index.html for client-side routes.
         .route("/admin", get(serve_admin_index))
@@ -314,12 +321,38 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
     Ok(())
 }
 
-async fn serve_index() -> impl axum::response::IntoResponse {
+async fn serve_user_index() -> impl axum::response::IntoResponse {
     use axum::http::header;
-    (
-        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
-        Html(INDEX_HTML),
-    )
+    let body = USER_DIST
+        .get_file("index.html")
+        .and_then(|f| f.contents_utf8())
+        .unwrap_or("<h1>user UI not built</h1>");
+    ([(header::CACHE_CONTROL, "no-cache, must-revalidate")], Html(body))
+}
+
+async fn serve_user_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    if let Some(file) = USER_DIST.get_file(&path) {
+        let mime = mime_for(&path);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, if path.starts_with("assets/") {
+                    "public, max-age=31536000, immutable"
+                } else { "no-cache" }),
+            ],
+            Body::from(file.contents()),
+        ).into_response();
+    }
+    // SPA fallback → index.html for client routes (/app, /login, …)
+    if let Some(idx) = USER_DIST.get_file("index.html").and_then(|f| f.contents_utf8()) {
+        return ([(header::CACHE_CONTROL, "no-cache, must-revalidate")], Html(idx)).into_response();
+    }
+    (axum::http::StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 async fn serve_admin_index() -> impl axum::response::IntoResponse {
@@ -388,17 +421,6 @@ fn mime_for(path: &str) -> &'static str {
         "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
-}
-
-async fn serve_marked_js() -> impl axum::response::IntoResponse {
-    use axum::http::header;
-    (
-        [
-            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-        ],
-        MARKED_JS,
-    )
 }
 
 async fn info_handler(State(s): State<AppState>) -> Json<Value> {
