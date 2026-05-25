@@ -25,6 +25,30 @@ pub struct Note {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    pub space: String,
+    pub model_id: Option<String>,
+    pub message_count: u32,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub created_at: DateTime<Utc>,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub text: String,
+    pub iters: Option<i64>,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub created_at: DateTime<Utc>,
+}
+
 impl Db {
     pub fn open(path: &Path) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
@@ -765,6 +789,123 @@ impl Db {
         Ok(())
     }
 
+    // ───── chat sessions ─────
+
+    pub fn create_chat_session(
+        &self,
+        user_id: &str,
+        id: &str,
+        model_id: Option<&str>,
+        space: &str,
+    ) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO chat_sessions(id, user_id, title, model_id, space,
+                                       created_at, updated_at, message_count)
+             VALUES (?1, ?2, '新对话', ?3, ?4, ?5, ?5, 0)",
+            params![id, user_id, model_id, space, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_chat_sessions(&self, user_id: &str, space: &str) -> SqlResult<Vec<ChatSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, space, model_id, message_count, created_at, updated_at
+             FROM chat_sessions WHERE user_id = ?1 AND space = ?2
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![user_id, space], row_to_session)?;
+        rows.collect()
+    }
+
+    pub fn get_chat_session(&self, user_id: &str, id: &str) -> SqlResult<Option<ChatSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, space, model_id, message_count, created_at, updated_at
+             FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
+        )?;
+        stmt.query_row(params![user_id, id], row_to_session).optional()
+    }
+
+    pub fn delete_chat_session(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "DELETE FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
+        )? as u32)
+    }
+
+    pub fn update_chat_session_model(
+        &self,
+        user_id: &str,
+        id: &str,
+        model_id: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE chat_sessions SET model_id = ?3 WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, model_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_chat_messages(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        limit: u32,
+    ) -> SqlResult<Vec<ChatMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, text, iters, created_at
+             FROM chat_messages WHERE user_id = ?1 AND session_id = ?2
+             ORDER BY created_at ASC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![user_id, session_id, limit as i64], |r| {
+            let c: String = r.get(5)?;
+            Ok(ChatMessage {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                text: r.get(3)?,
+                iters: r.get(4)?,
+                created_at: parse_rfc3339(&c),
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Append a message, bump message_count + updated_at, and set the session
+    /// title from the first user message (trimmed to 40 chars).
+    pub fn append_chat_message(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        role: &str,
+        text: &str,
+        iters: Option<u32>,
+    ) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339();
+        let id = random_id();
+        self.conn.execute(
+            "INSERT INTO chat_messages(id, session_id, user_id, role, text, iters, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now],
+        )?;
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET message_count = message_count + 1, updated_at = ?3
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, session_id, now],
+        )?;
+        if role == "user" {
+            // Set title only if still the default.
+            let title: String = text.chars().take(40).collect();
+            self.conn.execute(
+                "UPDATE chat_sessions SET title = ?3
+                 WHERE user_id = ?1 AND id = ?2 AND title = '新对话'",
+                params![user_id, session_id, title],
+            )?;
+        }
+        Ok(())
+    }
+
 }
 
 #[derive(Debug, Clone)]
@@ -852,6 +993,20 @@ fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
     })
 }
 
+fn row_to_session(r: &rusqlite::Row<'_>) -> SqlResult<ChatSession> {
+    let c: String = r.get(5)?;
+    let u: String = r.get(6)?;
+    Ok(ChatSession {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        space: r.get(2)?,
+        model_id: r.get(3)?,
+        message_count: r.get::<_, i64>(4)? as u32,
+        created_at: parse_rfc3339(&c),
+        updated_at: parse_rfc3339(&u),
+    })
+}
+
 pub(crate) fn parse_rfc3339(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|d| d.with_timezone(&Utc))
@@ -885,5 +1040,19 @@ mod tests {
         let all = db.list_recent_notes("u1", None, 50).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(db.count_notes("u1", Some("life")).unwrap(), 1);
+    }
+
+    #[test]
+    fn chat_sessions_scoped_and_counted() {
+        let db = tmp_db();
+        db.create_chat_session("u1", "s1", Some("deepseek-v4-flash"), "work").unwrap();
+        db.append_chat_message("u1", "s1", "user", "hello work", None).unwrap();
+        db.append_chat_message("u1", "s1", "asst", "hi", Some(1)).unwrap();
+        let work = db.list_chat_sessions("u1", "work").unwrap();
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].message_count, 2);
+        assert_eq!(work[0].title, "hello work");
+        assert!(db.list_chat_sessions("u1", "life").unwrap().is_empty());
+        assert_eq!(db.get_chat_messages("u1", "s1", 10).unwrap().len(), 2);
     }
 }
