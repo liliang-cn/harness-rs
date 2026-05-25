@@ -14,6 +14,7 @@ import {
   type ChatMessage,
   type ChatSession,
 } from '@/lib/api';
+import { useSpace } from '@/components/space-context';
 import { SessionsList } from './sessions-list';
 import { MessageList, type ToolEvent } from './message-list';
 import { Composer } from './composer';
@@ -26,6 +27,7 @@ interface ChatSheetProps {
 
 export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   const { t, i18n } = useTranslation();
+  const { space } = useSpace();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -100,6 +102,24 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
     }
   }, [open]);
 
+  // When the user switches space, reset to the sessions list for the new space.
+  const prevSpaceRef = useRef(space);
+  useEffect(() => {
+    if (prevSpaceRef.current !== space) {
+      prevSpaceRef.current = space;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setActiveId(null);
+      setSession(null);
+      setMessages([]);
+      setStreaming(null);
+      setToolEvents([]);
+      setDrafting(false);
+      setBusy(false);
+      setSessionsKey((k) => k + 1);
+    }
+  }, [space]);
+
   const wasOpenRef = useRef(open);
   useEffect(() => {
     if (open && !wasOpenRef.current && activeId && !busy) {
@@ -140,7 +160,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       let sessionId = activeId;
       if (!sessionId) {
         try {
-          const j = await noteApi.createChatSession('life');
+          const j = await noteApi.createChatSession(space);
           sessionId = j.session.id;
           skipNextLoad.current = true;
           setActiveId(sessionId);
@@ -236,7 +256,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
 
       setSessionsKey((k) => k + 1);
     },
-    [activeId, busy, t, i18n.language],
+    [activeId, busy, space, t, i18n.language],
   );
 
   const handleRegenerate = useCallback(() => {
@@ -311,6 +331,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
             onSelect={setActiveId}
             onNew={handleNew}
             refreshKey={sessionsKey}
+            space={space}
           />
         ) : (
           <>
