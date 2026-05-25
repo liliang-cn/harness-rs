@@ -5,16 +5,18 @@ import { Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { noteApi, type ChatSession } from '@/lib/api';
+import { noteApi, type ChatSession, type Space } from '@/lib/api';
 
 interface SessionsListProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   /** bumped by ChatSheet whenever a session is created/deleted so the list refetches */
   refreshKey: number;
+  /** current space — sessions are scoped per space */
+  space: Space;
 }
 
-export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps) {
+export function SessionsList({ onSelect, onNew, refreshKey, space }: SessionsListProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<ChatSession[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -35,7 +37,7 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
     let cancelled = false;
     setSessions(null);
     noteApi
-      .chatSessions('life')
+      .chatSessions(space)
       .then((j: { sessions: ChatSession[] }) => {
         if (cancelled) return;
         // Empty sessions are noise in the list — every "+ new chat"
@@ -59,7 +61,7 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, space]);
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
