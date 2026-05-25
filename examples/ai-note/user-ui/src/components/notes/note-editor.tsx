@@ -76,6 +76,7 @@ export function NoteEditor({
             <MDXEditor
               key={`${note?.id ?? 'new'}-${open}`}
               ref={editorRef}
+              className="note-md"
               markdown={note?.body ?? ''}
               placeholder={t('notes.body')}
               contentEditableClassName="min-h-40 outline-none"
