@@ -1,5 +1,5 @@
 {
-  "brand": "财库",
+  "brand": "ai-note",
   "common": {
     "logout": "登出",
     "loading": "加载中…",
@@ -8,7 +8,7 @@
   },
   "login": {
     "title": "欢迎回来",
-    "subtitle": "你的 AI 财务管家",
+    "subtitle": "你的 AI 笔记助手",
     "email": "邮箱",
     "password": "密码",
     "submit": "登录",
@@ -18,107 +18,22 @@
     "invite": "邀请码（可选）",
     "registerSubmit": "创建账号"
   },
-  "dashboard": {
-    "title": "净值",
-    "asOf": "{{date}} 数据",
-    "delta30": "{{value}}（{{pct}}）vs 30 天前",
-    "noHistory": "历史数据还在积累 — 明天再看。",
-    "composition": "构成",
-    "cash": "现金",
-    "investments": "投资",
-    "debt": "负债",
-    "trend12mo": "近 12 个月",
-    "accounts": "账户",
-    "noAccounts": "你还没添加任何账户。",
-    "refreshNow": "立即刷新",
-    "baseCurrency": "显示货币"
+  "nav": { "notes": "笔记", "search": "搜索", "profile": "我的" },
+  "spaces": { "work": "工作", "life": "生活" },
+  "notes": {
+    "new": "写笔记", "empty": "这个空间还没有笔记。",
+    "title": "标题", "body": "写点什么…", "tags": "标签（逗号分隔）",
+    "save": "保存", "delete": "删除", "deleteConfirm": "删除这条笔记？", "deleted": "已删除"
   },
-  "nav": {
-    "dashboard": "净值",
-    "ledger": "记账",
-    "portfolio": "投资",
-    "profile": "我的",
-    "chat": "聊天"
-  },
-  "ledger": {
-    "title": "记账",
-    "transactions": "流水",
-    "empty": "还没有流水。",
-    "expense": "支出",
-    "income": "收入",
-    "transfer": "转账",
-    "filters": "筛选",
-    "thisMonth": "本月",
-    "last30": "近 30 天",
-    "thisYear": "本年",
-    "allTime": "全部"
-  },
-  "budgets": {
-    "title": "预算",
-    "empty": "还没有预算，去聊天里加一个。",
-    "over": "超出预算"
-  },
-  "subs": {
-    "title": "订阅",
-    "empty": "还没有订阅。",
-    "cancel": "取消",
-    "cancelConfirm": "取消「{{name}}」？",
-    "cancelled": "已取消「{{name}}」",
-    "next": "下次扣款 {{date}}",
-    "freq": {
-      "weekly": "每周",
-      "monthly": "每月",
-      "quarterly": "每季",
-      "yearly": "每年"
-    }
-  },
-  "loans": {
-    "title": "负债 / 应收",
-    "empty": "还没有登记。可以让 AI 帮你记。",
-    "principal": "本金",
-    "remaining": "余下",
-    "owedToYou": "对方欠你",
-    "monthlyPayment": "月供",
-    "nextDue": "下次 {{date}}",
-    "apr": "年化 {{rate}}%",
-    "kindLoan": "贷款",
-    "kindMortgage": "房贷",
-    "kindReceivable": "应收",
-    "paidOff": "已还清"
-  },
-  "report": {
-    "title": "本月分类支出",
-    "empty": "本月还没有记录。",
-    "count_other": "{{count}} 笔"
-  },
-  "export": {
-    "title": "导出 CSV",
-    "transactions": "流水",
-    "trades": "交易",
-    "subscriptions": "订阅"
-  },
-  "portfolio": {
-    "title": "投资",
-    "positions": "持仓",
-    "trades": "交易记录",
-    "allocation": "资产配置",
-    "qty": "数量",
-    "avg": "均价",
-    "value": "市值",
-    "unrealized": "浮动盈亏",
-    "noPrice": "暂无报价",
-    "empty": "还没有数据，去聊天里加一笔交易。",
-    "buy": "买入",
-    "sell": "卖出",
-    "opening": "建仓",
-    "symbol": "代码",
-    "class": {
-      "stock": "股票",
-      "etf": "ETF",
-      "crypto": "加密货币",
-      "commodity": "商品",
-      "other": "其他"
-    }
+  "search": { "placeholder": "搜索笔记…", "empty": "没有匹配结果。", "semantic": "语义搜索", "grep": "文本匹配" },
+  "profile": { "model": "对话模型", "modelTrial": "升级后可切换模型", "export": "导出全部（.zip）",
+    "title": "我的", "account": "账户", "email": "邮箱", "tier": "等级", "joined": "加入时间",
+    "userId": "用户 ID", "password": "密码", "changePassword": "修改密码",
+    "old": "当前密码", "new": "新密码", "save": "保存", "cancel": "取消",
+    "passwordChanged_other": "密码已修改，{{count}} 个其他设备已登出。",
+    "errMinLen": "新密码至少 6 位。",
+    "errSame": "新密码不能跟旧密码相同。",
+    "modelDefault": "服务器默认", "modelTrialHint": "升级 paid 才能切换模型"
   },
   "chat": {
     "fab": "和 AI 聊聊",
@@ -150,46 +65,5 @@
     "attachFailed": "上传失败",
     "attachRemove": "移除",
     "attachLimitReached": "每次最多 3 个附件。"
-  },
-  "profile": {
-    "title": "我的",
-    "account": "账户",
-    "email": "邮箱",
-    "tier": "等级",
-    "joined": "加入时间",
-    "userId": "用户 ID",
-    "baseCurrency": "记账货币",
-    "password": "密码",
-    "changePassword": "修改密码",
-    "old": "当前密码",
-    "new": "新密码",
-    "save": "保存",
-    "cancel": "取消",
-    "passwordChanged_other": "密码已修改，{{count}} 个其他设备已登出。",
-    "errMinLen": "新密码至少 6 位。",
-    "errSame": "新密码不能跟旧密码相同。",
-    "model": "首选模型",
-    "modelDefault": "服务器默认",
-    "modelTrialHint": "升级 paid 才能切换模型",
-    "memory": "记忆",
-    "memoryOpen": "查看记忆条目（{{count}}）",
-    "memoryEmpty": "还没有记忆条目。",
-    "memoryClear": "全部清除",
-    "memoryClearConfirm": "删除全部记忆条目？此操作不可撤销。",
-    "memoryDeleteConfirm": "删除这条记忆？",
-    "memoryCleared_other": "已清除 {{count}} 条记忆。"
-  },
-  "currency": {
-    "USD": "美元",
-    "EUR": "欧元",
-    "GBP": "英镑",
-    "JPY": "日元",
-    "CNY": "人民币",
-    "HKD": "港币",
-    "SGD": "新加坡元",
-    "AUD": "澳元",
-    "CAD": "加元",
-    "CHF": "瑞士法郎",
-    "KRW": "韩元"
   }
 }
