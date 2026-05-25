@@ -490,8 +490,9 @@ async fn list_notes_handler(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
+    // Task 5 wires ?space= query param; for now pass None (return all spaces).
     let notes = db
-        .list_recent_notes(&auth.user.id, q.limit.unwrap_or(50).min(500))
+        .list_recent_notes(&auth.user.id, None, q.limit.unwrap_or(50).min(500))
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "count": notes.len(), "notes": notes })))
 }
@@ -514,10 +515,12 @@ async fn create_note_handler(
         return Err(ApiError::BadRequest("body is empty".into()));
     }
     let db = open_db_state(&s)?;
+    // Task 5 wires ?space= on create_note_handler; default to "life" for now.
+    let space = "life";
     // Trial cap. Edit/delete uncapped; only inserts count.
     if auth.user.tier == "trial" {
         let used = db
-            .count_notes(&auth.user.id)
+            .count_notes(&auth.user.id, Some(space))
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         if used >= TRIAL_MAX_NOTES {
             return Err(ApiError::Forbidden(format!(
@@ -526,7 +529,7 @@ async fn create_note_handler(
         }
     }
     let note = db
-        .create_note(&auth.user.id, &req.title, &req.body, &req.tags)
+        .create_note(&auth.user.id, &req.title, &req.body, &req.tags, space)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "note": note })))
 }
@@ -673,8 +676,9 @@ async fn export_all_zip_handler(
     let db = open_db_state(&s)?;
     // 10k cap — well above the 30-note trial limit; paid users with more
     // than 10k notes can ask for a streaming export later.
+    // Export all spaces (None = no space filter).
     let notes = db
-        .list_recent_notes(&auth.user.id, 10_000)
+        .list_recent_notes(&auth.user.id, None, 10_000)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let buf: Vec<u8> = Vec::with_capacity(8 * 1024);
@@ -836,7 +840,8 @@ async fn search_handler(
     Query(qs): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let top_k = qs.limit.unwrap_or(8).min(50) as usize;
-    let hits = crate::search::semantic_search(&s.db_path, &auth.user.id, &s.embedder, &qs.q, top_k)
+    // Task 5 wires ?space= query param; for now pass None (export-all spaces).
+    let hits = crate::search::semantic_search(&s.db_path, &auth.user.id, &s.embedder, &qs.q, top_k, None)
         .await
         .map_err(|e| ApiError::Internal(format!("search: {e}")))?;
     Ok(Json(json!({ "count": hits.len(), "hits": hits })))
@@ -879,6 +884,8 @@ async fn chat_handler(
         "tier".into(),
         serde_json::Value::String(auth.user.tier.clone()),
     );
+    // Default space for one-shot chat path (Task 5 wires per-session space).
+    profile.extra.insert("space".into(), serde_json::Value::String("life".into()));
     // Plant the user's tz so `current_time` resolves "今天" / "今天" / "this week"
     // in their local clock. Defaults to system tz if unset.
     if let Some(tz) = &s.user_tz {
@@ -899,7 +906,7 @@ async fn chat_handler(
     }
     let loop_ = loop_.with_guide(Arc::new(SystemPromptGuide));
 
-    let task_desc = build_task_description(&req.message, &req.history);
+    let task_desc = build_task_description(&req.message, &req.history, "life");
     let task = Task {
         description: task_desc,
         source: None,
@@ -931,16 +938,16 @@ async fn chat_handler(
     Ok(Json(json!({ "reply": reply, "iters": iters, "ok": ok })))
 }
 
-fn build_task_description(message: &str, history: &[ChatTurn]) -> String {
-    if history.is_empty() {
-        return message.to_string();
-    }
+fn build_task_description(message: &str, history: &[ChatTurn], space: &str) -> String {
     let mut s = String::new();
-    s.push_str("--- conversation so far ---\n");
-    for t in history.iter().take(20) {
-        s.push_str(&format!("[{}] {}\n", t.role, t.text));
+    s.push_str(&format!("[system] space: {space}\n\n"));
+    if !history.is_empty() {
+        s.push_str("--- conversation so far ---\n");
+        for t in history.iter().take(20) {
+            s.push_str(&format!("[{}] {}\n", t.role, t.text));
+        }
+        s.push_str("\n--- new message ---\n");
     }
-    s.push_str("\n--- new message ---\n");
     s.push_str(message);
     s
 }
@@ -1009,6 +1016,10 @@ Hard rules:\n\
    cap (state the exact number), suggest deleting an old note to make room (offer to \
    `list_recent_notes` so they can pick), and mention the paid upgrade path. Don't \
    apologise effusively; one sentence + actionable choices is enough.\n\
+10. **Space scope.** Every note operation is scoped to the user's current \
+   space, given on a `[system] space: work|life` line at the top of the task. \
+   New notes go in that space; searches and listings only see that space. \
+   Never move a note across spaces unless the user explicitly asks.\n\
 ";
 
 fn random_user_id() -> String {

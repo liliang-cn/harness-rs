@@ -36,6 +36,13 @@ fn tier_of(w: &World) -> String {
         .unwrap_or_else(|| "trial".into())
 }
 
+fn space_of(w: &World) -> String {
+    w.profile
+        .extra::<String>("space")
+        .filter(|s| s == "work" || s == "life")
+        .unwrap_or_else(|| "life".into())
+}
+
 fn embedder() -> Result<std::sync::Arc<dyn harness_core::Embedder>, ToolError> {
     crate::embed_slot::get().ok_or_else(|| ToolError::Exec("embedder not configured".into()))
 }
@@ -127,10 +134,11 @@ async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         })
         .unwrap_or_default();
 
+    let space = space_of(w);
     let db = open_db(w)?;
     if tier_of(w) == "trial" {
         let used = db
-            .count_notes(&uid)
+            .count_notes(&uid, Some(&space))
             .map_err(|e| ToolError::Exec(format!("count: {e}")))?;
         let cap = crate::server::TRIAL_MAX_NOTES;
         if used >= cap {
@@ -149,7 +157,7 @@ async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         }
     }
     let note = db
-        .create_note(&uid, title, body, &tags)
+        .create_note(&uid, title, body, &tags, &space)
         .map_err(|e| ToolError::Exec(format!("insert: {e}")))?;
     Ok(ToolResult {
         ok: true,
@@ -195,7 +203,7 @@ async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
 
     let emb = embedder()?;
     let path = db_path_of(w)?;
-    let hits = crate::search::semantic_search(&path, &uid, &emb, q, top_k)
+    let hits = crate::search::semantic_search(&path, &uid, &emb, q, top_k, Some(&space_of(w)))
         .await
         .map_err(|e| ToolError::Exec(format!("search: {e}")))?;
     Ok(ToolResult {
@@ -232,12 +240,13 @@ async fn list_recent_notes(args: Value, w: &mut World) -> Result<ToolResult, Too
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10).min(200) as u32;
     let since = args.get("since").and_then(|v| v.as_str());
     let until = args.get("until").and_then(|v| v.as_str());
+    let sp = space_of(w);
     let db = open_db(w)?;
     let notes = if since.is_some() || until.is_some() {
-        db.list_notes_in_range(&uid, since, until, limit)
+        db.list_notes_in_range(&uid, Some(&sp), since, until, limit)
             .map_err(|e| ToolError::Exec(format!("list: {e}")))?
     } else {
-        db.list_recent_notes(&uid, limit)
+        db.list_recent_notes(&uid, Some(&sp), limit)
             .map_err(|e| ToolError::Exec(format!("list: {e}")))?
     };
     Ok(ToolResult {

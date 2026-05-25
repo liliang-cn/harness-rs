@@ -84,7 +84,7 @@ async fn get_user(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::BadRequest("user not found".into()))?;
     let notes = db
-        .count_notes(&id)
+        .count_notes(&id, None)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let recent = db
         .list_audit(Some(&id), None, i64::MAX, 25)
