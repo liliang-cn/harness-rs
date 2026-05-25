@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Wrench, AlertCircle, FileText } from 'lucide-react';
+import { Loader2, Wrench, AlertCircle, FileText, RotateCw } from 'lucide-react';
 import type { ChatMessage } from '@/lib/api';
 import { fetchAttachmentBlob } from '@/lib/api';
 import { renderMarkdown } from '@/lib/markdown';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 /** Inline status events surfaced under the streaming bubble. */
 export type ToolEvent =
@@ -21,6 +22,10 @@ interface MessageListProps {
   toolEvents: ToolEvent[];
   /** True when the request is in-flight (shows thinking spinner if no text yet). */
   busy: boolean;
+  /** Called when the user clicks the Reload affordance on a truncated bubble.
+   *  Re-fetches the canonical message log from the server so the partial
+   *  client reply is replaced with whatever the server eventually persisted. */
+  onReload?: () => void;
 }
 
 export function MessageList({
@@ -28,6 +33,7 @@ export function MessageList({
   streaming,
   toolEvents,
   busy,
+  onReload,
 }: MessageListProps) {
   const { t } = useTranslation();
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -54,6 +60,8 @@ export function MessageList({
             role={m.role}
             text={m.text}
             attachmentIds={m.attachment_ids}
+            truncated={m.truncated}
+            onReload={onReload}
           />
         ))}
         {streaming !== null && (
@@ -83,12 +91,17 @@ function Bubble({
   text,
   streaming,
   attachmentIds,
+  truncated,
+  onReload,
 }: {
   role: string;
   text: string;
   streaming?: boolean;
   attachmentIds?: string[];
+  truncated?: boolean;
+  onReload?: () => void;
 }) {
+  const { t } = useTranslation();
   const isUser = role === 'user';
   if (isUser) {
     const hasAttachments = (attachmentIds?.length ?? 0) > 0;
@@ -111,10 +124,10 @@ function Bubble({
     );
   }
   return (
-    <div className="flex justify-start">
+    <div className="flex max-w-[90%] flex-col items-start gap-1">
       <div
         className={cn(
-          'bg-muted text-foreground markdown-body max-w-[90%] rounded-2xl rounded-bl-sm px-3 py-2 text-sm break-words',
+          'bg-muted text-foreground markdown-body rounded-2xl rounded-bl-sm px-3 py-2 text-sm break-words',
         )}
       >
         <div
@@ -124,6 +137,24 @@ function Bubble({
         />
         {streaming && <span className="animate-pulse">▍</span>}
       </div>
+      {truncated && !streaming && (
+        <div className="text-muted-foreground flex items-center gap-2 pl-1 text-xs">
+          <AlertCircle className="text-amber-600 dark:text-amber-400 size-3.5" />
+          <span>{t('chat.truncated', { defaultValue: 'Reply interrupted — partial.' })}</span>
+          {onReload && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={onReload}
+            >
+              <RotateCw className="size-3" />
+              {t('chat.reload', { defaultValue: 'Reload' })}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

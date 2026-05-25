@@ -19,6 +19,18 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
   const [sessions, setSessions] = useState<ChatSession[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  // Per-session "last seen message_count" — used to compute the +N unread
+  // badge for the case where the user closed mid-stream and the agent
+  // finished in the background, bumping message_count past what the
+  // client last saw.
+  const [seenCount, setSeenCount] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('chat-seen-count') ?? '{}');
+    } catch {
+      return {};
+    }
+  });
+
   useEffect(() => {
     let cancelled = false;
     setSessions(null);
@@ -32,6 +44,14 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
         // (sheet closed mid-create) leave stale 0-message entries in
         // the DB. Hide them at render time.
         setSessions(j.sessions.filter((s) => s.message_count > 0));
+        // Re-read seen counts on every refresh — ChatSheet writes the
+        // map after each successful load so an updated count gets
+        // reflected here next time the picker shows.
+        try {
+          setSeenCount(JSON.parse(localStorage.getItem('chat-seen-count') ?? '{}'));
+        } catch {
+          /* ignore */
+        }
       })
       .catch(() => {
         if (!cancelled) setSessions([]);
@@ -79,7 +99,10 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
           </div>
         ) : (
           <ul className="divide-border divide-y">
-            {sessions.map((s) => (
+            {sessions.map((s) => {
+              const seen = seenCount[s.id] ?? 0;
+              const unread = Math.max(0, s.message_count - seen);
+              return (
               <li key={s.id}>
                 <button
                   type="button"
@@ -87,8 +110,18 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
                   className="hover:bg-accent flex w-full items-center gap-2 px-4 py-3 text-left"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">
-                      {s.title?.trim() || t('chat.untitled')}
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {s.title?.trim() || t('chat.untitled')}
+                      </span>
+                      {unread > 0 && (
+                        <span
+                          aria-label={t('chat.unread', { defaultValue: 'unread' })}
+                          className="bg-primary text-primary-foreground inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-medium"
+                        >
+                          {unread > 9 ? '9+' : `+${unread}`}
+                        </span>
+                      )}
                     </div>
                     <div className="text-muted-foreground mt-0.5 flex gap-2 text-xs">
                       <span>
@@ -110,7 +143,8 @@ export function SessionsList({ onSelect, onNew, refreshKey }: SessionsListProps)
                   </Button>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>
