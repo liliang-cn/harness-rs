@@ -8,10 +8,6 @@ authors.workspace = true
 publish = false
 description = "AI-driven note app with semantic search. Multi-tenant, embedded UI."
 
-[lib]
-name = "ai_note_lib"
-path = "src/lib.rs"
-
 [[bin]]
 name = "ai-note"
 path = "src/main.rs"
