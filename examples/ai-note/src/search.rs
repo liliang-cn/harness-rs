@@ -27,6 +27,7 @@ pub async fn semantic_search(
     embedder: &Arc<dyn Embedder>,
     query: &str,
     top_k: usize,
+    space: Option<&str>,
 ) -> anyhow::Result<Vec<Hit>> {
     let q = query.trim();
     if q.is_empty() {
@@ -37,7 +38,7 @@ pub async fn semantic_search(
     // embedder is down.
     let corpus: Vec<NoteEmbedding> = {
         let db = Db::open(db_path)?;
-        db.list_embeddings(user_id)?
+        db.list_embeddings(user_id, space)?
     };
 
     // Try semantic first.
@@ -74,7 +75,7 @@ pub async fn semantic_search(
     // over the FULL note table — including rows that haven't been embedded yet.
     if hits.is_empty() {
         let db = Db::open(db_path)?;
-        let all = db.list_recent_notes(user_id, 5000)?;
+        let all = db.list_recent_notes(user_id, space, 5000)?;
         let needle = q.to_lowercase();
         for note in all {
             let hay = format!("{}\n{}", note.title, note.body).to_lowercase();
