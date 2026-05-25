@@ -271,8 +271,9 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/app", get(serve_user_index))
         .route("/app/*rest", get(serve_user_index))
         .route("/assets/*path", get(serve_user_asset))
-        .route("/favicon.svg", get(serve_user_asset))
-        .route("/robots.txt", get(serve_user_asset))
+        .route("/favicon.svg", get(serve_user_asset_root))
+        .route("/icons.svg", get(serve_user_asset_root))
+        .route("/robots.txt", get(serve_user_asset_root))
         // Admin SPA: GET /admin or /admin/ → index.html; /admin/* → asset
         // file, with SPA fallback to index.html for client-side routes.
         .route("/admin", get(serve_admin_index))
@@ -330,29 +331,53 @@ async fn serve_user_index() -> impl axum::response::IntoResponse {
     ([(header::CACHE_CONTROL, "no-cache, must-revalidate")], Html(body))
 }
 
+/// Serves `/assets/*` — Vite-hashed bundles. The `*path` capture is the part
+/// AFTER `/assets/`, so we re-add the `assets/` prefix before the dist lookup.
+/// A miss returns 404 (NOT the SPA index) — serving HTML for a `.js`/`.css`
+/// request breaks strict-MIME module loading in the browser.
 async fn serve_user_asset(
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> axum::response::Response {
     use axum::body::Body;
-    use axum::http::header;
+    use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
-    if let Some(file) = USER_DIST.get_file(&path) {
-        let mime = mime_for(&path);
+    let full = format!("assets/{path}");
+    if let Some(file) = USER_DIST.get_file(&full) {
+        let mime = mime_for(&full);
         return (
             [
                 (header::CONTENT_TYPE, mime),
-                (header::CACHE_CONTROL, if path.starts_with("assets/") {
-                    "public, max-age=31536000, immutable"
-                } else { "no-cache" }),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
             ],
             Body::from(file.contents()),
-        ).into_response();
+        )
+            .into_response();
     }
-    // SPA fallback → index.html for client routes (/app, /login, …)
-    if let Some(idx) = USER_DIST.get_file("index.html").and_then(|f| f.contents_utf8()) {
-        return ([(header::CACHE_CONTROL, "no-cache, must-revalidate")], Html(idx)).into_response();
+    (StatusCode::NOT_FOUND, "asset not found").into_response()
+}
+
+/// Serves files at the TOP of `dist/` (`/favicon.svg`, `/icons.svg`,
+/// `/robots.txt`) — these routes have no `*path` segment, so read the request
+/// URI directly (a `Path` extractor would 500 on a param-less route).
+async fn serve_user_asset_root(
+    req: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    let path = req.uri().path().trim_start_matches('/');
+    if let Some(file) = USER_DIST.get_file(path) {
+        let mime = mime_for(path);
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "public, max-age=3600"),
+            ],
+            Body::from(file.contents()),
+        )
+            .into_response();
     }
-    (axum::http::StatusCode::NOT_FOUND, "not found").into_response()
+    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 async fn serve_admin_index() -> impl axum::response::IntoResponse {
