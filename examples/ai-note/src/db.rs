@@ -20,6 +20,7 @@ pub struct Note {
     pub title: String,
     pub body: String,
     pub tags: Vec<String>,
+    pub space: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -76,6 +77,7 @@ impl Db {
                 title           TEXT NOT NULL DEFAULT '',
                 body            TEXT NOT NULL,
                 tags            TEXT,
+                space           TEXT NOT NULL DEFAULT 'life',
                 embedding       BLOB,
                 embedding_dim   INTEGER,
                 embedding_at    TEXT,
@@ -93,6 +95,7 @@ impl Db {
                 user_id         TEXT NOT NULL,
                 title           TEXT NOT NULL DEFAULT '新对话',
                 model_id        TEXT,
+                space           TEXT NOT NULL DEFAULT 'life',
                 created_at      TEXT NOT NULL,
                 updated_at      TEXT NOT NULL,
                 message_count   INTEGER NOT NULL DEFAULT 0
@@ -142,7 +145,25 @@ impl Db {
             );
             "#,
         )?;
+        // ── idempotent migrations (existing DBs) ──
+        self.ensure_column("notes", "space", "TEXT NOT NULL DEFAULT 'life'")?;
+        self.ensure_column("chat_sessions", "space", "TEXT NOT NULL DEFAULT 'life'")?;
         Ok(())
+    }
+
+    /// Idempotent `ALTER TABLE … ADD COLUMN`. Swallows the "duplicate column"
+    /// error so re-running on an already-migrated DB is a no-op.
+    fn ensure_column(&self, table: &str, col: &str, decl: &str) -> SqlResult<()> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {col} {decl}");
+        match self.conn.execute(&sql, []) {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // ───── user / auth (same shape as ai-ledger) ─────
@@ -337,22 +358,30 @@ impl Db {
 
     // ───── notes ─────
 
-    pub fn create_note(&self, user_id: &str, title: &str, body: &str, tags: &[String]) -> SqlResult<Note> {
+    pub fn create_note(
+        &self,
+        user_id: &str,
+        title: &str,
+        body: &str,
+        tags: &[String],
+        space: &str,
+    ) -> SqlResult<Note> {
         let id = random_id();
         let now = Utc::now();
         let tag_str = tags.join(",");
         self.conn.execute(
-            "INSERT INTO notes(id, user_id, title, body, tags,
+            "INSERT INTO notes(id, user_id, title, body, tags, space,
                                embedding, embedding_dim, embedding_at,
                                created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, ?6, ?6)",
-            params![id, user_id, title, body, tag_str, now.to_rfc3339()],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, ?7, ?7)",
+            params![id, user_id, title, body, tag_str, space, now.to_rfc3339()],
         )?;
         Ok(Note {
             id,
             title: title.to_string(),
             body: body.to_string(),
             tags: tags.to_vec(),
+            space: space.to_string(),
             created_at: now,
             updated_at: now,
         })
@@ -360,7 +389,7 @@ impl Db {
 
     pub fn get_note(&self, user_id: &str, id: &str) -> SqlResult<Option<Note>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, body, tags, created_at, updated_at
+            "SELECT id, title, body, tags, space, created_at, updated_at
              FROM notes WHERE user_id = ?1 AND id = ?2",
         )?;
         stmt.query_row(params![user_id, id], row_to_note).optional()
@@ -398,13 +427,27 @@ impl Db {
         )? as u32)
     }
 
-    pub fn list_recent_notes(&self, user_id: &str, limit: u32) -> SqlResult<Vec<Note>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, body, tags, created_at, updated_at
-             FROM notes WHERE user_id = ?1
-             ORDER BY updated_at DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![user_id, limit as i64], row_to_note)?;
+    pub fn list_recent_notes(
+        &self,
+        user_id: &str,
+        space: Option<&str>,
+        limit: u32,
+    ) -> SqlResult<Vec<Note>> {
+        let mut sql = String::from(
+            "SELECT id, title, body, tags, space, created_at, updated_at
+             FROM notes WHERE user_id = ?1",
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(sp) = space {
+            sql.push_str(&format!(" AND space = ?{}", p.len() + 1));
+            p.push(sp.to_string());
+        }
+        sql.push_str(&format!(" ORDER BY updated_at DESC LIMIT ?{}", p.len() + 1));
+        p.push((limit as i64).to_string());
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), row_to_note)?;
         rows.collect()
     }
 
@@ -414,15 +457,20 @@ impl Db {
     pub fn list_notes_in_range(
         &self,
         user_id: &str,
+        space: Option<&str>,
         since: Option<&str>,
         until: Option<&str>,
         limit: u32,
     ) -> SqlResult<Vec<Note>> {
         let mut sql = String::from(
-            "SELECT id, title, body, tags, created_at, updated_at
+            "SELECT id, title, body, tags, space, created_at, updated_at
              FROM notes WHERE user_id = ?1",
         );
         let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(sp) = space {
+            sql.push_str(&format!(" AND space = ?{}", p.len() + 1));
+            p.push(sp.to_string());
+        }
         if let Some(s) = since {
             sql.push_str(&format!(" AND updated_at >= ?{}", p.len() + 1));
             p.push(s.to_string());
@@ -481,16 +529,24 @@ impl Db {
     /// Load all embedded notes for a user, returning the parsed vector.
     /// Used by the semantic search path; for a personal note app the per-user
     /// corpus is small enough (<10k) that linear scan is fine.
-    pub fn list_embeddings(&self, user_id: &str) -> SqlResult<Vec<NoteEmbedding>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, body, tags, embedding, embedding_dim,
+    pub fn list_embeddings(&self, user_id: &str, space: Option<&str>) -> SqlResult<Vec<NoteEmbedding>> {
+        let mut sql = String::from(
+            "SELECT id, title, body, tags, space, embedding, embedding_dim,
                     created_at, updated_at
              FROM notes
              WHERE user_id = ?1 AND embedding IS NOT NULL",
-        )?;
-        let rows = stmt.query_map(params![user_id], |r| {
-            let blob: Vec<u8> = r.get(4)?;
-            let dim: i64 = r.get(5)?;
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(sp) = space {
+            sql.push_str(&format!(" AND space = ?{}", p.len() + 1));
+            p.push(sp.to_string());
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), |r| {
+            let blob: Vec<u8> = r.get(5)?;
+            let dim: i64 = r.get(6)?;
             let dim = dim as usize;
             let mut vec = Vec::with_capacity(dim);
             for chunk in blob.chunks_exact(4) {
@@ -500,14 +556,16 @@ impl Db {
             let tags = tags_s
                 .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
                 .unwrap_or_default();
-            let c: String = r.get(6)?;
-            let u: String = r.get(7)?;
+            let space: String = r.get(4)?;
+            let c: String = r.get(7)?;
+            let u: String = r.get(8)?;
             Ok(NoteEmbedding {
                 note: Note {
                     id: r.get(0)?,
                     title: r.get(1)?,
                     body: r.get(2)?,
                     tags,
+                    space,
                     created_at: parse_rfc3339(&c),
                     updated_at: parse_rfc3339(&u),
                 },
@@ -517,14 +575,17 @@ impl Db {
         rows.collect()
     }
 
-    pub fn count_notes(&self, user_id: &str) -> SqlResult<u32> {
-        self.conn
-            .query_row(
-                "SELECT COUNT(*) FROM notes WHERE user_id = ?1",
-                params![user_id],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|n| n as u32)
+    pub fn count_notes(&self, user_id: &str, space: Option<&str>) -> SqlResult<u32> {
+        let (sql, has_sp) = match space {
+            Some(_) => ("SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND space = ?2", true),
+            None => ("SELECT COUNT(*) FROM notes WHERE user_id = ?1", false),
+        };
+        let n = if has_sp {
+            self.conn.query_row(sql, params![user_id, space.unwrap()], |r| r.get::<_, i64>(0))?
+        } else {
+            self.conn.query_row(sql, params![user_id], |r| r.get::<_, i64>(0))?
+        };
+        Ok(n as u32)
     }
 
     // ───── admin: audit events ─────
@@ -777,13 +838,15 @@ fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
     let tags = tags_s
         .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
         .unwrap_or_default();
-    let c: String = r.get(4)?;
-    let u: String = r.get(5)?;
+    let space: String = r.get(4)?;
+    let c: String = r.get(5)?;
+    let u: String = r.get(6)?;
     Ok(Note {
         id: r.get(0)?,
         title: r.get(1)?,
         body: r.get(2)?,
         tags,
+        space,
         created_at: parse_rfc3339(&c),
         updated_at: parse_rfc3339(&u),
     })
@@ -800,4 +863,27 @@ fn random_id() -> String {
     let mut buf = [0u8; 8];
     rand::rngs::OsRng.fill_bytes(&mut buf);
     hex::encode(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_db() -> Db {
+        let p = std::env::temp_dir().join(format!("ainote-test-{}.db", random_id()));
+        Db::open(&p).unwrap()
+    }
+
+    #[test]
+    fn notes_are_space_scoped() {
+        let db = tmp_db();
+        db.create_note("u1", "w", "work note", &[], "work").unwrap();
+        db.create_note("u1", "l", "life note", &[], "life").unwrap();
+        let work = db.list_recent_notes("u1", Some("work"), 50).unwrap();
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].space, "work");
+        let all = db.list_recent_notes("u1", None, 50).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(db.count_notes("u1", Some("life")).unwrap(), 1);
+    }
 }
