@@ -18,22 +18,54 @@
     "invite": "邀请码（可选）",
     "registerSubmit": "创建账号"
   },
-  "nav": { "notes": "笔记", "search": "搜索", "profile": "我的" },
-  "spaces": { "work": "工作", "life": "生活" },
-  "notes": {
-    "new": "写笔记", "empty": "这个空间还没有笔记。",
-    "title": "标题", "body": "写点什么…", "tags": "标签（逗号分隔）",
-    "save": "保存", "delete": "删除", "deleteConfirm": "删除这条笔记？", "deleted": "已删除"
+  "nav": {
+    "notes": "笔记",
+    "search": "搜索",
+    "profile": "我的"
   },
-  "search": { "placeholder": "搜索笔记…", "empty": "没有匹配结果。", "semantic": "语义搜索", "grep": "文本匹配" },
-  "profile": { "model": "对话模型", "modelTrial": "升级后可切换模型", "export": "导出全部（.zip）",
-    "title": "我的", "account": "账户", "email": "邮箱", "tier": "等级", "joined": "加入时间",
-    "userId": "用户 ID", "password": "密码", "changePassword": "修改密码",
-    "old": "当前密码", "new": "新密码", "save": "保存", "cancel": "取消",
+  "spaces": {
+    "work": "工作",
+    "life": "生活"
+  },
+  "notes": {
+    "new": "写笔记",
+    "edit": "编辑笔记",
+    "empty": "这个空间还没有笔记。",
+    "title": "标题",
+    "body": "写点什么…",
+    "tags": "标签（逗号分隔）",
+    "save": "保存",
+    "delete": "删除",
+    "deleteConfirm": "删除这条笔记？",
+    "deleted": "已删除"
+  },
+  "search": {
+    "placeholder": "搜索笔记…",
+    "empty": "没有匹配结果。",
+    "semantic": "语义搜索",
+    "grep": "文本匹配"
+  },
+  "profile": {
+    "model": "对话模型",
+    "modelTrial": "升级后可切换模型",
+    "export": "导出全部（.zip）",
+    "title": "我的",
+    "account": "账户",
+    "email": "邮箱",
+    "tier": "等级",
+    "joined": "加入时间",
+    "userId": "用户 ID",
+    "password": "密码",
+    "changePassword": "修改密码",
+    "old": "当前密码",
+    "new": "新密码",
+    "save": "保存",
+    "cancel": "取消",
     "passwordChanged_other": "密码已修改，{{count}} 个其他设备已登出。",
     "errMinLen": "新密码至少 6 位。",
     "errSame": "新密码不能跟旧密码相同。",
-    "modelDefault": "服务器默认", "modelTrialHint": "升级 paid 才能切换模型"
+    "modelDefault": "服务器默认",
+    "modelTrialHint": "升级 paid 才能切换模型"
   },
   "chat": {
     "fab": "和 AI 聊聊",

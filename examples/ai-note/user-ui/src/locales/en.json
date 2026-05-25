@@ -18,23 +18,55 @@
     "invite": "Invite code (optional)",
     "registerSubmit": "Create account"
   },
-  "nav": { "notes": "Notes", "search": "Search", "profile": "Profile" },
-  "spaces": { "work": "Work", "life": "Life" },
-  "notes": {
-    "new": "New note", "empty": "No notes yet in this space.",
-    "title": "Title", "body": "Write your note…", "tags": "tags (comma-separated)",
-    "save": "Save", "delete": "Delete", "deleteConfirm": "Delete this note?", "deleted": "Deleted"
+  "nav": {
+    "notes": "Notes",
+    "search": "Search",
+    "profile": "Profile"
   },
-  "search": { "placeholder": "Search your notes…", "empty": "No matches.", "semantic": "semantic", "grep": "text match" },
-  "profile": { "model": "Chat model", "modelTrial": "Upgrade to switch models", "export": "Export all (.zip)",
-    "title": "Profile", "account": "Account", "email": "Email", "tier": "Tier", "joined": "Joined",
-    "userId": "User ID", "password": "Password", "changePassword": "Change password",
-    "old": "Current password", "new": "New password", "save": "Save", "cancel": "Cancel",
+  "spaces": {
+    "work": "Work",
+    "life": "Life"
+  },
+  "notes": {
+    "new": "New note",
+    "edit": "Edit note",
+    "empty": "No notes yet in this space.",
+    "title": "Title",
+    "body": "Write your note…",
+    "tags": "tags (comma-separated)",
+    "save": "Save",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this note?",
+    "deleted": "Deleted"
+  },
+  "search": {
+    "placeholder": "Search your notes…",
+    "empty": "No matches.",
+    "semantic": "semantic",
+    "grep": "text match"
+  },
+  "profile": {
+    "model": "Chat model",
+    "modelTrial": "Upgrade to switch models",
+    "export": "Export all (.zip)",
+    "title": "Profile",
+    "account": "Account",
+    "email": "Email",
+    "tier": "Tier",
+    "joined": "Joined",
+    "userId": "User ID",
+    "password": "Password",
+    "changePassword": "Change password",
+    "old": "Current password",
+    "new": "New password",
+    "save": "Save",
+    "cancel": "Cancel",
     "passwordChanged_one": "Password changed. {{count}} other device logged out.",
     "passwordChanged_other": "Password changed. {{count}} other devices logged out.",
     "errMinLen": "New password must be at least 6 characters.",
     "errSame": "New password can't match the current one.",
-    "modelDefault": "Server default", "modelTrialHint": "Upgrade to paid to switch models"
+    "modelDefault": "Server default",
+    "modelTrialHint": "Upgrade to paid to switch models"
   },
   "chat": {
     "fab": "Chat with AI",

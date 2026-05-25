@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -7,8 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSpace } from '@/components/space-context';
-import { NoteEditor } from '@/components/notes/note-editor';
 import { noteApi, type Note } from '@/lib/api';
+
+// The WYSIWYG editor (MDXEditor) is heavy — only load its chunk when the user
+// actually opens a note. `everOpened` keeps it mounted after the first open so
+// the Sheet close animation still plays.
+const NoteEditor = lazy(() =>
+  import('@/components/notes/note-editor').then((m) => ({ default: m.NoteEditor })),
+);
 
 export function Notes() {
   const { t } = useTranslation();
@@ -16,6 +22,13 @@ export function Notes() {
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [editing, setEditing] = useState<Note | null>(null);
   const [open, setOpen] = useState(false);
+  const [everOpened, setEverOpened] = useState(false);
+
+  function openEditor(note: Note | null) {
+    setEditing(note);
+    setEverOpened(true);
+    setOpen(true);
+  }
 
   const load = useCallback(() => {
     setNotes(null);
@@ -34,7 +47,7 @@ export function Notes() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">{t('nav.notes')}</h1>
-        <Button onClick={() => { setEditing(null); setOpen(true); }}>
+        <Button onClick={() => openEditor(null)}>
           <Plus className="size-4" /> {t('notes.new')}
         </Button>
       </div>
@@ -45,7 +58,7 @@ export function Notes() {
       ) : (
         <div className="space-y-2">
           {notes.map((n) => (
-            <Card key={n.id} onClick={() => { setEditing(n); setOpen(true); }}
+            <Card key={n.id} onClick={() => openEditor(n)}
               className="hover:bg-accent cursor-pointer p-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
@@ -64,7 +77,11 @@ export function Notes() {
           ))}
         </div>
       )}
-      <NoteEditor open={open} onOpenChange={setOpen} space={space} note={editing} onSaved={load} />
+      {everOpened && (
+        <Suspense fallback={null}>
+          <NoteEditor open={open} onOpenChange={setOpen} space={space} note={editing} onSaved={load} />
+        </Suspense>
+      )}
     </div>
   );
 }
