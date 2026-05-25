@@ -1,5 +1,5 @@
 {
-  "brand": "Ledger",
+  "brand": "ai-note",
   "common": {
     "logout": "Sign out",
     "loading": "Loading…",
@@ -8,7 +8,7 @@
   },
   "login": {
     "title": "Welcome back",
-    "subtitle": "Your AI financial concierge",
+    "subtitle": "Your AI note-taking assistant",
     "email": "Email",
     "password": "Password",
     "submit": "Sign in",
@@ -18,108 +18,23 @@
     "invite": "Invite code (optional)",
     "registerSubmit": "Create account"
   },
-  "dashboard": {
-    "title": "Net worth",
-    "asOf": "as of {{date}}",
-    "delta30": "{{value}} ({{pct}}) vs 30 days ago",
-    "noHistory": "Building your history — check back tomorrow.",
-    "composition": "Composition",
-    "cash": "Cash",
-    "investments": "Investments",
-    "debt": "Debt",
-    "trend12mo": "12-month trend",
-    "accounts": "Accounts",
-    "noAccounts": "You haven't added any accounts yet.",
-    "refreshNow": "Refresh now",
-    "baseCurrency": "Display currency"
+  "nav": { "notes": "Notes", "search": "Search", "profile": "Profile" },
+  "spaces": { "work": "Work", "life": "Life" },
+  "notes": {
+    "new": "New note", "empty": "No notes yet in this space.",
+    "title": "Title", "body": "Write your note…", "tags": "tags (comma-separated)",
+    "save": "Save", "delete": "Delete", "deleteConfirm": "Delete this note?", "deleted": "Deleted"
   },
-  "nav": {
-    "dashboard": "Dashboard",
-    "ledger": "Ledger",
-    "portfolio": "Portfolio",
-    "profile": "Profile",
-    "chat": "Chat"
-  },
-  "ledger": {
-    "title": "Ledger",
-    "transactions": "Transactions",
-    "empty": "No transactions yet.",
-    "expense": "Expense",
-    "income": "Income",
-    "transfer": "Transfer",
-    "filters": "Filters",
-    "thisMonth": "This month",
-    "last30": "Last 30 days",
-    "thisYear": "This year",
-    "allTime": "All time"
-  },
-  "budgets": {
-    "title": "Budgets",
-    "empty": "No budgets set. Ask the chat to add one.",
-    "over": "Over budget"
-  },
-  "subs": {
-    "title": "Subscriptions",
-    "empty": "No subscriptions tracked.",
-    "cancel": "Cancel",
-    "cancelConfirm": "Cancel {{name}}?",
-    "cancelled": "Cancelled {{name}}",
-    "next": "Next charge {{date}}",
-    "freq": {
-      "weekly": "Weekly",
-      "monthly": "Monthly",
-      "quarterly": "Quarterly",
-      "yearly": "Yearly"
-    }
-  },
-  "loans": {
-    "title": "Loans & receivables",
-    "empty": "Nothing tracked. Add via chat.",
-    "principal": "Original",
-    "remaining": "Remaining",
-    "owedToYou": "Owed to you",
-    "monthlyPayment": "Monthly",
-    "nextDue": "Next {{date}}",
-    "apr": "{{rate}}% APR",
-    "kindLoan": "Loan",
-    "kindMortgage": "Mortgage",
-    "kindReceivable": "Receivable",
-    "paidOff": "Paid off"
-  },
-  "report": {
-    "title": "This month by category",
-    "empty": "Nothing recorded this month yet.",
-    "count_one": "{{count}} txn",
-    "count_other": "{{count}} txns"
-  },
-  "export": {
-    "title": "Export CSV",
-    "transactions": "Transactions",
-    "trades": "Trades",
-    "subscriptions": "Subscriptions"
-  },
-  "portfolio": {
-    "title": "Portfolio",
-    "positions": "Positions",
-    "trades": "Trades",
-    "allocation": "Allocation",
-    "qty": "Qty",
-    "avg": "Avg",
-    "value": "Value",
-    "unrealized": "Unrealized",
-    "noPrice": "No price",
-    "empty": "Nothing here yet. Add a trade via chat.",
-    "buy": "Buy",
-    "sell": "Sell",
-    "opening": "Opening",
-    "symbol": "Symbol",
-    "class": {
-      "stock": "Stock",
-      "etf": "ETF",
-      "crypto": "Crypto",
-      "commodity": "Commodity",
-      "other": "Other"
-    }
+  "search": { "placeholder": "Search your notes…", "empty": "No matches.", "semantic": "semantic", "grep": "text match" },
+  "profile": { "model": "Chat model", "modelTrial": "Upgrade to switch models", "export": "Export all (.zip)",
+    "title": "Profile", "account": "Account", "email": "Email", "tier": "Tier", "joined": "Joined",
+    "userId": "User ID", "password": "Password", "changePassword": "Change password",
+    "old": "Current password", "new": "New password", "save": "Save", "cancel": "Cancel",
+    "passwordChanged_one": "Password changed. {{count}} other device logged out.",
+    "passwordChanged_other": "Password changed. {{count}} other devices logged out.",
+    "errMinLen": "New password must be at least 6 characters.",
+    "errSame": "New password can't match the current one.",
+    "modelDefault": "Server default", "modelTrialHint": "Upgrade to paid to switch models"
   },
   "chat": {
     "fab": "Chat with AI",
@@ -152,48 +67,5 @@
     "attachFailed": "Upload failed",
     "attachRemove": "Remove",
     "attachLimitReached": "Up to 3 attachments per message."
-  },
-  "profile": {
-    "title": "Profile",
-    "account": "Account",
-    "email": "Email",
-    "tier": "Tier",
-    "joined": "Joined",
-    "userId": "User ID",
-    "baseCurrency": "Base currency",
-    "password": "Password",
-    "changePassword": "Change password",
-    "old": "Current password",
-    "new": "New password",
-    "save": "Save",
-    "cancel": "Cancel",
-    "passwordChanged_one": "Password changed. {{count}} other device logged out.",
-    "passwordChanged_other": "Password changed. {{count}} other devices logged out.",
-    "errMinLen": "New password must be at least 6 characters.",
-    "errSame": "New password can't match the current one.",
-    "model": "Preferred model",
-    "modelDefault": "Server default",
-    "modelTrialHint": "Upgrade to paid to switch models",
-    "memory": "Memory",
-    "memoryOpen": "View memory entries ({{count}})",
-    "memoryEmpty": "No memory entries.",
-    "memoryClear": "Clear all",
-    "memoryClearConfirm": "Delete every memory entry? Cannot be undone.",
-    "memoryDeleteConfirm": "Delete this memory entry?",
-    "memoryCleared_one": "Cleared {{count}} memory entry.",
-    "memoryCleared_other": "Cleared {{count}} memory entries."
-  },
-  "currency": {
-    "USD": "US Dollar",
-    "EUR": "Euro",
-    "GBP": "Pound Sterling",
-    "JPY": "Japanese Yen",
-    "CNY": "Chinese Yuan",
-    "HKD": "Hong Kong Dollar",
-    "SGD": "Singapore Dollar",
-    "AUD": "Australian Dollar",
-    "CAD": "Canadian Dollar",
-    "CHF": "Swiss Franc",
-    "KRW": "Korean Won"
   }
 }

@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Home, User, Globe, LogOut,
+  NotebookPen, Search as SearchIcon, User, Globe, LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,9 +12,11 @@ import { Toaster } from '@/components/ui/sonner';
 import { ChatFab } from '@/components/chat/chat-fab';
 import { noteApi, setToken } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useSpace } from '@/components/space-context';
 
 const NAV = [
-  { to: '/app', key: 'dashboard', icon: Home },
+  { to: '/app', key: 'notes', icon: NotebookPen },
+  { to: '/app/search', key: 'search', icon: SearchIcon },
   { to: '/app/profile', key: 'profile', icon: User },
 ] as const;
 
@@ -46,6 +48,29 @@ function LangSwitch() {
   );
 }
 
+function SpaceToggle() {
+  const { t } = useTranslation();
+  const { space, setSpace } = useSpace();
+  return (
+    <div className="bg-muted ml-4 inline-flex rounded-full p-0.5 text-xs">
+      {(['work', 'life'] as const).map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => setSpace(s)}
+          className={cn(
+            'rounded-full px-3 py-1 transition-colors',
+            space === s ? 'bg-background text-foreground shadow-sm font-medium'
+                        : 'text-muted-foreground',
+          )}
+        >
+          {t(`spaces.${s}`)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
   const { t } = useTranslation();
   const location = useLocation();
@@ -65,6 +90,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
           <Link to="/app" className="text-lg font-semibold tracking-tight">
             {t('brand')}
           </Link>
+          <SpaceToggle />
           <nav className="ml-6 hidden items-center gap-1 md:flex">
             {NAV.map((item) => {
               const active = isActive(location.pathname, item.to);
