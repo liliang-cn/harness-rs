@@ -1115,6 +1115,11 @@ async fn create_chat_session_handler(
     auth: AuthCtx,
     Json(req): Json<CreateSessionReq>,
 ) -> Result<Json<Value>, ApiError> {
+    if req.space != "work" && req.space != "life" {
+        return Err(ApiError::BadRequest(format!(
+            "space must be 'work' or 'life', got '{}'", req.space
+        )));
+    }
     let id = random_session_id();
     let model = s.effective_model_for(&auth.user);
     let db = open_db_state(&s)?;
@@ -1203,30 +1208,27 @@ async fn session_stream_handler(
         .ok_or_else(|| ApiError::BadRequest(format!("no session `{session_id}`")))?;
     let space = session.space.clone();
 
-    db.append_chat_message(&auth.user.id, &session_id, "user", &req.message, None)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
     let history_msgs = db
         .get_chat_messages(&auth.user.id, &session_id, 80)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let history: Vec<ChatTurn> = history_msgs
         .iter()
-        .filter(|m| !(m.role == "user" && m.text == req.message))
         .map(|m| ChatTurn { role: m.role.clone(), text: m.text.clone() })
         .collect();
+
+    db.append_chat_message(&auth.user.id, &session_id, "user", &req.message, None)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut task_desc = build_task_description(&req.message, &history, &space);
     if let Some(lang) = req.lang.as_deref() {
         task_desc = format!("[system] reply_language: {lang}\n\n{task_desc}");
     }
     drop(db);
 
-    let user_id = auth.user.id.clone();
+    let uid = auth.user.id.clone();
     let user_tier = auth.user.tier.clone();
-    let model_id = s.effective_model_for(&auth.user);
+    let mid = s.effective_model_for(&auth.user);
     let tx_done = tx.clone();
     let sid = session_id.clone();
-    let uid = user_id.clone();
-    let mid = model_id.clone();
     let space_for_task = space.clone();
     let db_path = s.db_path.to_string_lossy().into_owned();
     let user_tz = s.user_tz.clone();
