@@ -13,19 +13,23 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::Html,
+    response::{Html, Sse, sse::Event as SseEvent, sse::KeepAlive},
     routing::{get, post},
 };
 use chrono::Utc;
+use futures::Stream;
 use harness::Task;
-use harness_core::{Block, Embedder, Model};
+use harness_core::{Block, Embedder, Event, Hook, HookOutcome, Model, World as CoreWorld};
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::{GeminiNative, OpenAiCompat, providers};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::convert::Infallible;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 
 const INDEX_HTML: &str = include_str!("index.html");
 const MARKED_JS: &str = include_str!("marked.min.js");
@@ -182,6 +186,82 @@ impl axum::response::IntoResponse for ApiError {
     }
 }
 
+// ───── SSE channel hook ─────
+
+/// Hook that forwards a curated subset of lifecycle events into an mpsc
+/// channel so the SSE stream can show live progress.
+struct ChannelHook {
+    tx: mpsc::UnboundedSender<Value>,
+}
+
+impl Hook for ChannelHook {
+    fn name(&self) -> &str {
+        "sse_channel"
+    }
+    fn matches(&self, _ev: &Event<'_>) -> bool {
+        true
+    }
+    fn fire(&self, ev: &Event<'_>, _world: &mut CoreWorld) -> HookOutcome {
+        let payload: Option<Value> = match ev {
+            Event::Heartbeat { iter } => Some(json!({"type": "iter", "iter": iter})),
+            Event::PreToolUse { action } => Some(json!({
+                "type": "tool_start",
+                "name": action.tool,
+                "args": &action.args,
+            })),
+            Event::PostToolUse { action, result } => {
+                let mut preview = result.content.clone();
+                let s = serde_json::to_string(&preview).unwrap_or_default();
+                if s.len() > 280 {
+                    preview = json!(format!("{}…", &s[..280]));
+                }
+                Some(json!({
+                    "type": "tool_end",
+                    "name": action.tool,
+                    "ok": result.ok,
+                    "preview": preview,
+                }))
+            }
+            Event::PostModel { out } => {
+                if let Some(text) = &out.text {
+                    if !text.is_empty() {
+                        return {
+                            let _ = self.tx.send(json!({"type":"thought","text": text}));
+                            HookOutcome::Allow
+                        };
+                    }
+                }
+                None
+            }
+            Event::ModelTokenDelta { text } => {
+                if !text.is_empty() {
+                    let _ = self.tx.send(json!({"type": "token", "text": text}));
+                }
+                None
+            }
+            Event::Error { message } => Some(json!({"type": "error", "message": message})),
+            _ => None,
+        };
+        if let Some(v) = payload {
+            let _ = self.tx.send(v);
+        }
+        HookOutcome::Allow
+    }
+}
+
+// ───── helpers ─────
+
+fn default_space() -> String {
+    "life".into()
+}
+
+fn random_session_id() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 6];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(serve_index))
@@ -213,7 +293,10 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/notes/:id/export.md", get(export_note_md_handler))
         .route("/api/notes/export.zip", get(export_all_zip_handler))
         .route("/api/notes/search", get(search_handler))
-        .route("/api/chat", post(chat_handler));
+        .route("/api/chat", post(chat_handler))
+        .route("/api/chat/sessions", get(list_chat_sessions_handler).post(create_chat_session_handler))
+        .route("/api/chat/sessions/:id", get(get_chat_session_handler).delete(delete_chat_session_handler))
+        .route("/api/chat/sessions/:id/stream", post(session_stream_handler));
 
     // Admin endpoints — gated by tier == "admin" in the handlers.
     let app = crate::admin::register_routes(app)
@@ -560,6 +643,7 @@ async fn set_model_handler(
 #[derive(Deserialize)]
 struct ListQuery {
     limit: Option<u32>,
+    space: Option<String>,
 }
 
 async fn list_notes_handler(
@@ -568,9 +652,8 @@ async fn list_notes_handler(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
-    // Task 5 wires ?space= query param; for now pass None (return all spaces).
     let notes = db
-        .list_recent_notes(&auth.user.id, None, q.limit.unwrap_or(50).min(500))
+        .list_recent_notes(&auth.user.id, q.space.as_deref(), q.limit.unwrap_or(50).min(500))
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "count": notes.len(), "notes": notes })))
 }
@@ -582,6 +665,8 @@ struct CreateNoteReq {
     body: String,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default = "default_space")]
+    space: String,
 }
 
 async fn create_note_handler(
@@ -592,13 +677,14 @@ async fn create_note_handler(
     if req.body.trim().is_empty() {
         return Err(ApiError::BadRequest("body is empty".into()));
     }
+    if req.space != "work" && req.space != "life" {
+        return Err(ApiError::BadRequest(format!("space must be 'work' or 'life', got '{}'", req.space)));
+    }
     let db = open_db_state(&s)?;
-    // Task 5 wires ?space= on create_note_handler; default to "life" for now.
-    let space = "life";
     // Trial cap. Edit/delete uncapped; only inserts count.
     if auth.user.tier == "trial" {
         let used = db
-            .count_notes(&auth.user.id, Some(space))
+            .count_notes(&auth.user.id, Some(&req.space))
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         if used >= TRIAL_MAX_NOTES {
             return Err(ApiError::Forbidden(format!(
@@ -607,7 +693,7 @@ async fn create_note_handler(
         }
     }
     let note = db
-        .create_note(&auth.user.id, &req.title, &req.body, &req.tags, space)
+        .create_note(&auth.user.id, &req.title, &req.body, &req.tags, &req.space)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "note": note })))
 }
@@ -910,6 +996,7 @@ async fn delete_note_handler(
 struct SearchQuery {
     q: String,
     limit: Option<u32>,
+    space: Option<String>,
 }
 
 async fn search_handler(
@@ -918,8 +1005,7 @@ async fn search_handler(
     Query(qs): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let top_k = qs.limit.unwrap_or(8).min(50) as usize;
-    // Task 5 wires ?space= query param; for now pass None (export-all spaces).
-    let hits = crate::search::semantic_search(&s.db_path, &auth.user.id, &s.embedder, &qs.q, top_k, None)
+    let hits = crate::search::semantic_search(&s.db_path, &auth.user.id, &s.embedder, &qs.q, top_k, qs.space.as_deref())
         .await
         .map_err(|e| ApiError::Internal(format!("search: {e}")))?;
     Ok(Json(json!({ "count": hits.len(), "hits": hits })))
@@ -1014,6 +1100,204 @@ async fn chat_handler(
         );
     }
     Ok(Json(json!({ "reply": reply, "iters": iters, "ok": ok })))
+}
+
+// ───── chat session CRUD ─────
+
+#[derive(Deserialize)]
+struct CreateSessionReq {
+    #[serde(default = "default_space")]
+    space: String,
+}
+
+async fn create_chat_session_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Json(req): Json<CreateSessionReq>,
+) -> Result<Json<Value>, ApiError> {
+    let id = random_session_id();
+    let model = s.effective_model_for(&auth.user);
+    let db = open_db_state(&s)?;
+    db.create_chat_session(&auth.user.id, &id, Some(&model), &req.space)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let sess = db
+        .get_chat_session(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::Internal("session vanished".into()))?;
+    Ok(Json(json!({ "session": sess })))
+}
+
+#[derive(Deserialize)]
+struct SessionsQuery {
+    #[serde(default = "default_space")]
+    space: String,
+}
+
+async fn list_chat_sessions_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Query(q): Query<SessionsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let sessions = db
+        .list_chat_sessions(&auth.user.id, &q.space)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "count": sessions.len(), "sessions": sessions })))
+}
+
+async fn get_chat_session_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let session = db
+        .get_chat_session(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest(format!("no session `{id}`")))?;
+    let messages = db
+        .get_chat_messages(&auth.user.id, &id, 500)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "session": session, "messages": messages })))
+}
+
+async fn delete_chat_session_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let n = db
+        .delete_chat_session(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest(format!("no session `{id}`")));
+    }
+    Ok(Json(json!({ "deleted": id })))
+}
+
+// ───── SSE streaming handler ─────
+
+#[derive(Deserialize)]
+struct SessionStreamReq {
+    message: String,
+    #[serde(default)]
+    lang: Option<String>,
+}
+
+async fn session_stream_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(session_id): Path<String>,
+    Json(req): Json<SessionStreamReq>,
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    if req.message.trim().is_empty() {
+        return Err(ApiError::BadRequest("message must not be empty".into()));
+    }
+    let (tx, rx) = mpsc::unbounded_channel::<Value>();
+
+    let db = open_db_state(&s)?;
+    let session = db
+        .get_chat_session(&auth.user.id, &session_id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest(format!("no session `{session_id}`")))?;
+    let space = session.space.clone();
+
+    db.append_chat_message(&auth.user.id, &session_id, "user", &req.message, None)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let history_msgs = db
+        .get_chat_messages(&auth.user.id, &session_id, 80)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let history: Vec<ChatTurn> = history_msgs
+        .iter()
+        .filter(|m| !(m.role == "user" && m.text == req.message))
+        .map(|m| ChatTurn { role: m.role.clone(), text: m.text.clone() })
+        .collect();
+    let mut task_desc = build_task_description(&req.message, &history, &space);
+    if let Some(lang) = req.lang.as_deref() {
+        task_desc = format!("[system] reply_language: {lang}\n\n{task_desc}");
+    }
+    drop(db);
+
+    let user_id = auth.user.id.clone();
+    let user_tier = auth.user.tier.clone();
+    let model_id = s.effective_model_for(&auth.user);
+    let tx_done = tx.clone();
+    let sid = session_id.clone();
+    let uid = user_id.clone();
+    let mid = model_id.clone();
+    let space_for_task = space.clone();
+    let db_path = s.db_path.to_string_lossy().into_owned();
+    let user_tz = s.user_tz.clone();
+    let max_iters = s.max_iters;
+
+    tokio::spawn(async move {
+        let model = match s.build_model_for(&mid) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = tx_done.send(json!({"type":"error","message": e.to_string()}));
+                let _ = tx_done.send(json!({"type":"done","ok":false,"iters":0,"reply":""}));
+                return;
+            }
+        };
+        let mut profile = harness_core::UserProfile::default();
+        profile.extra.insert("user_id".into(), Value::String(uid.clone()));
+        profile.extra.insert("db_path".into(), Value::String(db_path));
+        profile.extra.insert("tier".into(), Value::String(user_tier));
+        profile.extra.insert("space".into(), Value::String(space_for_task));
+        profile.extra.insert("__embedder_slot".into(), Value::Bool(true));
+        if let Some(tz) = user_tz {
+            profile.tz = Some(tz);
+        }
+        let mut world = harness_context::with_profile(".", profile);
+
+        let mut loop_ = AgentLoop::new(crate::AnyModelHandle(model))
+            .with_streaming(true)
+            .with_guide(Arc::new(SystemPromptGuide));
+        for t in harness_core::iter_macro_tools() {
+            loop_ = loop_.with_tool(t);
+        }
+        loop_ = loop_.with_hook(Arc::new(ChannelHook { tx: tx.clone() }));
+
+        let task = Task { description: task_desc, source: None, deadline: None };
+        let _ = tx_done.send(json!({"type":"start"}));
+        match loop_.run_with_max_iters(task, &mut world, max_iters).await {
+            Ok(Outcome::Done { text, iters, usage, .. }) => {
+                let reply = text.unwrap_or_default();
+                if let Ok(db) = open_db_state(&s) {
+                    let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
+                    let _ = db.update_chat_session_model(&uid, &sid, &mid);
+                    let _ = db.insert_audit(
+                        Some(&uid), "chat_message", Some(&sid),
+                        Some(&json!({"iters": iters, "model": &mid}).to_string()),
+                        usage.input_tokens as i64, usage.output_tokens as i64,
+                    );
+                }
+                let _ = tx_done.send(json!({"type":"done","ok":true,"iters":iters,"reply":reply}));
+            }
+            Ok(Outcome::BudgetExhausted { iters, last_text, usage, .. }) => {
+                let reply = last_text.unwrap_or_else(|| "(budget exhausted)".into());
+                if let Ok(db) = open_db_state(&s) {
+                    let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
+                    let _ = db.insert_audit(
+                        Some(&uid), "chat_message", Some(&sid),
+                        Some(&json!({"iters": iters, "warning":"budget_exhausted"}).to_string()),
+                        usage.input_tokens as i64, usage.output_tokens as i64,
+                    );
+                }
+                let _ = tx_done.send(json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"budget_exhausted"}));
+            }
+            Err(e) => {
+                let _ = tx_done.send(json!({"type":"error","message": format!("agent: {e}")}));
+                let _ = tx_done.send(json!({"type":"done","ok":false,"iters":0,"reply":""}));
+            }
+        }
+    });
+
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(|v| Ok::<_, Infallible>(SseEvent::default().data(v.to_string())));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 fn build_task_description(message: &str, history: &[ChatTurn], space: &str) -> String {
