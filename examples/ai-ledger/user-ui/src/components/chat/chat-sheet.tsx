@@ -56,6 +56,28 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   // user bubble. Skip the load-effect's GET to avoid racing it.
   const skipNextLoad = useRef(false);
 
+  /** Fetch the canonical message log from the server. Used by the
+   *  load-on-select effect, the reopen-refresh effect (Fix 1), and the
+   *  truncated-bubble's Reload button (Fix 2). */
+  const reloadMessages = useCallback(async (id: string) => {
+    try {
+      const j = await ledgerApi.getChatSession(id);
+      setSession(j.session);
+      setMessages(j.messages);
+      // Mark all messages as "seen" for the unread badge (Fix 3).
+      try {
+        const raw = localStorage.getItem('chat-seen-count') ?? '{}';
+        const seen = JSON.parse(raw) as Record<string, number>;
+        seen[id] = j.session.message_count;
+        localStorage.setItem('chat-seen-count', JSON.stringify(seen));
+      } catch {
+        /* swallow — localStorage is best-effort */
+      }
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }, []);
+
   // Load messages whenever a session is selected.
   useEffect(() => {
     if (!activeId) {
@@ -76,6 +98,14 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
         if (cancelled) return;
         setSession(j.session);
         setMessages(j.messages);
+        try {
+          const raw = localStorage.getItem('chat-seen-count') ?? '{}';
+          const seen = JSON.parse(raw) as Record<string, number>;
+          seen[activeId] = j.session.message_count;
+          localStorage.setItem('chat-seen-count', JSON.stringify(seen));
+        } catch {
+          /* ignore */
+        }
       })
       .catch((e) => {
         if (!cancelled) toast.error((e as Error).message);
@@ -96,6 +126,19 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       setDrafting(false);
     }
   }, [open]);
+
+  // Fix 1: when the sheet re-opens while a session is already active,
+  // refresh from the server. Covers the case where the user closed
+  // mid-stream and the agent kept running on the backend — the canonical
+  // assistant reply is now in the DB but our local messages still show
+  // the truncated stream-* row.
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (open && !wasOpenRef.current && activeId && !busy) {
+      reloadMessages(activeId);
+    }
+    wasOpenRef.current = open;
+  }, [open, activeId, busy, reloadMessages]);
 
   // Enter draft mode — no API call yet. handleSend creates the session
   // lazily on first message.
@@ -219,6 +262,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       // Commit the assistant message. Use server-provided `reply` if non-empty
       // (it includes any post-processing); otherwise fall back to accumulated
       // deltas. ID prefix `stream-` keys this row distinctly until next refresh.
+      // If the stream was aborted (sheet closed mid-reply), mark truncated
+      // so the bubble shows a ⚠ + Reload affordance.
+      const wasAborted = ctrl.signal.aborted;
       const replyText = finalReply || buf;
       if (replyText) {
         const assistant: ChatMessage = {
@@ -227,6 +273,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
           role: 'asst',
           text: replyText,
           created_at: new Date().toISOString(),
+          truncated: wasAborted || !gotDone,
         };
         setMessages((cur) => [...cur, assistant]);
       }
@@ -339,6 +386,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
               streaming={streaming}
               toolEvents={toolEvents}
               busy={busy}
+              onReload={activeId ? () => reloadMessages(activeId) : undefined}
             />
             {canRegenerate && (
               <div className="border-border flex justify-center border-t bg-background/60 px-3 py-1.5 backdrop-blur">

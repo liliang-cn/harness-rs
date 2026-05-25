@@ -298,6 +298,11 @@ export interface ChatMessage {
   /** Attachment ids the user uploaded with this message. Empty for asst
    *  turns and for messages predating the feature. */
   attachment_ids?: string[];
+  /** Client-side only flag. Set when an assistant message was committed
+   *  from a stream that was aborted (sheet closed mid-reply). The UI
+   *  shows a ⚠ marker + a reload button. Cleared once the canonical
+   *  reply is fetched from the server. */
+  truncated?: boolean;
 }
 
 // ─── endpoints ────────────────────────────────────────────
