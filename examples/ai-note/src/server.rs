@@ -20,6 +20,7 @@ use chrono::Utc;
 use harness::Task;
 use harness_core::{Block, Embedder, Model};
 use harness_loop::{AgentLoop, Outcome};
+use harness_models::{GeminiNative, OpenAiCompat, providers};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -37,6 +38,17 @@ static ADMIN_DIST: include_dir::Dir<'_> =
 /// Max notes a `tier == "trial"` user may have at once. Paid / admin are
 /// unbounded. Edit / delete don't count — only the inserts.
 pub const TRIAL_MAX_NOTES: u32 = 30;
+
+/// Chat models a paid/admin user may pick. id → (provider, model).
+pub const ALLOWED_MODELS: &[(&str, &str)] = &[
+    ("deepseek-v4-flash", "openai-compat"),
+    ("deepseek-v4-pro", "openai-compat"),
+    ("gemini-3.5-flash", "gemini"),
+];
+
+pub fn is_allowed_model(id: &str) -> bool {
+    ALLOWED_MODELS.iter().any(|(m, _)| *m == id)
+}
 
 /// Admin-mutable runtime config (mirrors ai-ledger's pattern).
 /// Provider keys / chat provider+model live here and are reflected to the
@@ -73,6 +85,42 @@ pub struct AppState {
 impl AppState {
     pub fn cfg(&self) -> AppConfig {
         self.config.read().expect("config lock poisoned").clone()
+    }
+
+    /// Build a fresh chat model for a given allowlisted id, using keys from
+    /// the hot config. Used per chat request so users can switch models.
+    pub fn build_model_for(&self, model_id: &str) -> anyhow::Result<Arc<dyn Model>> {
+        let cfg = self.cfg();
+        let provider = ALLOWED_MODELS
+            .iter()
+            .find(|(m, _)| *m == model_id)
+            .map(|(_, p)| *p)
+            .ok_or_else(|| anyhow::anyhow!("model `{model_id}` not allowed"))?;
+        match provider {
+            "gemini" => {
+                let key = cfg.gemini_key.clone()
+                    .ok_or_else(|| anyhow::anyhow!("no gemini key configured"))?;
+                Ok(Arc::new(GeminiNative::with_key(model_id, key)))
+            }
+            _ => {
+                let key = cfg.deepseek_key.clone()
+                    .ok_or_else(|| anyhow::anyhow!("no deepseek key configured"))?;
+                Ok(Arc::new(OpenAiCompat::with_key(
+                    providers::DEEPSEEK.to_string(),
+                    model_id,
+                    key,
+                )))
+            }
+        }
+    }
+
+    /// The model id this user should chat with: their preferred_model if it's
+    /// allowlisted, else the configured default.
+    pub fn effective_model_for(&self, user: &crate::auth::User) -> String {
+        match &user.preferred_model {
+            Some(m) if is_allowed_model(m) => m.clone(),
+            _ => self.cfg().chat_model.clone(),
+        }
     }
 }
 
@@ -153,6 +201,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
             get(list_invites_handler).post(create_invite_handler),
         )
         .route("/api/me/password", post(change_password_handler))
+        .route("/api/me/model", post(set_model_handler))
         .route(
             "/api/notes",
             get(list_notes_handler).post(create_note_handler),
@@ -274,6 +323,7 @@ async fn info_handler(State(s): State<AppState>) -> Json<Value> {
         "model": s.model_handle,
         "embedder": s.embedder.handle(),
         "embedder_dim": s.embedder.dim(),
+        "allowed_models": ALLOWED_MODELS.iter().map(|(m, _)| *m).collect::<Vec<_>>(),
     }))
 }
 
@@ -475,6 +525,34 @@ async fn change_password_handler(
         0,
     );
     Ok(Json(json!({ "ok": true, "other_sessions_dropped": dropped })))
+}
+
+// ───── model picker ─────
+
+#[derive(Deserialize)]
+struct SetModelReq {
+    model: Option<String>,
+}
+
+async fn set_model_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Json(req): Json<SetModelReq>,
+) -> Result<Json<Value>, ApiError> {
+    if auth.user.tier == "trial" {
+        return Err(ApiError::Forbidden(
+            "trial 用户不能切换模型 — 升级到 paid 后可选".into(),
+        ));
+    }
+    if let Some(m) = &req.model {
+        if !is_allowed_model(m) {
+            return Err(ApiError::BadRequest(format!("model `{m}` not allowed")));
+        }
+    }
+    let db = open_db_state(&s)?;
+    db.update_user_model(&auth.user.id, req.model.as_deref())
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "ok": true, "model": req.model })))
 }
 
 // ───── notes CRUD ─────

@@ -256,6 +256,13 @@ impl Db {
         )? as u32)
     }
 
+    pub fn update_user_model(&self, user_id: &str, model: Option<&str>) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "UPDATE users SET preferred_model = ?2 WHERE id = ?1",
+            params![user_id, model],
+        )? as u32)
+    }
+
     pub fn delete_other_sessions(&self, user_id: &str, keep_token: &str) -> SqlResult<u32> {
         Ok(self.conn.execute(
             "DELETE FROM sessions WHERE user_id = ?1 AND token != ?2",
