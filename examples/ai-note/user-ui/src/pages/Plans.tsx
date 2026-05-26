@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Target, ChevronRight, Sparkles } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -9,15 +10,11 @@ import { useSpace } from '@/components/space-context';
 import { openChatWith } from '@/lib/chat-prefill';
 import { noteApi, type Goal } from '@/lib/api';
 
-const GoalDetail = lazy(() =>
-  import('@/components/plans/goal-detail').then((m) => ({ default: m.GoalDetail })),
-);
-
 export function Plans() {
   const { t } = useTranslation();
   const { space } = useSpace();
+  const navigate = useNavigate();
   const [goals, setGoals] = useState<Goal[] | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setGoals(null);
@@ -51,8 +48,8 @@ export function Plans() {
             {due.length === 0 ? (
               <p className="text-muted-foreground text-sm">{t('plans.noDue')}</p>
             ) : due.map((g) => (
-              <Card key={g.id} className="flex items-center justify-between gap-2 p-3">
-                <button className="min-w-0 flex-1 text-left" onClick={() => setOpenId(g.id)}>
+              <Card key={g.id} className="flex flex-row items-center justify-between gap-2 p-3">
+                <button className="min-w-0 flex-1 text-left" onClick={() => navigate(`/app/plans/${g.id}`)}>
                   <div className="truncate text-sm font-medium">{g.title}</div>
                 </button>
                 <Button size="sm" onClick={() => openChatWith(`复盘：${g.title}`)}>{t('plans.review')}</Button>
@@ -63,7 +60,7 @@ export function Plans() {
           <section className="space-y-2">
             <h2 className="text-muted-foreground text-xs font-medium uppercase">{t('plans.goals')}</h2>
             {topGoals.map((g) => (
-              <Card key={g.id} onClick={() => setOpenId(g.id)} className="hover:bg-accent flex cursor-pointer items-center gap-2 p-3">
+              <Card key={g.id} onClick={() => navigate(`/app/plans/${g.id}`)} className="hover:bg-accent flex flex-row cursor-pointer items-center gap-2 p-3">
                 <Target className="text-muted-foreground size-4 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{g.title}</div>
@@ -82,19 +79,13 @@ export function Plans() {
             <section className="space-y-2">
               <h2 className="text-muted-foreground text-xs font-medium uppercase">{t('plans.rules')}</h2>
               {rules.map((g) => (
-                <Card key={g.id} onClick={() => setOpenId(g.id)} className="hover:bg-accent cursor-pointer p-3 text-sm">
+                <Card key={g.id} onClick={() => navigate(`/app/plans/${g.id}`)} className="hover:bg-accent cursor-pointer p-3 text-sm">
                   {g.title}
                 </Card>
               ))}
             </section>
           )}
         </>
-      )}
-
-      {openId && (
-        <Suspense fallback={null}>
-          <GoalDetail id={openId} open={!!openId} onOpenChange={(v) => !v && setOpenId(null)} onChanged={load} />
-        </Suspense>
       )}
     </div>
   );
