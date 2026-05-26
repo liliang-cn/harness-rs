@@ -304,7 +304,13 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/sessions", get(list_chat_sessions_handler).post(create_chat_session_handler))
         .route("/api/chat/sessions/:id", get(get_chat_session_handler).delete(delete_chat_session_handler))
-        .route("/api/chat/sessions/:id/stream", post(session_stream_handler));
+        .route("/api/chat/sessions/:id/stream", post(session_stream_handler))
+        .route("/api/goals", get(list_goals_handler).post(create_goal_handler))
+        .route(
+            "/api/goals/:id",
+            get(get_goal_handler).patch(update_goal_handler).delete(delete_goal_handler),
+        )
+        .route("/api/goals/:id/reviews", post(add_review_handler));
 
     // Admin endpoints — gated by tier == "admin" in the handlers.
     let app = crate::admin::register_routes(app)
@@ -1438,4 +1444,148 @@ fn random_user_id() -> String {
     let mut buf = [0u8; 8];
     rand::rngs::OsRng.fill_bytes(&mut buf);
     hex::encode(buf)
+}
+
+// ───── goals CRUD ─────
+
+#[derive(Deserialize)]
+struct GoalsQuery {
+    #[serde(default = "default_space")]
+    space: String,
+    /// "active" (default) | "due" | "all"
+    filter: Option<String>,
+}
+
+async fn list_goals_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Query(q): Query<GoalsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let (status, only_due) = match q.filter.as_deref() {
+        Some("all") => (None, false),
+        Some("due") => (Some("active"), true),
+        _ => (Some("active"), false),
+    };
+    let goals = db.list_goals(&auth.user.id, &q.space, status, only_due)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let due = db.count_due_goals(&auth.user.id, &q.space)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "goals": goals, "due_count": due })))
+}
+
+#[derive(Deserialize)]
+struct CreateGoalReq {
+    #[serde(default = "default_space")]
+    space: String,
+    #[serde(default = "default_kind")]
+    kind: String,
+    title: String,
+    #[serde(default)]
+    detail: String,
+    parent_id: Option<String>,
+    target_date: Option<String>,
+    review_interval_days: Option<i64>,
+}
+fn default_kind() -> String { "goal".into() }
+
+async fn create_goal_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Json(req): Json<CreateGoalReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.title.trim().is_empty() {
+        return Err(ApiError::BadRequest("title is empty".into()));
+    }
+    if req.space != "work" && req.space != "life" {
+        return Err(ApiError::BadRequest("space must be 'work' or 'life'".into()));
+    }
+    if req.kind != "goal" && req.kind != "rule" {
+        return Err(ApiError::BadRequest("kind must be 'goal' or 'rule'".into()));
+    }
+    let db = open_db_state(&s)?;
+    let goal = db.create_goal(
+        &auth.user.id, &req.space, &req.kind, &req.title, &req.detail,
+        req.parent_id.as_deref(), req.target_date.as_deref(), req.review_interval_days,
+    ).map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "goal": goal })))
+}
+
+async fn get_goal_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let goal = db.get_goal(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("goal not found".into()))?;
+    let subgoals = db.list_subgoals(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let reviews = db.list_reviews(&auth.user.id, &id, 100)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "goal": goal, "subgoals": subgoals, "reviews": reviews })))
+}
+
+#[derive(Deserialize)]
+struct UpdateGoalReq {
+    status: Option<String>,
+    title: Option<String>,
+    detail: Option<String>,
+    target_date: Option<String>,
+    review_interval_days: Option<i64>,
+}
+
+async fn update_goal_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateGoalReq>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let n = db.update_goal(
+        &auth.user.id, &id, req.status.as_deref(), req.title.as_deref(),
+        req.detail.as_deref(), req.target_date.as_deref(), req.review_interval_days,
+    ).map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 { return Err(ApiError::BadRequest("goal not found".into())); }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_goal_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db_state(&s)?;
+    let n = db.delete_goal(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 { return Err(ApiError::BadRequest("goal not found".into())); }
+    Ok(Json(json!({ "deleted": id })))
+}
+
+#[derive(Deserialize)]
+struct AddReviewReq {
+    progress: String,
+    #[serde(default)]
+    next_steps: String,
+    next_review_in_days: Option<i64>,
+}
+
+async fn add_review_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+    Json(req): Json<AddReviewReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.progress.trim().is_empty() {
+        return Err(ApiError::BadRequest("progress is empty".into()));
+    }
+    let db = open_db_state(&s)?;
+    db.get_goal(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("goal not found".into()))?;
+    let review = db.add_review(&auth.user.id, &id, &req.progress, &req.next_steps,
+                               req.next_review_in_days)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "review": review })))
 }
