@@ -84,7 +84,14 @@
     "errMinLen": "新密码至少 6 位。",
     "errSame": "新密码不能跟旧密码相同。",
     "modelDefault": "服务器默认",
-    "modelTrialHint": "升级 paid 才能切换模型"
+    "modelTrialHint": "升级 paid 才能切换模型",
+    "memory": {
+      "title": "AI 记得我什么",
+      "empty": "还没有记忆。自然地聊，它会慢慢记住你的偏好。",
+      "clear": "清空",
+      "clearConfirm": "忘记 AI 记住的全部内容？",
+      "deleted": "已忘记"
+    }
   },
   "chat": {
     "fab": "和 AI 聊聊",

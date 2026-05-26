@@ -32,6 +32,15 @@ export interface GoalReview {
   id: string; goal_id: string; progress: string; next_steps: string; created_at: string;
 }
 
+export interface Memory {
+  id: string;
+  content: string;
+  tags?: string[];
+  source?: string | null;
+  created_ms: number;
+  expires_ms?: number | null;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     ...init,
@@ -91,4 +100,10 @@ export const noteApi = {
     req<{ deleted: string }>(`/api/goals/${id}`, { method: 'DELETE' }),
   addReview: (id: string, body: { progress: string; next_steps?: string; next_review_in_days?: number }) =>
     req<{ review: GoalReview }>(`/api/goals/${id}/reviews`, { method: 'POST', body: JSON.stringify(body) }),
+
+  memories: () => req<{ count: number; memories: Memory[] }>('/api/me/memories'),
+  forgetMemory: (id: string) =>
+    req<{ deleted: string }>(`/api/me/memories/${id}`, { method: 'DELETE' }),
+  clearMemories: () =>
+    req<{ deleted: number }>('/api/me/memories', { method: 'DELETE' }),
 };
