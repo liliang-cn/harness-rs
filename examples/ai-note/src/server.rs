@@ -263,6 +263,118 @@ fn random_session_id() -> String {
     hex::encode(bytes)
 }
 
+/// Per-user JSONL path for `harness-core::Memory`. One file per user → strict
+/// isolation without the trait knowing about users. Lives next to the DB.
+pub(crate) fn memory_path_for(db_path: &std::path::Path, user_id: &str) -> std::path::PathBuf {
+    let base = db_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("memory").join(format!("{user_id}.jsonl"))
+}
+
+/// Guidance prepended to the MemorySynthesizer prompt: what counts as a durable
+/// fact for a personal note/plan app, and what to skip.
+const NOTE_MEMORY_INSTRUCTIONS: &str = "\
+This is a personal note-taking + planning agent. The user's NOTES and GOALS are \
+ALREADY stored in their own tables — DO NOT re-store individual note bodies or \
+goal text as memory facts; that's noise.\n\
+\n\
+ONLY emit facts in these categories:\n\
+- **stable preferences**: how the user likes to work or be replied to \
+  ('偏好简短中文回复', '喜欢用 markdown 列表整理'), review cadence preferences \
+  ('偏好月度复盘')\n\
+- **long-term direction / focus**: what the user is working toward at a high \
+  level ('在攻企业级高可用架构', '今年重点是转架构')\n\
+- **recurring personal context** (mentioned ≥2 times or clearly durable): \
+  role, domain, tools they live in\n\
+\n\
+NEVER store: raw note content, secrets/passwords/tokens, or transient \
+session-scoped details. Keep each fact one concise sentence.";
+
+// ───── memory inspection (AI 记得我什么) ─────
+
+async fn list_memories_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+) -> Result<Json<Value>, ApiError> {
+    let path = memory_path_for(&s.db_path, &auth.user.id);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(ApiError::Internal(format!("memory read: {e}"))),
+    };
+    let mut entries: Vec<Value> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            entries.push(v);
+        }
+    }
+    entries.sort_by(|a, b| {
+        b.get("created_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .cmp(&a.get("created_ms").and_then(|v| v.as_i64()).unwrap_or(0))
+    });
+    Ok(Json(json!({ "count": entries.len(), "memories": entries })))
+}
+
+async fn delete_all_memories_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+) -> Result<Json<Value>, ApiError> {
+    let path = memory_path_for(&s.db_path, &auth.user.id);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Ok(Json(json!({ "deleted": 0 }))),
+    };
+    let n = raw.lines().filter(|l| !l.trim().is_empty()).count() as u32;
+    std::fs::write(&path, "").map_err(|e| ApiError::Internal(format!("write: {e}")))?;
+    Ok(Json(json!({ "deleted": n })))
+}
+
+async fn delete_memory_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let path = memory_path_for(&s.db_path, &auth.user.id);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Err(ApiError::BadRequest("no memories file".into())),
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let mut removed = false;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry_id = serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .and_then(|v| v.get("id").and_then(|x| x.as_str()).map(String::from))
+            .unwrap_or_default();
+        if entry_id == id {
+            removed = true;
+            continue;
+        }
+        kept.push(line.to_string());
+    }
+    if !removed {
+        return Err(ApiError::BadRequest(format!("no memory `{id}`")));
+    }
+    let mut new_content = kept.join("\n");
+    if !new_content.is_empty() {
+        new_content.push('\n');
+    }
+    std::fs::write(&path, new_content).map_err(|e| ApiError::Internal(format!("write: {e}")))?;
+    Ok(Json(json!({ "deleted": id })))
+}
+
 pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
         // User SPA routes (/, /login, /app, /app/*, assets, etc.)
@@ -290,6 +402,14 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         )
         .route("/api/me/password", post(change_password_handler))
         .route("/api/me/model", post(set_model_handler))
+        .route(
+            "/api/me/memories",
+            get(list_memories_handler).delete(delete_all_memories_handler),
+        )
+        .route(
+            "/api/me/memories/:id",
+            axum::routing::delete(delete_memory_handler),
+        )
         .route(
             "/api/notes",
             get(list_notes_handler).post(create_note_handler),
@@ -1310,6 +1430,45 @@ async fn session_stream_handler(
         let mut loop_ = AgentLoop::new(crate::AnyModelHandle(model))
             .with_streaming(true)
             .with_guide(Arc::new(SystemPromptGuide));
+
+        // ─── Long-term memory: per-user FileMemory + write guards ───
+        let mem_path = memory_path_for(&s.db_path, &uid);
+        if let Ok(file_mem) = harness_context::FileMemory::open(&mem_path) {
+            let file_arc = Arc::new(file_mem);
+            let guarded: Arc<dyn harness_core::Memory> = Arc::new(
+                harness_context::GuardedMemory::new(file_arc.clone())
+                    .with_dedup_threshold(0.6),
+            );
+            loop_ = loop_.with_guide(Arc::new(
+                harness_loop::MemoryGuide::new(guarded.clone())
+                    .with_top_k(5)
+                    .with_min_score(0.25)
+                    .with_excluded_tags(["synth-raw", "transient"]),
+            ));
+            loop_ = loop_
+                .with_tool(Arc::new(harness_tools_memory::RememberThisTool::with_source(
+                    guarded.clone(),
+                    format!("ai-note/user-{uid}/explicit"),
+                )))
+                .with_tool(Arc::new(harness_tools_memory::ListMemoriesTool::new(
+                    guarded.clone(),
+                )))
+                .with_tool(Arc::new(harness_tools_memory::ForgetMemoryTool::new(
+                    file_arc.clone() as Arc<dyn harness_tools_memory::MemoryDelete>,
+                )));
+            // Cheap synth model for auto-distillation; skip if unavailable.
+            if let Ok(synth_model) = s.build_model_for("deepseek-v4-flash") {
+                loop_ = loop_.with_hook(Arc::new(
+                    harness_loop::MemorySynthesizer::new(guarded.clone(), synth_model)
+                        .with_source(format!("ai-note/user-{uid}"))
+                        .with_max_facts(3)
+                        .with_extra_instructions(NOTE_MEMORY_INSTRUCTIONS),
+                ));
+            }
+        } else {
+            tracing::warn!(path = %mem_path.display(), "memory open failed; chat will not persist facts");
+        }
+
         for t in harness_core::iter_macro_tools() {
             loop_ = loop_.with_tool(t);
         }
