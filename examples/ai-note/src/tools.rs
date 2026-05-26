@@ -342,3 +342,205 @@ async fn delete_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         trace: None,
     })
 }
+
+// ───── goal tools ─────
+
+/// Create a goal or a standing rule. Use kind="goal" for an aspiration with an
+/// optional target_date + review cadence (call current_time first to resolve
+/// relative dates like "今年9月"). Use kind="rule" for a standing constraint
+/// ("股票不要操作"), with no date/cadence. Pass parent_id to make it a sub-goal.
+#[harness::tool(
+    name = "create_goal",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "kind":  { "type": "string", "enum": ["goal", "rule"], "description": "goal = aspiration; rule = standing constraint." },
+            "title": { "type": "string", "description": "Short headline." },
+            "detail": { "type": "string", "description": "Optional longer description / markdown." },
+            "target_date": { "type": "string", "description": "RFC3339 date for goals, e.g. 2026-09-30. Omit for rules." },
+            "review_interval_days": { "type": "integer", "description": "Review cadence in days (e.g. 7, 30). Omit for rules.", "minimum": 1 },
+            "parent_id": { "type": "string", "description": "If this is a sub-goal, the parent goal id." }
+        },
+        "required": ["kind", "title"]
+    }"#
+)]
+async fn create_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let space = space_of(w);
+    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("goal");
+    if kind != "goal" && kind != "rule" {
+        return Err(ToolError::InvalidArgs { name: "create_goal".into(), reason: "kind must be goal|rule".into() });
+    }
+    let title = args.get("title").and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "create_goal".into(), reason: "title required".into() })?;
+    let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+    let target_date = args.get("target_date").and_then(|v| v.as_str());
+    let interval = args.get("review_interval_days").and_then(|v| v.as_i64());
+    let parent_id = args.get("parent_id").and_then(|v| v.as_str());
+    let db = open_db(w)?;
+    let goal = db.create_goal(&uid, &space, kind, title, detail, parent_id, target_date, interval)
+        .map_err(|e| ToolError::Exec(format!("insert goal: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "id": goal.id, "kind": goal.kind, "title": goal.title,
+                         "target_date": goal.target_date, "next_review_at": goal.next_review_at }),
+        trace: Some(format!("created {} goal {}", goal.kind, goal.id)),
+    })
+}
+
+/// Break a goal into sub-goals. Pass the parent goal id and a list of sub-goals.
+/// Each sub-goal is created as kind="goal" in the same space.
+#[harness::tool(
+    name = "decompose_goal",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "parent_id": { "type": "string" },
+            "subgoals": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "detail": { "type": "string" }
+                    },
+                    "required": ["title"]
+                }
+            }
+        },
+        "required": ["parent_id", "subgoals"]
+    }"#
+)]
+async fn decompose_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let space = space_of(w);
+    let parent_id = args.get("parent_id").and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "decompose_goal".into(), reason: "parent_id required".into() })?;
+    let subs = args.get("subgoals").and_then(|v| v.as_array())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "decompose_goal".into(), reason: "subgoals required".into() })?;
+    let db = open_db(w)?;
+    // Validate parent exists + belongs to user.
+    if db.get_goal(&uid, parent_id).map_err(|e| ToolError::Exec(format!("{e}")))?.is_none() {
+        return Err(ToolError::Exec(format!("parent goal `{parent_id}` not found")));
+    }
+    let mut ids = Vec::new();
+    for sg in subs {
+        let title = sg.get("title").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if title.is_empty() { continue; }
+        let detail = sg.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+        let g = db.create_goal(&uid, &space, "goal", title, detail, Some(parent_id), None, None)
+            .map_err(|e| ToolError::Exec(format!("insert subgoal: {e}")))?;
+        ids.push(g.id);
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "parent_id": parent_id, "created": ids.len(), "ids": ids }),
+        trace: Some(format!("decomposed {parent_id} into {} subgoals", ids.len())),
+    })
+}
+
+/// Update a goal: change status (active|done|dropped|paused), title, detail,
+/// target_date (RFC3339), or review_interval_days. Get the id first via list_goals.
+#[harness::tool(
+    name = "update_goal",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "status": { "type": "string", "enum": ["active", "done", "dropped", "paused"] },
+            "title": { "type": "string" },
+            "detail": { "type": "string" },
+            "target_date": { "type": "string" },
+            "review_interval_days": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["id"]
+    }"#
+)]
+async fn update_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let id = args.get("id").and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "update_goal".into(), reason: "id required".into() })?;
+    let db = open_db(w)?;
+    let n = db.update_goal(
+        &uid, id,
+        args.get("status").and_then(|v| v.as_str()),
+        args.get("title").and_then(|v| v.as_str()),
+        args.get("detail").and_then(|v| v.as_str()),
+        args.get("target_date").and_then(|v| v.as_str()),
+        args.get("review_interval_days").and_then(|v| v.as_i64()),
+    ).map_err(|e| ToolError::Exec(format!("update goal: {e}")))?;
+    if n == 0 { return Err(ToolError::Exec(format!("goal `{id}` not found"))); }
+    Ok(ToolResult { ok: true, content: json!({ "id": id, "updated": n }), trace: None })
+}
+
+/// List the user's goals in the current space. Use due_for_review=true to get
+/// only goals whose review is due (for 复盘). Pass parent_id to list sub-goals.
+#[harness::tool(
+    name = "list_goals",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "status": { "type": "string", "enum": ["active", "done", "dropped", "paused"] },
+            "due_for_review": { "type": "boolean" },
+            "parent_id": { "type": "string" }
+        }
+    }"#
+)]
+async fn list_goals(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let space = space_of(w);
+    let db = open_db(w)?;
+    let goals = if let Some(pid) = args.get("parent_id").and_then(|v| v.as_str()) {
+        db.list_subgoals(&uid, pid).map_err(|e| ToolError::Exec(format!("{e}")))?
+    } else {
+        let due = args.get("due_for_review").and_then(|v| v.as_bool()).unwrap_or(false);
+        let status = args.get("status").and_then(|v| v.as_str()).or(Some("active"));
+        db.list_goals(&uid, &space, status, due).map_err(|e| ToolError::Exec(format!("{e}")))?
+    };
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "count": goals.len(), "goals": goals }),
+        trace: None,
+    })
+}
+
+/// Log a review (复盘) for a goal: progress + optional next steps. Advances the
+/// goal's next review by its cadence (or next_review_in_days if provided).
+#[harness::tool(
+    name = "log_review",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "goal_id": { "type": "string" },
+            "progress": { "type": "string", "description": "What happened / self-assessment." },
+            "next_steps": { "type": "string" },
+            "next_review_in_days": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["goal_id", "progress"]
+    }"#
+)]
+async fn log_review(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let goal_id = args.get("goal_id").and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "log_review".into(), reason: "goal_id required".into() })?;
+    let progress = args.get("progress").and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs { name: "log_review".into(), reason: "progress required".into() })?;
+    let next_steps = args.get("next_steps").and_then(|v| v.as_str()).unwrap_or("");
+    let override_days = args.get("next_review_in_days").and_then(|v| v.as_i64());
+    let db = open_db(w)?;
+    if db.get_goal(&uid, goal_id).map_err(|e| ToolError::Exec(format!("{e}")))?.is_none() {
+        return Err(ToolError::Exec(format!("goal `{goal_id}` not found")));
+    }
+    let review = db.add_review(&uid, goal_id, progress, next_steps, override_days)
+        .map_err(|e| ToolError::Exec(format!("add review: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "review_id": review.id, "goal_id": goal_id }),
+        trace: Some(format!("logged review for {goal_id}")),
+    })
+}

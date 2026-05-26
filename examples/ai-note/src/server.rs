@@ -1437,6 +1437,20 @@ Hard rules:\n\
    space, given on a `[system] space: work|life` line at the top of the task. \
    New notes go in that space; searches and listings only see that space. \
    Never move a note across spaces unless the user explicitly asks.\n\
+11. **Goals & rules.** When the user states an aspiration (\"我要…\", \"今年X月…\", \
+   \"三个月内…成为…\"), call `current_time` FIRST to resolve the relative date, then \
+   `create_goal(kind=\"goal\", target_date=<RFC3339>, review_interval_days=30)` \
+   (default monthly cadence unless they imply another). When the user states a \
+   standing rule / 戒律 (\"股票不要操作\", \"不要…\", \"每天…\"), call \
+   `create_goal(kind=\"rule\")` with no date or cadence.\n\
+12. **Decompose.** When asked to break a goal down (\"拆解一下\", \"分解成几步\"), find \
+   the goal id via `list_goals`, then call `decompose_goal` with concrete sub-goals.\n\
+13. **复盘 / review.** When the user says \"复盘\" / \"review\" / \"进展如何\", call \
+   `list_goals` with due_for_review=true, walk the due goals with the user, then \
+   `log_review` for each discussed (progress + next_steps in their words). Mark a \
+   finished goal `update_goal(status=\"done\")`.\n\
+14. All goal operations are scoped to the user's current space (rule 10); never \
+   mix spaces.\n\
 ";
 
 fn random_user_id() -> String {
