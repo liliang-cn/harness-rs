@@ -8,6 +8,7 @@ interface ComposerProps {
   onSend: (text: string) => void;
   onStop?: () => void;
   busy: boolean;
+  initialText?: string;
 }
 
 // Minimal type surface for Web Speech API — no @types package needed.
@@ -36,10 +37,19 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-export function Composer({ onSend, onStop, busy }: ComposerProps) {
+export function Composer({ onSend, onStop, busy, initialText }: ComposerProps) {
   const { t, i18n } = useTranslation();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText ?? '');
   const [listening, setListening] = useState(false);
+
+  // When initialText changes (e.g. prefill from chat-prefill store), seed the composer.
+  const prevInitialText = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (initialText !== undefined && initialText !== prevInitialText.current) {
+      setText(initialText);
+    }
+    prevInitialText.current = initialText;
+  }, [initialText]);
   const recogRef = useRef<SpeechRecognition | null>(null);
   const SpeechCtor = getSpeechRecognitionCtor();
 

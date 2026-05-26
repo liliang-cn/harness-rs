@@ -20,6 +20,18 @@ export interface ChatMessage {
   created_at: string; truncated?: boolean;
 }
 
+export type GoalKind = 'goal' | 'rule';
+export type GoalStatus = 'active' | 'done' | 'dropped' | 'paused';
+export interface Goal {
+  id: string; space: Space; kind: GoalKind; title: string; detail: string;
+  status: GoalStatus; parent_id?: string | null;
+  target_date?: string | null; review_interval_days?: number | null;
+  next_review_at?: string | null; created_at: string; updated_at: string;
+}
+export interface GoalReview {
+  id: string; goal_id: string; progress: string; next_steps: string; created_at: string;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     ...init,
@@ -65,4 +77,18 @@ export const noteApi = {
     req<{ session: ChatSession; messages: ChatMessage[] }>(`/api/chat/sessions/${id}`),
   deleteChatSession: (id: string) =>
     req<{ deleted: string }>(`/api/chat/sessions/${id}`, { method: 'DELETE' }),
+
+  goals: (space: Space, filter: 'active' | 'due' | 'all' = 'active') =>
+    req<{ goals: Goal[]; due_count: number }>(`/api/goals?space=${space}&filter=${filter}`),
+  goal: (id: string) =>
+    req<{ goal: Goal; subgoals: Goal[]; reviews: GoalReview[] }>(`/api/goals/${id}`),
+  createGoal: (body: { space: Space; kind: GoalKind; title: string; detail?: string;
+                       parent_id?: string; target_date?: string; review_interval_days?: number }) =>
+    req<{ goal: Goal }>('/api/goals', { method: 'POST', body: JSON.stringify(body) }),
+  updateGoal: (id: string, patch: Partial<Pick<Goal, 'status' | 'title' | 'detail' | 'target_date' | 'review_interval_days'>>) =>
+    req<{ ok: boolean }>(`/api/goals/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteGoal: (id: string) =>
+    req<{ deleted: string }>(`/api/goals/${id}`, { method: 'DELETE' }),
+  addReview: (id: string, body: { progress: string; next_steps?: string; next_review_in_days?: number }) =>
+    req<{ review: GoalReview }>(`/api/goals/${id}/reviews`, { method: 'POST', body: JSON.stringify(body) }),
 };

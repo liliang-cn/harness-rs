@@ -23,9 +23,10 @@ import { streamSession } from './stream';
 interface ChatSheetProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  prefill?: string;
 }
 
-export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
+export function ChatSheet({ open, onOpenChange, prefill }: ChatSheetProps) {
   const { t, i18n } = useTranslation();
   const { space } = useSpace();
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -36,6 +37,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   const [busy, setBusy] = useState(false);
   const [sessionsKey, setSessionsKey] = useState(0);
   const [drafting, setDrafting] = useState(false);
+  const [composerPrefill, setComposerPrefill] = useState<string | undefined>();
   const abortRef = useRef<AbortController | null>(null);
   const toolIdRef = useRef(0);
   const skipNextLoad = useRef(false);
@@ -127,6 +129,24 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
     }
     wasOpenRef.current = open;
   }, [open, activeId, busy, reloadMessages]);
+
+  // When the sheet opens with a prefill, start a fresh draft and seed the composer.
+  const prevPrefillRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (open && prefill && prefill !== prevPrefillRef.current) {
+      setActiveId(null);
+      setSession(null);
+      setMessages([]);
+      setStreaming(null);
+      setToolEvents([]);
+      setDrafting(true);
+      setComposerPrefill(prefill);
+    }
+    if (!open) {
+      prevPrefillRef.current = prefill;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prefill]);
 
   const handleNew = useCallback(() => {
     setActiveId(null);
@@ -355,7 +375,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
                 </Button>
               </div>
             )}
-            <Composer onSend={handleSend} onStop={handleStop} busy={busy} />
+            <Composer onSend={(text) => { setComposerPrefill(undefined); handleSend(text); }} onStop={handleStop} busy={busy} initialText={composerPrefill} />
           </>
         )}
       </SheetContent>
