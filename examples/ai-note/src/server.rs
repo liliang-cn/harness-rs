@@ -214,7 +214,11 @@ impl Hook for ChannelHook {
                 let mut preview = result.content.clone();
                 let s = serde_json::to_string(&preview).unwrap_or_default();
                 if s.len() > 280 {
-                    preview = json!(format!("{}…", &s[..280]));
+                    // Truncate on a char boundary — byte-slicing `&s[..280]`
+                    // panics when 280 lands inside a multibyte char (e.g. CJK
+                    // tool output like list_memories).
+                    let truncated: String = s.chars().take(280).collect();
+                    preview = json!(format!("{truncated}…"));
                 }
                 Some(json!({
                     "type": "tool_end",
