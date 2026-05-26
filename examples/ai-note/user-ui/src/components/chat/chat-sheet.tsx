@@ -124,11 +124,14 @@ export function ChatSheet({ open, onOpenChange, prefill }: ChatSheetProps) {
 
   const wasOpenRef = useRef(open);
   useEffect(() => {
-    if (open && !wasOpenRef.current && activeId && !busy) {
+    // Skip the reload when the sheet is opening due to a prefill — the prefill
+    // effect below will reset to a fresh conversation, so reloading the last
+    // session here would clobber that reset.
+    if (open && !wasOpenRef.current && activeId && !busy && !prefill) {
       reloadMessages(activeId);
     }
     wasOpenRef.current = open;
-  }, [open, activeId, busy, reloadMessages]);
+  }, [open, activeId, busy, reloadMessages, prefill]);
 
   // When the sheet opens with a prefill, start a fresh draft and seed the composer.
   const prevPrefillRef = useRef<string | undefined>(undefined);
