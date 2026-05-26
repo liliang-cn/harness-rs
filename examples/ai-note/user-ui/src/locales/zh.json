@@ -20,8 +20,27 @@
   },
   "nav": {
     "notes": "笔记",
+    "plans": "计划",
     "search": "搜索",
     "profile": "我的"
+  },
+  "plans": {
+    "title": "计划",
+    "due": "到期复盘",
+    "goals": "目标",
+    "rules": "原则",
+    "empty": "还没有目标。直接跟助手说一个目标开始吧。",
+    "review": "复盘",
+    "addGoal": "新目标",
+    "noDue": "暂无到期，棒。",
+    "targetDate": "目标日期",
+    "markDone": "标记完成",
+    "delete": "删除",
+    "deleteConfirm": "删除这个目标（及其子目标）？",
+    "subgoals": "子目标",
+    "reviews": "复盘记录",
+    "addSubgoal": "拆解",
+    "done": "已完成"
   },
   "spaces": {
     "work": "工作",

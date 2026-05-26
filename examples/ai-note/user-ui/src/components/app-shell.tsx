@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  NotebookPen, Search as SearchIcon, User, Globe, LogOut,
+  NotebookPen, Search as SearchIcon, Target, User, Globe, LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,6 +16,7 @@ import { useSpace } from '@/components/space-context';
 
 const NAV = [
   { to: '/app', key: 'notes', icon: NotebookPen },
+  { to: '/app/plans', key: 'plans', icon: Target },
   { to: '/app/search', key: 'search', icon: SearchIcon },
   { to: '/app/profile', key: 'profile', icon: User },
 ] as const;
