@@ -3,6 +3,7 @@ import { getToken } from '@/lib/api';
 import { Login } from '@/pages/Login';
 import { Marketing } from '@/pages/Marketing';
 import { Notes } from '@/pages/Notes';
+import { Plans } from '@/pages/Plans';
 import { Search } from '@/pages/Search';
 import { Profile } from '@/pages/Profile';
 import { AppShell } from '@/components/app-shell';
@@ -28,6 +29,7 @@ export default function App() {
         }
       >
         <Route index element={<Notes />} />
+        <Route path="plans" element={<Plans />} />
         <Route path="search" element={<Search />} />
         <Route path="profile" element={<Profile />} />
       </Route>

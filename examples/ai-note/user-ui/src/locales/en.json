@@ -20,8 +20,27 @@
   },
   "nav": {
     "notes": "Notes",
+    "plans": "Plans",
     "search": "Search",
     "profile": "Profile"
+  },
+  "plans": {
+    "title": "Plans",
+    "due": "Due for review",
+    "goals": "Goals",
+    "rules": "Principles",
+    "empty": "No goals yet. Tell the assistant a goal to get started.",
+    "review": "Review",
+    "addGoal": "New goal",
+    "noDue": "Nothing due. Nice.",
+    "targetDate": "Target",
+    "markDone": "Mark done",
+    "delete": "Delete",
+    "deleteConfirm": "Delete this goal (and its sub-goals)?",
+    "subgoals": "Sub-goals",
+    "reviews": "Review history",
+    "addSubgoal": "Break down",
+    "done": "Done"
   },
   "spaces": {
     "work": "Work",
