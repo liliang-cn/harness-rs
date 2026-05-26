@@ -85,7 +85,14 @@
     "errMinLen": "New password must be at least 6 characters.",
     "errSame": "New password can't match the current one.",
     "modelDefault": "Server default",
-    "modelTrialHint": "Upgrade to paid to switch models"
+    "modelTrialHint": "Upgrade to paid to switch models",
+    "memory": {
+      "title": "What the assistant remembers",
+      "empty": "Nothing remembered yet. Chat naturally and it'll learn your preferences.",
+      "clear": "Clear all",
+      "clearConfirm": "Forget everything the assistant has remembered?",
+      "deleted": "Forgotten"
+    }
   },
   "chat": {
     "fab": "Chat with AI",
