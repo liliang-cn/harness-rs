@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { getToken } from '@/lib/api';
 import { Login } from '@/pages/Login';
@@ -8,6 +9,16 @@ import { Search } from '@/pages/Search';
 import { Profile } from '@/pages/Profile';
 import { AppShell } from '@/components/app-shell';
 import { SpaceProvider } from '@/components/space-context';
+
+// Heavy (MDXEditor) — load its chunk only on the editor route.
+const NoteEditor = lazy(() =>
+  import('@/pages/NoteEditor').then((m) => ({ default: m.NoteEditor })),
+);
+const editorEl = (
+  <Suspense fallback={null}>
+    <NoteEditor />
+  </Suspense>
+);
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return getToken() ? <>{children}</> : <Navigate to="/login" replace />;
@@ -29,6 +40,8 @@ export default function App() {
         }
       >
         <Route index element={<Notes />} />
+        <Route path="notes/new" element={editorEl} />
+        <Route path="notes/:id" element={editorEl} />
         <Route path="plans" element={<Plans />} />
         <Route path="search" element={<Search />} />
         <Route path="profile" element={<Profile />} />
