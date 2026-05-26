@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ChatSheet } from './chat-sheet';
+import { subscribeChatPrefill } from '@/lib/chat-prefill';
 
 /**
  * Floating action button — bottom-right on desktop, bottom-right clear of
@@ -12,17 +13,22 @@ import { ChatSheet } from './chat-sheet';
 export function ChatFab() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [prefill, setPrefill] = useState<string | undefined>();
+  useEffect(() => subscribeChatPrefill((text) => {
+    setPrefill(text);
+    setOpen(true);
+  }), []);
   return (
     <>
       <Button
         type="button"
         aria-label={t('chat.fab')}
-        onClick={() => setOpen(true)}
+        onClick={() => { setPrefill(undefined); setOpen(true); }}
         className="fixed right-4 bottom-20 z-20 size-14 rounded-full shadow-lg md:right-6 md:bottom-6"
       >
         <MessageSquare className="size-6" />
       </Button>
-      <ChatSheet open={open} onOpenChange={setOpen} />
+      <ChatSheet open={open} onOpenChange={setOpen} prefill={prefill} />
     </>
   );
 }
