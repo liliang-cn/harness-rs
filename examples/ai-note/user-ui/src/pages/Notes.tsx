@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -10,27 +11,12 @@ import { useSpace } from '@/components/space-context';
 import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, type Note } from '@/lib/api';
 
-// The WYSIWYG editor (MDXEditor) is heavy — only load its chunk when the user
-// actually opens a note. `everOpened` keeps it mounted after the first open so
-// the Sheet close animation still plays.
-const NoteEditor = lazy(() =>
-  import('@/components/notes/note-editor').then((m) => ({ default: m.NoteEditor })),
-);
-
 export function Notes() {
   const { t } = useTranslation();
   const { space } = useSpace();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const [notes, setNotes] = useState<Note[] | null>(null);
-  const [editing, setEditing] = useState<Note | null>(null);
-  const [open, setOpen] = useState(false);
-  const [everOpened, setEverOpened] = useState(false);
-
-  function openEditor(note: Note | null) {
-    setEditing(note);
-    setEverOpened(true);
-    setOpen(true);
-  }
 
   const load = useCallback(() => {
     setNotes(null);
@@ -49,7 +35,7 @@ export function Notes() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">{t('nav.notes')}</h1>
-        <Button onClick={() => openEditor(null)}>
+        <Button onClick={() => navigate('/app/notes/new')}>
           <Plus className="size-4" /> {t('notes.new')}
         </Button>
       </div>
@@ -60,7 +46,7 @@ export function Notes() {
       ) : (
         <div className="space-y-2">
           {notes.map((n) => (
-            <Card key={n.id} onClick={() => openEditor(n)}
+            <Card key={n.id} onClick={() => navigate(`/app/notes/${n.id}`)}
               className="hover:bg-accent cursor-pointer p-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
@@ -78,11 +64,6 @@ export function Notes() {
             </Card>
           ))}
         </div>
-      )}
-      {everOpened && (
-        <Suspense fallback={null}>
-          <NoteEditor open={open} onOpenChange={setOpen} space={space} note={editing} onSaved={load} />
-        </Suspense>
       )}
     </div>
   );

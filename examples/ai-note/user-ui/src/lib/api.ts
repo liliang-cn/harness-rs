@@ -71,6 +71,7 @@ export const noteApi = {
     req<{ ok: boolean; model: string | null }>('/api/me/model', { method: 'POST', body: JSON.stringify({ model }) }),
 
   notes: (space: Space) => req<{ notes: Note[] }>(`/api/notes?space=${space}&limit=200`),
+  note: (id: string) => req<{ note: Note }>(`/api/notes/${id}`),
   createNote: (space: Space, title: string, body: string, tags: string[]) =>
     req<{ note: Note }>('/api/notes', { method: 'POST', body: JSON.stringify({ space, title, body, tags }) }),
   updateNote: (id: string, patch: Partial<Pick<Note, 'title' | 'body' | 'tags'>>) =>

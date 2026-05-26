@@ -59,7 +59,8 @@
     "save": "保存",
     "delete": "删除",
     "deleteConfirm": "删除这条笔记？",
-    "deleted": "已删除"
+    "deleted": "已删除",
+    "back": "返回"
   },
   "search": {
     "placeholder": "搜索笔记…",

@@ -59,7 +59,8 @@
     "save": "Save",
     "delete": "Delete",
     "deleteConfirm": "Delete this note?",
-    "deleted": "Deleted"
+    "deleted": "Deleted",
+    "back": "Back"
   },
   "search": {
     "placeholder": "Search your notes…",
