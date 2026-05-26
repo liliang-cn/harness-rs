@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import {
   MDXEditor,
   type MDXEditorMethods,
@@ -25,7 +25,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSpace } from '@/components/space-context';
-import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, type Note } from '@/lib/api';
 
 /** Full-page note editor. Routes: `/app/notes/new` (create) and
@@ -35,7 +34,6 @@ export function NoteEditor() {
   const navigate = useNavigate();
   const { id } = useParams();
   const { space } = useSpace();
-  const confirm = useConfirm();
   const isNew = !id;
 
   const [note, setNote] = useState<Note | null>(null);
@@ -75,24 +73,17 @@ export function NoteEditor() {
     setBusy(true);
     const tagArr = tags.split(',').map((s) => s.trim()).filter(Boolean);
     try {
-      if (id) await noteApi.updateNote(id, { title, body, tags: tagArr });
-      else await noteApi.createNote(space, title, body, tagArr);
-      navigate('/app');
+      if (id) {
+        await noteApi.updateNote(id, { title, body, tags: tagArr });
+        navigate(`/app/notes/${id}`);
+      } else {
+        const { note: created } = await noteApi.createNote(space, title, body, tagArr);
+        navigate(`/app/notes/${created.id}`);
+      }
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function del() {
-    if (!id) return;
-    if (!(await confirm({ title: t('notes.deleteConfirm'), destructive: true }))) return;
-    try {
-      await noteApi.deleteNote(id);
-      navigate('/app');
-    } catch (e) {
-      toast.error((e as Error).message);
     }
   }
 
@@ -101,17 +92,17 @@ export function NoteEditor() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon-sm" onClick={() => navigate('/app')} aria-label={t('notes.back')}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => navigate(id ? `/app/notes/${id}` : '/app')}
+          aria-label={t('notes.back')}
+        >
           <ArrowLeft className="size-4" />
         </Button>
         <h1 className="flex-1 truncate text-lg font-semibold">
           {isNew ? t('notes.new') : t('notes.edit')}
         </h1>
-        {!isNew && (
-          <Button variant="ghost" size="icon-sm" onClick={del} aria-label={t('notes.delete')}>
-            <Trash2 className="size-4" />
-          </Button>
-        )}
         <Button onClick={save} disabled={busy}>{t('notes.save')}</Button>
       </div>
 

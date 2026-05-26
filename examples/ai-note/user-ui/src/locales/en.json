@@ -60,7 +60,8 @@
     "delete": "Delete",
     "deleteConfirm": "Delete this note?",
     "deleted": "Deleted",
-    "back": "Back"
+    "back": "Back",
+    "editAction": "Edit"
   },
   "search": {
     "placeholder": "Search your notes…",
