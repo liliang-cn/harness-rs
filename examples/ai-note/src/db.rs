@@ -49,6 +49,31 @@ pub struct ChatMessage {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Goal {
+    pub id: String,
+    pub space: String,
+    pub kind: String,
+    pub title: String,
+    pub detail: String,
+    pub status: String,
+    pub parent_id: Option<String>,
+    pub target_date: Option<String>,
+    pub review_interval_days: Option<i64>,
+    pub next_review_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GoalReview {
+    pub id: String,
+    pub goal_id: String,
+    pub progress: String,
+    pub next_steps: String,
+    pub created_at: String,
+}
+
 impl Db {
     pub fn open(path: &Path) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
@@ -167,6 +192,35 @@ impl Db {
                 value       TEXT NOT NULL,
                 updated_ms  INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS goals (
+                id                   TEXT PRIMARY KEY,
+                user_id              TEXT NOT NULL,
+                space                TEXT NOT NULL DEFAULT 'life',
+                kind                 TEXT NOT NULL DEFAULT 'goal',
+                title                TEXT NOT NULL,
+                detail               TEXT NOT NULL DEFAULT '',
+                status               TEXT NOT NULL DEFAULT 'active',
+                parent_id            TEXT,
+                target_date          TEXT,
+                review_interval_days INTEGER,
+                next_review_at       TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_goals_user_space_status ON goals(user_id, space, status);
+            CREATE INDEX IF NOT EXISTS idx_goals_due ON goals(user_id, next_review_at);
+            CREATE INDEX IF NOT EXISTS idx_goals_parent ON goals(parent_id);
+
+            CREATE TABLE IF NOT EXISTS goal_reviews (
+                id          TEXT PRIMARY KEY,
+                goal_id     TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                progress    TEXT NOT NULL,
+                next_steps  TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_goal_reviews_goal ON goal_reviews(goal_id, created_at);
             "#,
         )?;
         // ── idempotent migrations (existing DBs) ──
@@ -913,6 +967,191 @@ impl Db {
         Ok(())
     }
 
+    // ───── goals ─────
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_goal(
+        &self,
+        user_id: &str,
+        space: &str,
+        kind: &str,
+        title: &str,
+        detail: &str,
+        parent_id: Option<&str>,
+        target_date: Option<&str>,
+        review_interval_days: Option<i64>,
+    ) -> SqlResult<Goal> {
+        let id = random_id();
+        let now = Utc::now();
+        let now_s = now.to_rfc3339();
+        // Seed next_review_at for cadenced goals (not rules).
+        let next_review_at: Option<String> = if kind == "goal" {
+            review_interval_days.map(|d| (now + chrono::Duration::days(d)).to_rfc3339())
+        } else {
+            None
+        };
+        self.conn.execute(
+            "INSERT INTO goals(id, user_id, space, kind, title, detail, status,
+                               parent_id, target_date, review_interval_days,
+                               next_review_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![id, user_id, space, kind, title, detail, parent_id,
+                    target_date, review_interval_days, next_review_at, now_s],
+        )?;
+        self.get_goal(user_id, &id).map(|o| o.expect("goal vanished after insert"))
+    }
+
+    pub fn get_goal(&self, user_id: &str, id: &str) -> SqlResult<Option<Goal>> {
+        let sql = format!("SELECT {GOAL_COLS} FROM goals WHERE user_id = ?1 AND id = ?2");
+        self.conn.prepare(&sql)?
+            .query_row(params![user_id, id], row_to_goal).optional()
+    }
+
+    /// List goals in a space. `status` filters when Some. `only_due` keeps only
+    /// goals whose next_review_at has passed (for the 到期复盘 list).
+    pub fn list_goals(
+        &self,
+        user_id: &str,
+        space: &str,
+        status: Option<&str>,
+        only_due: bool,
+    ) -> SqlResult<Vec<Goal>> {
+        let mut sql = format!("SELECT {GOAL_COLS} FROM goals WHERE user_id = ?1 AND space = ?2");
+        let mut p: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(user_id.to_string()), Box::new(space.to_string())];
+        if let Some(st) = status {
+            sql.push_str(&format!(" AND status = ?{}", p.len() + 1));
+            p.push(Box::new(st.to_string()));
+        }
+        if only_due {
+            sql.push_str(&format!(
+                " AND next_review_at IS NOT NULL AND next_review_at <= ?{}",
+                p.len() + 1
+            ));
+            p.push(Box::new(Utc::now().to_rfc3339()));
+        }
+        sql.push_str(" ORDER BY COALESCE(next_review_at, target_date, created_at) ASC");
+        let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(refs), row_to_goal)?;
+        rows.collect()
+    }
+
+    pub fn list_subgoals(&self, user_id: &str, parent_id: &str) -> SqlResult<Vec<Goal>> {
+        let sql = format!(
+            "SELECT {GOAL_COLS} FROM goals WHERE user_id = ?1 AND parent_id = ?2 \
+             ORDER BY created_at ASC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![user_id, parent_id], row_to_goal)?;
+        rows.collect()
+    }
+
+    pub fn count_due_goals(&self, user_id: &str, space: &str) -> SqlResult<u32> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM goals
+             WHERE user_id = ?1 AND space = ?2 AND status = 'active'
+               AND next_review_at IS NOT NULL AND next_review_at <= ?3",
+            params![user_id, space, Utc::now().to_rfc3339()],
+            |r| r.get::<_, i64>(0),
+        ).map(|n| n as u32)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_goal(
+        &self,
+        user_id: &str,
+        id: &str,
+        status: Option<&str>,
+        title: Option<&str>,
+        detail: Option<&str>,
+        target_date: Option<&str>,
+        review_interval_days: Option<i64>,
+    ) -> SqlResult<u32> {
+        let now = Utc::now().to_rfc3339();
+        let n = self.conn.execute(
+            "UPDATE goals SET
+               status = COALESCE(?3, status),
+               title  = COALESCE(?4, title),
+               detail = COALESCE(?5, detail),
+               target_date = COALESCE(?6, target_date),
+               review_interval_days = COALESCE(?7, review_interval_days),
+               updated_at = ?8
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, status, title, detail, target_date,
+                    review_interval_days, now],
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Delete a goal plus its direct subgoals and all its reviews.
+    pub fn delete_goal(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM goal_reviews WHERE user_id = ?1 AND goal_id = ?2",
+                   params![user_id, id])?;
+        tx.execute("DELETE FROM goals WHERE user_id = ?1 AND parent_id = ?2",
+                   params![user_id, id])?;
+        let n = tx.execute("DELETE FROM goals WHERE user_id = ?1 AND id = ?2",
+                   params![user_id, id])?;
+        tx.commit()?;
+        Ok(n as u32)
+    }
+
+    /// Insert a review and advance the goal's next_review_at by its interval
+    /// (or by `override_days` if provided).
+    pub fn add_review(
+        &self,
+        user_id: &str,
+        goal_id: &str,
+        progress: &str,
+        next_steps: &str,
+        override_days: Option<i64>,
+    ) -> SqlResult<GoalReview> {
+        let id = random_id();
+        let now = Utc::now();
+        let now_s = now.to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO goal_reviews(id, goal_id, user_id, progress, next_steps, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, goal_id, user_id, progress, next_steps, now_s],
+        )?;
+        // Advance next_review_at: use override, else the goal's interval.
+        let interval: Option<i64> = override_days.or_else(|| {
+            self.conn.query_row(
+                "SELECT review_interval_days FROM goals WHERE user_id = ?1 AND id = ?2",
+                params![user_id, goal_id], |r| r.get(0),
+            ).optional().ok().flatten()
+        });
+        if let Some(d) = interval {
+            let next = (now + chrono::Duration::days(d)).to_rfc3339();
+            self.conn.execute(
+                "UPDATE goals SET next_review_at = ?3, updated_at = ?4
+                 WHERE user_id = ?1 AND id = ?2",
+                params![user_id, goal_id, next, now_s],
+            )?;
+        }
+        Ok(GoalReview {
+            id, goal_id: goal_id.to_string(),
+            progress: progress.to_string(), next_steps: next_steps.to_string(),
+            created_at: now_s,
+        })
+    }
+
+    pub fn list_reviews(&self, user_id: &str, goal_id: &str, limit: u32) -> SqlResult<Vec<GoalReview>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, goal_id, progress, next_steps, created_at
+             FROM goal_reviews WHERE user_id = ?1 AND goal_id = ?2
+             ORDER BY created_at DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![user_id, goal_id, limit as i64], |r| {
+            Ok(GoalReview {
+                id: r.get(0)?, goal_id: r.get(1)?,
+                progress: r.get(2)?, next_steps: r.get(3)?, created_at: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
 }
 
 #[derive(Debug, Clone)]
@@ -980,6 +1219,27 @@ fn rand_u64() -> u64 {
     let pid = std::process::id() as u64;
     (nanos as u64) ^ (pid.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
+
+fn row_to_goal(r: &rusqlite::Row<'_>) -> SqlResult<Goal> {
+    Ok(Goal {
+        id: r.get(0)?,
+        space: r.get(1)?,
+        kind: r.get(2)?,
+        title: r.get(3)?,
+        detail: r.get(4)?,
+        status: r.get(5)?,
+        parent_id: r.get(6)?,
+        target_date: r.get(7)?,
+        review_interval_days: r.get(8)?,
+        next_review_at: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
+    })
+}
+
+const GOAL_COLS: &str =
+    "id, space, kind, title, detail, status, parent_id, target_date, \
+     review_interval_days, next_review_at, created_at, updated_at";
 
 fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
     let tags_s: Option<String> = r.get(3)?;
@@ -1061,5 +1321,54 @@ mod tests {
         assert_eq!(work[0].title, "hello work");
         assert!(db.list_chat_sessions("u1", "life").unwrap().is_empty());
         assert_eq!(db.get_chat_messages("u1", "s1", 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn goals_create_list_due_and_review() {
+        let db = tmp_db();
+        // a cadenced work goal — next_review_at seeded to now+30d (NOT due yet)
+        let g = db.create_goal("u1", "work", "goal", "架构专家", "", None,
+                               Some("2026-09-30"), Some(30)).unwrap();
+        assert_eq!(g.space, "work");
+        assert!(g.next_review_at.is_some());
+        // a rule — no cadence, never due
+        db.create_goal("u1", "life", "rule", "股票不要操作", "", None, None, None).unwrap();
+
+        // space scoping + status filter
+        assert_eq!(db.list_goals("u1", "work", Some("active"), false).unwrap().len(), 1);
+        assert_eq!(db.list_goals("u1", "life", Some("active"), false).unwrap().len(), 1);
+        // nothing due yet (30d out)
+        assert_eq!(db.list_goals("u1", "work", Some("active"), true).unwrap().len(), 0);
+        assert_eq!(db.count_due_goals("u1", "work").unwrap(), 0);
+
+        // decompose: a subgoal under g
+        let sub = db.create_goal("u1", "work", "goal", "打牢分布式基础", "",
+                                 Some(&g.id), None, None).unwrap();
+        assert_eq!(db.list_subgoals("u1", &g.id).unwrap().len(), 1);
+        assert_eq!(sub.parent_id.as_deref(), Some(g.id.as_str()));
+
+        // review advances cadence; adding a review keeps it from being due
+        let r = db.add_review("u1", &g.id, "学了 raft", "下月做一次演练", None).unwrap();
+        assert_eq!(r.goal_id, g.id);
+        assert_eq!(db.list_reviews("u1", &g.id, 10).unwrap().len(), 1);
+
+        // delete cascades subgoals + reviews
+        assert_eq!(db.delete_goal("u1", &g.id).unwrap(), 1);
+        assert!(db.get_goal("u1", &g.id).unwrap().is_none());
+        assert_eq!(db.list_subgoals("u1", &g.id).unwrap().len(), 0);
+        assert_eq!(db.list_reviews("u1", &g.id, 10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn goals_due_when_review_past() {
+        let db = tmp_db();
+        let g = db.create_goal("u1", "work", "goal", "x", "", None, None, Some(7)).unwrap();
+        // force next_review_at into the past
+        db.conn.execute(
+            "UPDATE goals SET next_review_at = ?2 WHERE id = ?1",
+            rusqlite::params![g.id, "2000-01-01T00:00:00+00:00"],
+        ).unwrap();
+        assert_eq!(db.list_goals("u1", "work", Some("active"), true).unwrap().len(), 1);
+        assert_eq!(db.count_due_goals("u1", "work").unwrap(), 1);
     }
 }
