@@ -5,6 +5,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, type ChatSession, type Space } from '@/lib/api';
 
 interface SessionsListProps {
@@ -18,6 +19,7 @@ interface SessionsListProps {
 
 export function SessionsList({ onSelect, onNew, refreshKey, space }: SessionsListProps) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const [sessions, setSessions] = useState<ChatSession[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -65,7 +67,7 @@ export function SessionsList({ onSelect, onNew, refreshKey, space }: SessionsLis
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    if (!confirm(t('chat.deleteConfirm'))) return;
+    if (!(await confirm({ title: t('chat.deleteConfirm'), destructive: true }))) return;
     setBusyId(id);
     try {
       await noteApi.deleteChatSession(id);

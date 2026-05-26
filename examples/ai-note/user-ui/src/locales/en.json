@@ -4,7 +4,10 @@
     "logout": "Sign out",
     "loading": "Loading…",
     "refresh": "Refresh",
-    "error": "Something went wrong"
+    "error": "Something went wrong",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "confirmTitle": "Are you sure?"
   },
   "login": {
     "title": "Welcome back",

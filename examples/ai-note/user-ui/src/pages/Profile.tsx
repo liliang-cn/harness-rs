@@ -6,10 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ModelPicker } from '@/components/profile/model-picker';
+import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, getToken, type Memory } from '@/lib/api';
 
 function MemoryCard() {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const [mems, setMems] = useState<Memory[] | null>(null);
   const load = useCallback(() => {
     noteApi.memories().then((j) => setMems(j.memories)).catch(() => setMems([]));
@@ -20,7 +22,7 @@ function MemoryCard() {
     catch (e) { toast.error((e as Error).message); }
   }
   async function clearAll() {
-    if (!confirm(t('profile.memory.clearConfirm'))) return;
+    if (!(await confirm({ title: t('profile.memory.clearConfirm'), destructive: true }))) return;
     try { await noteApi.clearMemories(); setMems([]); toast.success(t('profile.memory.deleted')); }
     catch (e) { toast.error((e as Error).message); }
   }

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSpace } from '@/components/space-context';
+import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, type Note } from '@/lib/api';
 
 // The WYSIWYG editor (MDXEditor) is heavy — only load its chunk when the user
@@ -19,6 +20,7 @@ const NoteEditor = lazy(() =>
 export function Notes() {
   const { t } = useTranslation();
   const { space } = useSpace();
+  const confirm = useConfirm();
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [editing, setEditing] = useState<Note | null>(null);
   const [open, setOpen] = useState(false);
@@ -38,7 +40,7 @@ export function Notes() {
 
   async function del(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    if (!confirm(t('notes.deleteConfirm'))) return;
+    if (!(await confirm({ title: t('notes.deleteConfirm'), destructive: true }))) return;
     try { await noteApi.deleteNote(id); setNotes((c) => c?.filter((n) => n.id !== id) ?? null); toast.success(t('notes.deleted')); }
     catch (err) { toast.error((err as Error).message); }
   }
