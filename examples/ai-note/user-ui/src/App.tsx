@@ -7,6 +7,7 @@ import { Notes } from '@/pages/Notes';
 import { Plans } from '@/pages/Plans';
 import { Search } from '@/pages/Search';
 import { Profile } from '@/pages/Profile';
+import { NoteView } from '@/pages/NoteView';
 import { AppShell } from '@/components/app-shell';
 import { SpaceProvider } from '@/components/space-context';
 
@@ -41,7 +42,8 @@ export default function App() {
       >
         <Route index element={<Notes />} />
         <Route path="notes/new" element={editorEl} />
-        <Route path="notes/:id" element={editorEl} />
+        <Route path="notes/:id" element={<NoteView />} />
+        <Route path="notes/:id/edit" element={editorEl} />
         <Route path="plans" element={<Plans />} />
         <Route path="search" element={<Search />} />
         <Route path="profile" element={<Profile />} />
