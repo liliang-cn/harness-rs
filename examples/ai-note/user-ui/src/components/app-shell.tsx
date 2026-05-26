@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatFab } from '@/components/chat/chat-fab';
+import { ConfirmProvider } from '@/components/confirm-dialog';
 import { noteApi, setToken } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useSpace } from '@/components/space-context';
@@ -85,6 +86,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
     navigate('/login');
   }
   return (
+    <ConfirmProvider>
     <div className="bg-background flex min-h-svh flex-col">
       <header className="border-border bg-background sticky top-0 z-10 border-b">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 md:px-8">
@@ -153,6 +155,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
       <ChatFab />
       <Toaster richColors closeButton position="top-center" />
     </div>
+    </ConfirmProvider>
   );
 }
 

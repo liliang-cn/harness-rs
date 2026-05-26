@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { renderMarkdown } from '@/lib/markdown';
 import { openChatWith } from '@/lib/chat-prefill';
+import { useConfirm } from '@/components/confirm-dialog';
 import { noteApi, type Goal, type GoalReview } from '@/lib/api';
 
 export function GoalDetail({
@@ -16,6 +17,7 @@ export function GoalDetail({
   id: string; open: boolean; onOpenChange: (v: boolean) => void; onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const [data, setData] = useState<{ goal: Goal; subgoals: Goal[]; reviews: GoalReview[] } | null>(null);
 
   const load = useCallback(() => {
@@ -35,7 +37,7 @@ export function GoalDetail({
     onOpenChange(false); onChanged();
   }
   async function del() {
-    if (!confirm(t('plans.deleteConfirm'))) return;
+    if (!(await confirm({ title: t('plans.deleteConfirm'), destructive: true }))) return;
     await noteApi.deleteGoal(id);
     onOpenChange(false); onChanged();
   }
