@@ -103,8 +103,6 @@ pub enum AuthError {
     EmailExists,
     #[error("invite code invalid or used up")]
     BadInvite,
-    #[error("invalid or expired session")]
-    BadSession,
     #[error("password too short (min 6 chars)")]
     PasswordTooShort,
     #[error("email looks invalid")]
@@ -199,8 +197,6 @@ fn reject(code: StatusCode, msg: &str) -> (StatusCode, axum::Json<serde_json::Va
 // ─── trial-tier quotas ───
 
 pub const TRIAL_MAX_TRANSACTIONS: u32 = 50;
-pub const TRIAL_MAX_TRADES: u32 = 20;
-pub const TRIAL_MAX_ASSETS: u32 = 3;
 
 pub fn is_trial(tier: &str) -> bool {
     tier == "trial"
