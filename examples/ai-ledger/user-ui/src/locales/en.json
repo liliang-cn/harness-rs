@@ -1,5 +1,5 @@
 {
-  "brand": "Ledger",
+  "brand": "Dashboard",
   "common": {
     "logout": "Sign out",
     "loading": "Loading…",
@@ -11,7 +11,7 @@
   },
   "login": {
     "title": "Welcome back",
-    "subtitle": "Your AI financial concierge",
+    "subtitle": "Your solo-operator cockpit",
     "email": "Email",
     "password": "Password",
     "submit": "Sign in",
@@ -41,12 +41,12 @@
     "money": "Income & Cost",
     "project": "Projects",
     "profile": "Profile",
-    "ledger": "Ledger",
+    "ledger": "Income & Cost",
     "portfolio": "Portfolio",
     "chat": "Chat"
   },
   "ledger": {
-    "title": "Ledger",
+    "title": "Income & Cost",
     "transactions": "Transactions",
     "empty": "No transactions yet.",
     "expense": "Expense",
