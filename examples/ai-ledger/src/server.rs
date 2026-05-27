@@ -1,13 +1,12 @@
 use crate::auth::{
-    AuthCtx, AuthError, Invite, Session, User, hash_password, is_trial, new_session,
+    AuthCtx, AuthError, Invite, User, hash_password, is_trial, new_session,
     random_invite_code, random_user_id, validate_email, verify_password,
-    TRIAL_MAX_ASSETS, TRIAL_MAX_TRADES, TRIAL_MAX_TRANSACTIONS,
 };
 use crate::db::{Db, today_year_month};
 use crate::portfolio::model::build_positions;
 use crate::portfolio::quotes;
 use crate::tools::ledger_path;
-use crate::{SYSTEM_PROMPT, build_task_description, build_task_description_with_lang, collect_tools};
+use crate::{SYSTEM_PROMPT, build_task_description_with_lang, collect_tools};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Query, State},
@@ -21,9 +20,8 @@ use harness::prelude::*;
 use harness_context::with_profile;
 use harness_core::{Event, Hook, HookOutcome, UserProfile, World as CoreWorld};
 use harness_loop::{AgentLoop, Outcome, ProfileGuide};
-use harness_models::OpenAiCompat;
 use harness_permissions::{PermissionHook, PermissionMode, PermissionRules};
-use harness_tools_tasks::{JsonFileStore, TaskStore, make_tools as make_task_tools};
+use harness_tools_tasks::{TaskStore, make_tools as make_task_tools};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -108,6 +106,9 @@ pub struct AppState {
     /// Hot-reloadable provider config. Read briefly; never hold the guard
     /// across an `.await`.
     pub config: Arc<std::sync::RwLock<AppConfig>>,
+    /// Active embedder for note semantic search. Also stashed in
+    /// `embed_slot` so the background embed worker + tools can reach it.
+    pub embedder: std::sync::Arc<dyn harness_core::Embedder>,
 }
 
 impl AppConfig {
