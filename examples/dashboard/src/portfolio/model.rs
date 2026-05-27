@@ -76,9 +76,6 @@ impl TradeKind {
             _ => return None,
         })
     }
-    pub fn is_trade(&self) -> bool {
-        matches!(self, TradeKind::Buy | TradeKind::Sell)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

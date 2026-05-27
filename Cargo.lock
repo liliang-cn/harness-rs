@@ -42,48 +42,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-ledger"
-version = "0.0.4"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "chrono-tz",
- "clap",
- "futures",
- "harness-rs",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-loop",
- "harness-rs-models",
- "harness-rs-permissions",
- "harness-rs-skills",
- "harness-rs-tools-memory",
- "harness-rs-tools-tasks",
- "harness-rs-tools-web",
- "hex",
- "include_dir",
- "rand 0.8.6",
- "reqwest",
- "rusqlite",
- "rust_decimal",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "ai-note"
 version = "0.0.4"
 dependencies = [
@@ -574,6 +532,48 @@ checksum = "13b588ba4ac1a99f7f2964d24b3d896ddc6bf847ee3855dbd4366f058cfcd331"
 dependencies = [
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "dashboard"
+version = "0.0.4"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "futures",
+ "harness-rs",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-models",
+ "harness-rs-permissions",
+ "harness-rs-skills",
+ "harness-rs-tools-memory",
+ "harness-rs-tools-tasks",
+ "harness-rs-tools-web",
+ "hex",
+ "include_dir",
+ "rand 0.8.6",
+ "reqwest",
+ "rusqlite",
+ "rust_decimal",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

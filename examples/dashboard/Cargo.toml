@@ -1,5 +1,5 @@
 [package]
-name = "ai-ledger"
+name = "dashboard"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ publish = false
 description = "Example: natural-language-driven personal ledger — multi-account, multi-currency, with budgets and reports. Powered by harness-rs."
 
 [[bin]]
-name = "ledger"
+name = "dashboard"
 path = "src/main.rs"
 
 [dependencies]
