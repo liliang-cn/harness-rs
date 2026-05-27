@@ -48,3 +48,4 @@ schemars        = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 include_dir     = "0.7"
+zip             = { version = "2", default-features = false, features = ["deflate"] }
