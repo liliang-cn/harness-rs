@@ -38,9 +38,11 @@
   },
   "nav": {
     "dashboard": "Dashboard",
+    "money": "Income & Cost",
+    "project": "Projects",
+    "profile": "Profile",
     "ledger": "Ledger",
     "portfolio": "Portfolio",
-    "profile": "Profile",
     "chat": "Chat"
   },
   "ledger": {
