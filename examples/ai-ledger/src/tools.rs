@@ -1411,3 +1411,514 @@ async fn loan_summary(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
         trace: None,
     })
 }
+
+// ============================================================
+// embedder helper
+// ============================================================
+
+fn embedder() -> Result<std::sync::Arc<dyn harness_core::Embedder>, ToolError> {
+    crate::embed_slot::get().ok_or_else(|| ToolError::Exec("embedder not configured".into()))
+}
+
+// ============================================================
+// project tools
+// ============================================================
+
+/// Create a project (top-level) or a milestone (pass parent_id). Use kind="project"
+/// for any aspiration with an optional target_date + review cadence. Call
+/// `current_time` first to resolve relative dates like "今年9月". Pass parent_id
+/// to make it a milestone under an existing project.
+#[harness::tool(
+    name = "create_project",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "name":                 {"type": "string", "description": "Short headline for the project or milestone."},
+            "detail":               {"type": "string", "description": "Optional longer description / markdown."},
+            "target_date":          {"type": "string", "description": "Target completion date, YYYY-MM-DD, e.g. 2026-09-30. Omit if unknown."},
+            "review_interval_days": {"type": "integer", "description": "Review cadence in days (e.g. 7, 30). Omit for milestones.", "minimum": 1},
+            "parent_id":            {"type": "string", "description": "If this is a milestone, the parent project id."}
+        },
+        "required": ["name"]
+    }"#
+)]
+async fn create_project(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "create_project".into(),
+            reason: "name required".into(),
+        })?;
+    let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+    let target_date = args.get("target_date").and_then(|v| v.as_str());
+    let interval = args.get("review_interval_days").and_then(|v| v.as_i64());
+    let parent_id = args.get("parent_id").and_then(|v| v.as_str());
+    let db = open_db()?;
+    let project = db
+        .create_project(&uid, name, detail, parent_id, target_date, interval)
+        .map_err(|e| ToolError::Exec(format!("insert project: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "id": project.id,
+            "name": project.name,
+            "parent_id": project.parent_id,
+            "target_date": project.target_date,
+            "next_review_at": project.next_review_at
+        }),
+        trace: Some(format!("created project {}", project.id)),
+    })
+}
+
+/// Break a project into milestones. Pass the parent project id and a list of
+/// milestone names/details. Each milestone is created as a child project.
+#[harness::tool(
+    name = "add_milestones",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "parent_id": {"type": "string", "description": "The parent project id."},
+            "milestones": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name":   {"type": "string"},
+                        "detail": {"type": "string"}
+                    },
+                    "required": ["name"]
+                }
+            }
+        },
+        "required": ["parent_id", "milestones"]
+    }"#
+)]
+async fn add_milestones(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let parent_id = args
+        .get("parent_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "add_milestones".into(),
+            reason: "parent_id required".into(),
+        })?;
+    let milestones = args
+        .get("milestones")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "add_milestones".into(),
+            reason: "milestones required".into(),
+        })?;
+    let db = open_db()?;
+    // Validate parent exists + belongs to user.
+    if db
+        .get_project(&uid, parent_id)
+        .map_err(|e| ToolError::Exec(format!("{e}")))?
+        .is_none()
+    {
+        return Err(ToolError::Exec(format!(
+            "parent project `{parent_id}` not found"
+        )));
+    }
+    let mut ids = Vec::new();
+    for ms in milestones {
+        let name = ms.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if name.is_empty() {
+            continue;
+        }
+        let detail = ms.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+        let m = db
+            .create_project(&uid, name, detail, Some(parent_id), None, None)
+            .map_err(|e| ToolError::Exec(format!("insert milestone: {e}")))?;
+        ids.push(m.id);
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "parent_id": parent_id, "created": ids.len(), "ids": ids }),
+        trace: Some(format!(
+            "added {} milestones to {parent_id}",
+            ids.len()
+        )),
+    })
+}
+
+/// Update a project: change status (active|paused|done|dropped), name, detail,
+/// target_date (YYYY-MM-DD), or review_interval_days. Get the id first via list_projects.
+#[harness::tool(
+    name = "update_project",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "id":                   {"type": "string"},
+            "status":               {"type": "string", "enum": ["active", "paused", "done", "dropped"]},
+            "name":                 {"type": "string"},
+            "detail":               {"type": "string"},
+            "target_date":          {"type": "string"},
+            "review_interval_days": {"type": "integer", "minimum": 1}
+        },
+        "required": ["id"]
+    }"#
+)]
+async fn update_project(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "update_project".into(),
+            reason: "id required".into(),
+        })?;
+    let db = open_db()?;
+    let n = db
+        .update_project(
+            &uid,
+            id,
+            args.get("status").and_then(|v| v.as_str()),
+            args.get("name").and_then(|v| v.as_str()),
+            args.get("detail").and_then(|v| v.as_str()),
+            args.get("target_date").and_then(|v| v.as_str()),
+            args.get("review_interval_days").and_then(|v| v.as_i64()),
+        )
+        .map_err(|e| ToolError::Exec(format!("update project: {e}")))?;
+    if n == 0 {
+        return Err(ToolError::Exec(format!("project `{id}` not found")));
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "id": id, "updated": n }),
+        trace: None,
+    })
+}
+
+/// List the user's projects. Use due_for_review=true to get only projects whose
+/// review is due (for 复盘). Pass parent_id to list milestones under a project.
+#[harness::tool(
+    name = "list_projects",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "status":         {"type": "string", "enum": ["active", "paused", "done", "dropped"]},
+            "parent_id":      {"type": "string", "description": "If set, list milestones of this project."},
+            "due_for_review": {"type": "boolean", "description": "If true, return only projects whose review is due."}
+        }
+    }"#
+)]
+async fn list_projects(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let db = open_db()?;
+    let projects = if let Some(pid) = args.get("parent_id").and_then(|v| v.as_str()) {
+        db.list_milestones(&uid, pid)
+            .map_err(|e| ToolError::Exec(format!("{e}")))?
+    } else {
+        let due = args
+            .get("due_for_review")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let status = args.get("status").and_then(|v| v.as_str()).or(Some("active"));
+        db.list_projects(&uid, status, due)
+            .map_err(|e| ToolError::Exec(format!("{e}")))?
+    };
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "count": projects.len(), "projects": projects }),
+        trace: None,
+    })
+}
+
+/// Log a review (复盘) for a project: progress + optional next steps. Advances the
+/// project's next review by its cadence (or next_review_in_days if provided).
+#[harness::tool(
+    name = "log_project_review",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "project_id":         {"type": "string"},
+            "progress":           {"type": "string", "description": "What happened / self-assessment."},
+            "next_steps":         {"type": "string"},
+            "next_review_in_days":{"type": "integer", "minimum": 1}
+        },
+        "required": ["project_id", "progress"]
+    }"#
+)]
+async fn log_project_review(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let project_id = args
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "log_project_review".into(),
+            reason: "project_id required".into(),
+        })?;
+    let progress = args
+        .get("progress")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "log_project_review".into(),
+            reason: "progress required".into(),
+        })?;
+    let next_steps = args
+        .get("next_steps")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let override_days = args
+        .get("next_review_in_days")
+        .and_then(|v| v.as_i64());
+    let db = open_db()?;
+    if db
+        .get_project(&uid, project_id)
+        .map_err(|e| ToolError::Exec(format!("{e}")))?
+        .is_none()
+    {
+        return Err(ToolError::Exec(format!(
+            "project `{project_id}` not found"
+        )));
+    }
+    let review = db
+        .add_project_review(&uid, project_id, progress, next_steps, override_days)
+        .map_err(|e| ToolError::Exec(format!("add project review: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "review_id": review.id, "project_id": project_id }),
+        trace: Some(format!("logged review for {project_id}")),
+    })
+}
+
+// ============================================================
+// note tools
+// ============================================================
+
+/// Create a new note. Always extract the user's full intent into `body` —
+/// don't summarise. `title` should be 4-15 chars capturing the gist; leave
+/// empty if unsure. `tags` is comma-separated keywords. When the user is
+/// clearly working within a specific project, pass its id as `project_id`.
+#[harness::tool(
+    name = "create_note",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "title":      {"type": "string", "description": "Short headline, ≤ 15 chars. Empty if unsure."},
+            "body":       {"type": "string", "description": "The full note text from the user."},
+            "tags":       {"type": "string", "description": "Comma-separated tags, optional."},
+            "project_id": {"type": "string", "description": "Optional project id to attach this note to."}
+        },
+        "required": ["body"]
+    }"#
+)]
+async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let body = args
+        .get("body")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "create_note".into(),
+            reason: "body required".into(),
+        })?;
+    let tags: Vec<String> = args
+        .get("tags")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let project_id = args.get("project_id").and_then(|v| v.as_str());
+    let db = open_db()?;
+    let note = db
+        .create_note(&uid, project_id, title, body, &tags)
+        .map_err(|e| ToolError::Exec(format!("insert note: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "id": note.id,
+            "title": note.title,
+            "tags": note.tags,
+            "project_id": note.project_id,
+            "embedding_status": "pending — search will use grep fallback until the worker fills it (~5s)"
+        }),
+        trace: Some(format!("created note {} ({} chars)", note.id, note.body.len())),
+    })
+}
+
+/// Semantic search across the user's notes. Pass a natural-language query
+/// (English or Chinese). Returns top_k notes ranked by cosine similarity, or
+/// substring matches if embeddings aren't ready yet. Use this whenever the
+/// user asks "did I write about X" / "关于 X 的笔记" / "find my note on Y".
+#[harness::tool(
+    name = "search_notes",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The user's question/topic verbatim."},
+            "top_k": {"type": "integer", "description": "Max results, default 8.", "minimum": 1, "maximum": 50}
+        },
+        "required": ["query"]
+    }"#
+)]
+async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let q = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "search_notes".into(),
+            reason: "query required".into(),
+        })?;
+    let top_k = args
+        .get("top_k")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8) as usize;
+    let emb = embedder()?;
+    let path = ledger_path();
+    let hits = crate::search::semantic_search(&path, &uid, &emb, q, top_k, None)
+        .await
+        .map_err(|e| ToolError::Exec(format!("search: {e}")))?;
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "count": hits.len(),
+            "hits": hits,
+            "mode": if hits.iter().any(|h| h.via_grep) { "grep" } else { "semantic" }
+        }),
+        trace: Some(format!("search '{q}' → {} hits", hits.len())),
+    })
+}
+
+/// List the user's notes by updated_at, optionally filtered by date range.
+/// Use for time-scoped queries ("今天写了什么" / "notes from last week").
+/// `since` and `until` are RFC3339 UTC timestamps; resolve relative dates by
+/// calling `current_time` first.
+#[harness::tool(
+    name = "list_recent_notes",
+    risk = "read-only",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "Default 10, max 200.", "minimum": 1, "maximum": 200},
+            "since": {"type": "string", "description": "RFC3339 UTC, inclusive lower bound on updated_at."},
+            "until": {"type": "string", "description": "RFC3339 UTC, inclusive upper bound on updated_at."}
+        }
+    }"#
+)]
+async fn list_recent_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .min(200) as u32;
+    let since = args.get("since").and_then(|v| v.as_str());
+    let until = args.get("until").and_then(|v| v.as_str());
+    let db = open_db()?;
+    let notes = if since.is_some() || until.is_some() {
+        db.list_notes_in_range(&uid, None, since, until, limit)
+            .map_err(|e| ToolError::Exec(format!("list: {e}")))?
+    } else {
+        db.list_recent_notes(&uid, None, limit)
+            .map_err(|e| ToolError::Exec(format!("list: {e}")))?
+    };
+    Ok(ToolResult {
+        ok: true,
+        content: json!({
+            "count": notes.len(),
+            "notes": notes,
+            "filter": { "since": since, "until": until }
+        }),
+        trace: None,
+    })
+}
+
+/// Update an existing note's title / body / tags by id. Each field is optional;
+/// only provided ones are changed. Embedding clears + re-pending on any touch.
+/// Get the id first via search_notes / list_recent_notes.
+#[harness::tool(
+    name = "update_note",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "id":    {"type": "string"},
+            "title": {"type": "string"},
+            "body":  {"type": "string"},
+            "tags":  {"type": "string", "description": "Comma-separated, optional."}
+        },
+        "required": ["id"]
+    }"#
+)]
+async fn update_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "update_note".into(),
+            reason: "id required".into(),
+        })?;
+    let title = args.get("title").and_then(|v| v.as_str());
+    let body = args.get("body").and_then(|v| v.as_str());
+    let tags: Option<Vec<String>> = args.get("tags").and_then(|v| v.as_str()).map(|s| {
+        s.split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    });
+    let db = open_db()?;
+    let n = db
+        .update_note(&uid, id, title, body, tags.as_deref())
+        .map_err(|e| ToolError::Exec(format!("update: {e}")))?;
+    if n == 0 {
+        return Err(ToolError::Exec(format!("note `{id}` not found")));
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "id": id, "updated": n, "embedding_status": "re-pending" }),
+        trace: None,
+    })
+}
+
+/// Delete a note by id. Confirm with the user before calling — no soft-delete.
+/// Get the id first via search_notes / list_recent_notes.
+#[harness::tool(
+    name = "delete_note",
+    risk = "destructive",
+    schema = r#"{
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"}
+        },
+        "required": ["id"]
+    }"#
+)]
+async fn delete_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let uid = uid_of(w)?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "delete_note".into(),
+            reason: "id required".into(),
+        })?;
+    let db = open_db()?;
+    let n = db
+        .delete_note(&uid, id)
+        .map_err(|e| ToolError::Exec(format!("delete: {e}")))?;
+    if n == 0 {
+        return Err(ToolError::Exec(format!("note `{id}` not found")));
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "deleted": id }),
+        trace: None,
+    })
+}
