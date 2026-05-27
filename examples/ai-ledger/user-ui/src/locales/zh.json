@@ -37,10 +37,12 @@
     "baseCurrency": "显示货币"
   },
   "nav": {
-    "dashboard": "净值",
+    "dashboard": "仪表盘",
+    "money": "收支",
+    "project": "项目",
+    "profile": "我的",
     "ledger": "记账",
     "portfolio": "投资",
-    "profile": "我的",
     "chat": "聊天"
   },
   "ledger": {

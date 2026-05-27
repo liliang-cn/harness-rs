@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Home, Wallet, TrendingUp, User, Globe, LogOut,
+  Home, Wallet, Target, User, Globe, LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,8 +16,8 @@ import { cn } from '@/lib/utils';
 
 const NAV = [
   { to: '/app', key: 'dashboard', icon: Home },
-  { to: '/app/ledger', key: 'ledger', icon: Wallet },
-  { to: '/app/portfolio', key: 'portfolio', icon: TrendingUp },
+  { to: '/app/money', key: 'money', icon: Wallet },
+  { to: '/app/projects', key: 'project', icon: Target },
   { to: '/app/profile', key: 'profile', icon: User },
 ] as const;
 
