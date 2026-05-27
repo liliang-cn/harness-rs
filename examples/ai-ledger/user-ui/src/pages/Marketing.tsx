@@ -2,11 +2,10 @@ import { Link } from 'react-router-dom';
 import { getToken } from '@/lib/api';
 import {
   ArrowRight,
-  Globe2,
   LineChart,
   MessageSquare,
   ShieldCheck,
-  Coins,
+  Target,
   Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -27,23 +26,23 @@ import {
 const FEATURES = [
   {
     icon: LineChart,
-    title: 'One number, every account',
-    body: 'Cash, brokerage, credit, loans — aggregated into your net worth, refreshed daily. Switch currencies and every figure re-converts at the latest ECB mid rate.',
+    title: 'Money at a glance',
+    body: 'Cash, brokerage, credit, loans — aggregated into your net worth, refreshed daily. Track income, expenses, budgets, and subscriptions. Switch currencies and every figure re-converts at the latest ECB mid rate.',
+  },
+  {
+    icon: Target,
+    title: 'Projects with progress',
+    body: 'Create projects, break them into milestones, log progress reviews with a cadence you set. The AI can create and update projects from a single chat message.',
   },
   {
     icon: MessageSquare,
-    title: 'AI that reads your ledger',
-    body: 'Ask "how much did I spend on rent last quarter?" The assistant has tools to query your actual transactions and holdings — answers from your data, not generic finance heuristics.',
-  },
-  {
-    icon: Globe2,
-    title: 'Multi-currency by default',
-    body: 'USD, EUR, JPY, CNY, GBP, HKD, SGD, AUD, CAD, CHF, KRW. Per-account currencies aggregate to your chosen display unit. Historical snapshots remain at their original rate.',
+    title: 'AI that knows your context',
+    body: "Ask \"how much did I spend on infrastructure last quarter?\" or \"what's the status of my SaaS launch project?\" The assistant has tools to query your actual data — not generic heuristics.",
   },
   {
     icon: ShieldCheck,
     title: 'Self-hosted, single binary',
-    body: 'Ledger is one static Rust binary plus an embedded UI. Run it on a $5 VPS. All data lives in one SQLite file you control. Nothing leaves your infrastructure.',
+    body: 'Dashboard is one static Rust binary plus an embedded UI. Run it on a $5 VPS. All data lives in one SQLite file you control. Nothing leaves your infrastructure.',
   },
 ];
 
@@ -55,36 +54,36 @@ const HOW = [
   },
   {
     n: '2',
-    title: 'Add accounts',
-    body: 'Manual entry or CSV import. Each account carries its own currency.',
+    title: 'Add what matters',
+    body: 'Add accounts and transactions, or create your first project. Each account carries its own currency.',
   },
   {
     n: '3',
     title: 'Ask the AI',
-    body: 'Chat in English or Chinese. The assistant reads your actual numbers.',
+    body: 'Chat in English or Chinese. The assistant reads your actual numbers and project data.',
   },
 ];
 
 const COMPARISON = [
   ['Net-worth view', 'Cash only / single currency', 'All accounts · multi-currency'],
+  ['Project tracking', 'None', 'Milestones · reviews · cadence'],
   ['Insight delivery', 'You read charts', 'AI surfaces patterns'],
   ['Query interface', 'Filter UI', 'Natural language (EN / ZH)'],
-  ['Investment tracking', 'Limited or none', 'Trades · holdings · live prices'],
   ['Data ownership', 'Vendor cloud', 'Self-hostable · one SQLite file'],
 ];
 
 const FAQ = [
   {
-    q: 'Is Ledger a bank or a financial advisor?',
-    a: 'No. Ledger does not hold funds, execute trades, or give regulated financial advice. It is a data-aggregation and AI-query layer over information you enter yourself.',
+    q: 'Who is Dashboard for?',
+    a: 'Independent developers, one-person companies, and small teams who want a single place to track money, projects, and notes — without juggling three separate tools.',
   },
   {
-    q: 'Does Ledger connect to my bank?',
+    q: 'Does Dashboard connect to my bank?',
     a: 'Not yet. The current release uses manual entry or CSV import. Direct integrations (Plaid, TrueLayer, SaltEdge) are on the paid-tier roadmap.',
   },
   {
     q: 'Where is my data stored?',
-    a: 'In a single SQLite file on the server you run Ledger on. Self-host and it never leaves your infrastructure. The hosted version stores data on dedicated servers in Asia-Pacific (Tokyo).',
+    a: 'In a single SQLite file on the server you run Dashboard on. Self-host and it never leaves your infrastructure. The hosted version stores data on dedicated servers in Asia-Pacific (Tokyo).',
   },
   {
     q: 'Which AI model powers the assistant?',
@@ -111,10 +110,10 @@ export function Marketing() {
       {/* Top bar */}
       <header className="border-border sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur sm:px-8">
         <Link to="/" className="text-lg font-semibold tracking-tight">
-          Ledger
+          Dashboard
         </Link>
         <span className="text-muted-foreground hidden text-xs sm:inline">
-          AI financial concierge
+          AI cockpit for solo operators
         </span>
         <div className="flex-1" />
         {authed ? (
@@ -140,14 +139,15 @@ export function Marketing() {
       {/* Hero */}
       <section className="mx-auto max-w-4xl px-4 pt-16 pb-12 text-center sm:pt-24 sm:pb-20">
         <Badge variant="secondary" className="mb-6">
-          Built for individuals and families
+          Built for independent developers &amp; one-person companies
         </Badge>
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-          Your AI financial concierge.
+          Your AI cockpit for money, projects, and notes.
         </h1>
         <p className="text-muted-foreground mx-auto mt-6 max-w-2xl text-lg sm:text-xl">
-          One number for your whole financial life — across currencies, accounts,
-          and continents. With AI that actually knows your numbers.
+          Stop juggling three tools. Dashboard gives you net worth, income &amp;
+          cost, project tracking, and an AI co-pilot — all in one self-hosted
+          binary.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Button asChild size="lg">
@@ -185,7 +185,7 @@ export function Marketing() {
       <section id="how" className="mx-auto max-w-4xl px-4 py-12 sm:py-20">
         <div className="mb-10 text-center">
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">How it works</h2>
-          <p className="text-muted-foreground mt-3">From zero to net worth in three steps.</p>
+          <p className="text-muted-foreground mt-3">From zero to your cockpit in three steps.</p>
         </div>
         <ol className="grid gap-6 sm:grid-cols-3">
           {HOW.map((step) => (
@@ -205,10 +205,10 @@ export function Marketing() {
         <div className="mx-auto max-w-5xl px-4">
           <div className="mb-10 text-center">
             <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              How Ledger differs from passive trackers
+              How Dashboard differs from passive trackers
             </h2>
             <p className="text-muted-foreground mt-3">
-              Mint, 随手记, YNAB are journals. Ledger is a concierge.
+              Notion, 随手记, YNAB are journals. Dashboard is a cockpit.
             </p>
           </div>
           <Card>
@@ -218,7 +218,7 @@ export function Marketing() {
                 <div className="bg-card text-muted-foreground p-4 font-medium">
                   Passive trackers
                 </div>
-                <div className="bg-card text-foreground p-4 font-semibold">Ledger</div>
+                <div className="bg-card text-foreground p-4 font-semibold">Dashboard</div>
                 {COMPARISON.map(([cap, theirs, ours]) => (
                   <div className="contents" key={cap}>
                     <div className="bg-card p-4">{cap}</div>
@@ -257,9 +257,9 @@ export function Marketing() {
       {/* CTA */}
       <section className="border-border bg-card border-y py-12 sm:py-20">
         <div className="mx-auto max-w-3xl px-4 text-center">
-          <Coins className="text-muted-foreground mx-auto mb-4 size-10" />
+          <Target className="text-muted-foreground mx-auto mb-4 size-10" />
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Stop guessing what you're worth.
+            One cockpit for everything that matters.
           </h2>
           <p className="text-muted-foreground mx-auto mt-3 max-w-xl">
             Sign up in 30 seconds. Free trial. No credit card.
@@ -274,7 +274,7 @@ export function Marketing() {
 
       {/* Footer */}
       <footer className="text-muted-foreground mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-xs sm:flex-row">
-        <span>© {new Date().getFullYear()} Ledger · superleo.app</span>
+        <span>© {new Date().getFullYear()} Dashboard · superleo.app</span>
         <div className="flex gap-4">
           <a href="/llms.txt" target="_blank" rel="noopener">
             llms.txt

@@ -1,5 +1,5 @@
 {
-  "brand": "财库",
+  "brand": "Dashboard",
   "common": {
     "logout": "登出",
     "loading": "加载中…",
@@ -11,7 +11,7 @@
   },
   "login": {
     "title": "欢迎回来",
-    "subtitle": "你的 AI 财务管家",
+    "subtitle": "独立开发者的工作台",
     "email": "邮箱",
     "password": "密码",
     "submit": "登录",
@@ -41,12 +41,12 @@
     "money": "收支",
     "project": "项目",
     "profile": "我的",
-    "ledger": "记账",
+    "ledger": "收支",
     "portfolio": "投资",
     "chat": "聊天"
   },
   "ledger": {
-    "title": "记账",
+    "title": "收支",
     "transactions": "流水",
     "empty": "还没有流水。",
     "expense": "支出",
