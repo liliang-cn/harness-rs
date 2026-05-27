@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { TrendingUp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -25,6 +27,7 @@ import {
 
 export function Ledger() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<BudgetStatus[]>([]);
   const [subs, setSubs] = useState<Subscription[]>([]);
@@ -123,6 +126,14 @@ export function Ledger() {
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold tracking-tight">{t('ledger.title')}</h1>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/app/money/portfolio')}
+          >
+            <TrendingUp className="size-4" />
+            {t('nav.portfolio')}
+          </Button>
           <TxnFilters period={period} onPeriodChange={setPeriod} />
         </div>
       </div>
