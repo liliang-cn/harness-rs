@@ -80,6 +80,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -101,6 +102,7 @@ dependencies = [
  "harness-rs-models",
  "harness-rs-permissions",
  "harness-rs-skills",
+ "harness-rs-tools-memory",
  "hex",
  "include_dir",
  "rand 0.8.6",

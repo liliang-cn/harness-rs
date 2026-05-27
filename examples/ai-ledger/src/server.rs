@@ -322,7 +322,27 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/me/loans/:id/retire", post(retire_loan_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
         .route("/api/portfolio/allocation", get(portfolio_allocation_handler))
-        .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler));
+        .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler))
+        // ─ projects
+        .route("/api/projects", get(list_projects_handler).post(create_project_handler))
+        .route(
+            "/api/projects/:id",
+            get(get_project_handler)
+                .patch(update_project_handler)
+                .delete(delete_project_handler),
+        )
+        .route("/api/projects/:id/reviews", post(add_project_review_handler))
+        // ─ notes
+        .route("/api/notes", get(list_notes_handler).post(create_note_handler))
+        .route(
+            "/api/notes/:id",
+            get(get_note_handler)
+                .patch(update_note_handler)
+                .delete(delete_note_handler),
+        )
+        .route("/api/notes/:id/export.md", get(export_note_md_handler))
+        .route("/api/notes/export.zip", get(export_all_zip_handler))
+        .route("/api/notes/search", get(search_notes_handler));
 
     // Mount admin endpoints — all gated by `require_admin` in the handlers.
     let app = crate::admin::register_routes(app)
@@ -2406,6 +2426,528 @@ async fn portfolio_refresh_handler(auth: AuthCtx) -> Result<Json<Value>, ApiErro
         "total": assets.len(),
         "results": report,
     })))
+}
+
+// ───── projects REST ─────
+
+#[derive(Deserialize)]
+struct ProjectsQuery {
+    /// "active" (default) | "due" | "all"
+    filter: Option<String>,
+}
+
+async fn list_projects_handler(
+    auth: AuthCtx,
+    Query(q): Query<ProjectsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let (status, only_due) = match q.filter.as_deref() {
+        Some("all") => (None, false),
+        Some("due") => (Some("active"), true),
+        _ => (Some("active"), false),
+    };
+    let projects = db
+        .list_projects(&auth.user.id, status, only_due)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let due = db
+        .count_due_projects(&auth.user.id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "projects": projects, "due_count": due })))
+}
+
+#[derive(Deserialize)]
+struct CreateProjectReq {
+    name: String,
+    #[serde(default)]
+    detail: String,
+    parent_id: Option<String>,
+    target_date: Option<String>,
+    review_interval_days: Option<i64>,
+}
+
+async fn create_project_handler(
+    auth: AuthCtx,
+    Json(req): Json<CreateProjectReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.name.trim().is_empty() {
+        return Err(ApiError::BadRequest("name is empty".into()));
+    }
+    let db = open_db()?;
+    let project = db
+        .create_project(
+            &auth.user.id,
+            &req.name,
+            &req.detail,
+            req.parent_id.as_deref(),
+            req.target_date.as_deref(),
+            req.review_interval_days,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "project": project })))
+}
+
+async fn get_project_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let project = db
+        .get_project(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("project not found".into()))?;
+    let milestones = db
+        .list_milestones(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let reviews = db
+        .list_project_reviews(&auth.user.id, &id, 100)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "project": project, "milestones": milestones, "reviews": reviews })))
+}
+
+#[derive(Deserialize)]
+struct UpdateProjectReq {
+    status: Option<String>,
+    name: Option<String>,
+    detail: Option<String>,
+    target_date: Option<String>,
+    review_interval_days: Option<i64>,
+}
+
+const VALID_PROJECT_STATUSES: &[&str] = &["active", "paused", "done", "dropped"];
+
+async fn update_project_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdateProjectReq>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(st) = req.status.as_deref() {
+        if !VALID_PROJECT_STATUSES.contains(&st) {
+            return Err(ApiError::BadRequest(format!(
+                "status must be one of: {}",
+                VALID_PROJECT_STATUSES.join(", ")
+            )));
+        }
+    }
+    let db = open_db()?;
+    let n = db
+        .update_project(
+            &auth.user.id,
+            &id,
+            req.status.as_deref(),
+            req.name.as_deref(),
+            req.detail.as_deref(),
+            req.target_date.as_deref(),
+            req.review_interval_days,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest("project not found".into()));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_project_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let n = db
+        .delete_project(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest("project not found".into()));
+    }
+    Ok(Json(json!({ "deleted": id })))
+}
+
+#[derive(Deserialize)]
+struct AddProjectReviewReq {
+    progress: String,
+    #[serde(default)]
+    next_steps: String,
+    next_review_in_days: Option<i64>,
+}
+
+async fn add_project_review_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<AddProjectReviewReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.progress.trim().is_empty() {
+        return Err(ApiError::BadRequest("progress is empty".into()));
+    }
+    let db = open_db()?;
+    db.get_project(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("project not found".into()))?;
+    let review = db
+        .add_project_review(
+            &auth.user.id,
+            &id,
+            &req.progress,
+            &req.next_steps,
+            req.next_review_in_days,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "review": review })))
+}
+
+// ───── notes REST ─────
+
+#[derive(Deserialize)]
+struct NotesListQuery {
+    project_id: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn list_notes_handler(
+    auth: AuthCtx,
+    Query(q): Query<NotesListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let notes = db
+        .list_recent_notes(
+            &auth.user.id,
+            q.project_id.as_deref(),
+            q.limit.unwrap_or(50).min(500),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "count": notes.len(), "notes": notes })))
+}
+
+#[derive(Deserialize)]
+struct CreateNoteReq {
+    #[serde(default)]
+    title: String,
+    body: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    project_id: Option<String>,
+}
+
+async fn create_note_handler(
+    auth: AuthCtx,
+    Json(req): Json<CreateNoteReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.body.trim().is_empty() {
+        return Err(ApiError::BadRequest("body is empty".into()));
+    }
+    let db = open_db()?;
+    let note = db
+        .create_note(
+            &auth.user.id,
+            req.project_id.as_deref(),
+            &req.title,
+            &req.body,
+            &req.tags,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "note": note })))
+}
+
+async fn get_note_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let note = db
+        .get_note(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("note not found".into()))?;
+    Ok(Json(json!({ "note": note })))
+}
+
+#[derive(Deserialize)]
+struct UpdateNoteReq {
+    title: Option<String>,
+    body: Option<String>,
+    tags: Option<Vec<String>>,
+}
+
+async fn update_note_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdateNoteReq>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let n = db
+        .update_note(
+            &auth.user.id,
+            &id,
+            req.title.as_deref(),
+            req.body.as_deref(),
+            req.tags.as_deref(),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest("note not found".into()));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_note_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let n = db
+        .delete_note(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest("note not found".into()));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Export a single note as a markdown file with YAML front-matter.
+async fn export_note_md_handler(
+    auth: AuthCtx,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let db = open_db()?;
+    let note = db
+        .get_note(&auth.user.id, &id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("note not found".into()))?;
+
+    let title_line = if note.title.trim().is_empty() {
+        note.body.chars().take(32).collect::<String>()
+    } else {
+        note.title.clone()
+    };
+    let tags_yaml = if note.tags.is_empty() {
+        String::new()
+    } else {
+        let joined = note
+            .tags
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("tags: [{joined}]\n")
+    };
+    let project_yaml = note
+        .project_id
+        .as_ref()
+        .map(|pid| format!("project_id: {pid}\n"))
+        .unwrap_or_default();
+    let body = format!(
+        "---\n\
+         id: {}\n\
+         created_at: {}\n\
+         updated_at: {}\n\
+         {}{}\
+         ---\n\
+         \n\
+         # {}\n\
+         \n\
+         {}\n",
+        note.id,
+        note.created_at.to_rfc3339(),
+        note.updated_at.to_rfc3339(),
+        project_yaml,
+        tags_yaml,
+        title_line,
+        note.body,
+    );
+
+    let pretty = build_note_md_filename(&title_line, &note.id);
+    let ascii_fallback = format!("note-{}.md", note.id);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{}",
+                    note_percent_encode(&pretty)
+                ),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// Export every note the caller owns as a .zip archive.
+async fn export_all_zip_handler(
+    auth: AuthCtx,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    use std::io::Write;
+
+    let db = open_db()?;
+    let notes = db
+        .list_recent_notes(&auth.user.id, None, 10_000)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let cursor = std::io::Cursor::new(buf);
+    let mut zip = zip::ZipWriter::new(cursor);
+    let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut idx = String::from("# Notes Index\n\n");
+    idx.push_str(&format!(
+        "Exported {} notes for {}\n\n",
+        notes.len(),
+        auth.user.email
+    ));
+    idx.push_str("| Date | Title | Tags | File |\n|---|---|---|---|\n");
+
+    let mut used_names = std::collections::HashSet::<String>::new();
+    for note in &notes {
+        let title_line = if note.title.trim().is_empty() {
+            note.body.chars().take(32).collect::<String>()
+        } else {
+            note.title.clone()
+        };
+        let base = build_note_md_filename(&title_line, &note.id);
+        let mut fname = format!("notes/{base}");
+        let mut n = 1;
+        while !used_names.insert(fname.clone()) {
+            fname = format!("notes/{base}.{n}");
+            n += 1;
+        }
+
+        let tags_yaml = if note.tags.is_empty() {
+            String::new()
+        } else {
+            let joined = note
+                .tags
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("tags: [{joined}]\n")
+        };
+        let project_yaml = note
+            .project_id
+            .as_ref()
+            .map(|pid| format!("project_id: {pid}\n"))
+            .unwrap_or_default();
+        let content = format!(
+            "---\n\
+             id: {}\n\
+             created_at: {}\n\
+             updated_at: {}\n\
+             {}{}\
+             ---\n\
+             \n\
+             # {}\n\
+             \n\
+             {}\n",
+            note.id,
+            note.created_at.to_rfc3339(),
+            note.updated_at.to_rfc3339(),
+            project_yaml,
+            tags_yaml,
+            title_line,
+            note.body,
+        );
+
+        zip.start_file(&fname, opts)
+            .map_err(|e| ApiError::Internal(format!("zip: {e}")))?;
+        zip.write_all(content.as_bytes())
+            .map_err(|e| ApiError::Internal(format!("zip write: {e}")))?;
+
+        let tags_disp = if note.tags.is_empty() {
+            "—".into()
+        } else {
+            note.tags.join(", ")
+        };
+        let date = note.created_at.format("%Y-%m-%d").to_string();
+        let title_esc = title_line.replace('|', "\\|");
+        idx.push_str(&format!(
+            "| {date} | {title_esc} | {tags_disp} | [{base}](./{fname}) |\n"
+        ));
+    }
+
+    zip.start_file("index.md", opts)
+        .map_err(|e| ApiError::Internal(format!("zip: {e}")))?;
+    zip.write_all(idx.as_bytes())
+        .map_err(|e| ApiError::Internal(format!("zip write: {e}")))?;
+
+    let cursor = zip
+        .finish()
+        .map_err(|e| ApiError::Internal(format!("zip finish: {e}")))?;
+    let bytes = cursor.into_inner();
+
+    let stamp = chrono::Utc::now().format("%Y%m%d").to_string();
+    let id_short: String = auth.user.id.chars().take(8).collect();
+    let ascii_fallback = format!("notes-{stamp}-{id_short}.zip");
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{ascii_fallback}\""),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct NotesSearchQuery {
+    q: String,
+    project_id: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn search_notes_handler(
+    State(s): State<AppState>,
+    auth: AuthCtx,
+    Query(qs): Query<NotesSearchQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let top_k = qs.limit.unwrap_or(8).min(50) as usize;
+    let db_path = ledger_path();
+    let hits = crate::search::semantic_search(
+        &db_path,
+        &auth.user.id,
+        &s.embedder,
+        &qs.q,
+        top_k,
+        qs.project_id.as_deref(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("search: {e}")))?;
+    Ok(Json(json!({ "count": hits.len(), "hits": hits })))
+}
+
+fn build_note_md_filename(title: &str, id: &str) -> String {
+    let bad: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t'];
+    let clean: String = title
+        .chars()
+        .map(|c| if bad.contains(&c) || (c as u32) < 0x20 { '-' } else { c })
+        .collect();
+    let stem = clean.trim().trim_matches('-');
+    let mut stem: String = stem.chars().take(40).collect();
+    if stem.is_empty() {
+        stem.push_str("note");
+    }
+    format!("{stem}-{id}.md")
+}
+
+fn note_percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        if matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~') {
+            out.push(*b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 // minimal error mapper → JSON + status
