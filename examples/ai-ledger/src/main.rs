@@ -16,12 +16,15 @@ mod admin;
 mod attachments;
 mod auth;
 mod db;
+mod embed_slot;
+mod embed_worker;
 mod fx;
 mod loans;
 mod model;
 mod net_worth;
 mod portfolio;
 mod pricing;
+mod search;
 mod seo;
 mod server;
 mod skills;
@@ -759,11 +762,41 @@ async fn main() -> anyhow::Result<()> {
         };
         cfg.refresh_availability();
 
+        // ── embedder + background embed worker (note semantic search) ──
+        // Ledger normally runs the chat agent on DeepSeek, but it already
+        // resolves a Gemini key for vision (extract_receipt). Reuse it for
+        // embeddings. `AppState.embedder` is non-optional, so we always
+        // construct a GeminiEmbed; when no key is present we still build it
+        // (with an empty key) so boot never fails — embed calls then error and
+        // semantic search transparently falls back to substring grep — but we
+        // skip spawning the worker (it would just hot-loop on auth errors).
+        let embed_db_path = tools::ledger_path();
+        let gemini_key_for_embed = cfg.gemini_key.clone();
+        let embedder: std::sync::Arc<dyn harness_core::Embedder> = std::sync::Arc::new(
+            harness_models::GeminiEmbed::with_key(gemini_key_for_embed.clone().unwrap_or_default()),
+        );
+        embed_slot::set(embedder.clone());
+        if gemini_key_for_embed.is_some() {
+            embed_worker::EmbedWorker {
+                db_path: embed_db_path,
+                embedder: embedder.clone(),
+                batch_size: 32,
+                idle_pause: std::time::Duration::from_secs(5),
+                busy_pause: std::time::Duration::from_millis(250),
+            }
+            .spawn();
+        } else {
+            tracing::warn!(
+                "no GEMINI_API_KEY configured — embed worker not started; note search will fall back to substring grep"
+            );
+        }
+
         let state = server::AppState {
             profile: profile.clone(),
             max_iters: cli.max_iters,
             task_store,
             config: std::sync::Arc::new(std::sync::RwLock::new(cfg)),
+            embedder,
         };
 
         // Net-worth pipeline: refresh FX rates from exchangerate.host in
