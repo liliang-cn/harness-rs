@@ -11,6 +11,7 @@ import {
 import { Toaster } from '@/components/ui/sonner';
 import { ChatFab } from '@/components/chat/chat-fab';
 import { ledgerApi, setToken } from '@/lib/api';
+import { ConfirmProvider } from '@/components/confirm-dialog';
 import { cn } from '@/lib/utils';
 
 const NAV = [
@@ -61,6 +62,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
     navigate('/login');
   }
   return (
+    <ConfirmProvider>
     <div className="bg-background flex min-h-svh flex-col">
       {/* Top bar — brand + inline tabs (desktop only) + lang/logout.
           Mobile drops the tabs (bottom-nav handles that) and just keeps
@@ -133,6 +135,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
       <ChatFab />
       <Toaster richColors closeButton position="top-center" />
     </div>
+    </ConfirmProvider>
   );
 }
 

@@ -239,6 +239,46 @@ export interface Trade {
   created_at: string;
 }
 
+// ─── projects + notes ─────────────────────────────────────
+
+export type ProjectStatus = 'active' | 'paused' | 'done' | 'dropped';
+
+export interface Project {
+  id: string;
+  name: string;
+  detail: string;
+  status: ProjectStatus;
+  parent_id?: string | null;
+  target_date?: string | null;
+  review_interval_days?: number | null;
+  next_review_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectReview {
+  id: string;
+  project_id: string;
+  progress: string;
+  next_steps: string;
+  created_at: string;
+}
+
+export interface Note {
+  id: string;
+  project_id?: string | null;
+  title: string;
+  body: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteSearchHit extends Note {
+  score: number;
+  via_grep: boolean;
+}
+
 // ─── chat ─────────────────────────────────────────────────
 
 export interface Attachment {
@@ -436,6 +476,80 @@ export const ledgerApi = {
     api<{ deleted: string }>(`/api/chat/sessions/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+  // ─── projects ─────────────────────────────────────────────
+  projects: (filter: 'active' | 'due' | 'all' = 'active') =>
+    api<{ projects: Project[]; due_count: number }>(`/api/projects?filter=${filter}`),
+  project: (id: string) =>
+    api<{ project: Project; milestones: Project[]; reviews: ProjectReview[] }>(
+      `/api/projects/${encodeURIComponent(id)}`,
+    ),
+  createProject: (body: {
+    name: string;
+    detail?: string;
+    parent_id?: string;
+    target_date?: string;
+    review_interval_days?: number;
+  }) =>
+    api<{ project: Project }>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateProject: (
+    id: string,
+    patch: Partial<Pick<Project, 'name' | 'detail' | 'status' | 'target_date' | 'review_interval_days'>>,
+  ) =>
+    api<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteProject: (id: string) =>
+    api<{ deleted: string }>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  addProjectReview: (
+    id: string,
+    body: { progress: string; next_steps?: string; next_review_in_days?: number },
+  ) =>
+    api<{ review: ProjectReview }>(`/api/projects/${encodeURIComponent(id)}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // ─── notes ────────────────────────────────────────────────
+  notes: (projectId?: string) => {
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return api<{ notes: Note[] }>(`/api/notes${q}`);
+  },
+  note: (id: string) =>
+    api<{ note: Note }>(`/api/notes/${encodeURIComponent(id)}`),
+  createNote: (body: {
+    title?: string;
+    body: string;
+    tags?: string[];
+    project_id?: string;
+  }) =>
+    api<{ note: Note }>('/api/notes', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateNote: (
+    id: string,
+    patch: Partial<Pick<Note, 'title' | 'body' | 'tags'>>,
+  ) =>
+    api<{ ok: boolean }>(`/api/notes/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteNote: (id: string) =>
+    api<{ deleted: string }>(`/api/notes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  searchNotes: (q: string, projectId?: string) => {
+    const p = new URLSearchParams({ q });
+    if (projectId) p.set('project_id', projectId);
+    return api<{ hits: NoteSearchHit[] }>(`/api/notes/search?${p}`);
+  },
+
   /**
    * CSV download is a special-case: the server returns text/csv with a
    * Content-Disposition filename, not JSON. We do an authenticated fetch,
