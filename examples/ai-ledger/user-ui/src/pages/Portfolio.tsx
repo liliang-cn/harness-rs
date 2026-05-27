@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { ArrowLeft } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PositionsList } from '@/components/portfolio/positions-list';
@@ -15,6 +18,7 @@ import {
 
 export function Portfolio() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [positions, setPositions] = useState<Position[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [assets, setAssets] = useState<AssetWithPrice[]>([]);
@@ -55,7 +59,12 @@ export function Portfolio() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">{t('portfolio.title')}</h1>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon-sm" onClick={() => navigate('/app/money')} aria-label={t('nav.money')}>
+            <ArrowLeft className="size-4" />
+          </Button>
+          <h1 className="text-2xl font-bold tracking-tight">{t('portfolio.title')}</h1>
+        </div>
       </div>
 
       <Card>
