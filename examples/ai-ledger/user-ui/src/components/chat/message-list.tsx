@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Wrench, AlertCircle, FileText, RotateCw } from 'lucide-react';
+import { Loader2, AlertCircle, FileText, RotateCw } from 'lucide-react';
 import type { ChatMessage } from '@/lib/api';
 import { fetchAttachmentBlob } from '@/lib/api';
 import { renderMarkdown } from '@/lib/markdown';
@@ -71,13 +71,6 @@ export function MessageList({
           <div className="text-muted-foreground flex items-center gap-2 text-xs">
             <Loader2 className="size-3 animate-spin" />
             {t('chat.thinking')}
-          </div>
-        )}
-        {toolEvents.length > 0 && (
-          <div className="space-y-1 pt-1">
-            {toolEvents.map((e) => (
-              <ToolLine key={e.id} ev={e} />
-            ))}
           </div>
         )}
       </div>
@@ -155,34 +148,6 @@ function Bubble({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function ToolLine({ ev }: { ev: ToolEvent }) {
-  const { t } = useTranslation();
-  if (ev.kind === 'error') {
-    return (
-      <div className="text-destructive flex items-start gap-1.5 text-xs italic">
-        <AlertCircle className="mt-0.5 size-3 shrink-0" />
-        <span>{t('chat.error', { message: ev.message })}</span>
-      </div>
-    );
-  }
-  const isStart = ev.kind === 'tool_start';
-  const key = isStart
-    ? 'chat.toolCalling'
-    : ev.ok
-      ? 'chat.toolDone'
-      : 'chat.toolFailed';
-  return (
-    <div className="text-muted-foreground flex items-center gap-1.5 text-xs italic">
-      {isStart ? (
-        <Loader2 className="size-3 animate-spin" />
-      ) : (
-        <Wrench className="size-3" />
-      )}
-      <span>{t(key, { name: ev.name })}</span>
     </div>
   );
 }
