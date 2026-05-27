@@ -12,7 +12,6 @@ pub struct Db {
 
 #[derive(Debug, Clone)]
 pub struct CachedQuote {
-    pub cache_key: String,
     pub price: Decimal,
     pub currency: String,
     pub source: String,
@@ -313,6 +312,56 @@ impl Db {
                 updated_ms  INTEGER NOT NULL
             );
 
+            -- ── Dashboard: project tracking ──────────────────────────────
+
+            -- Top-level row = project; parent_id child = milestone.
+            -- `space` concept is dropped; projects are per-user, no work/life split.
+            CREATE TABLE IF NOT EXISTS projects (
+                id                   TEXT PRIMARY KEY,
+                user_id              TEXT NOT NULL,
+                name                 TEXT NOT NULL,
+                detail               TEXT NOT NULL DEFAULT '',
+                status               TEXT NOT NULL DEFAULT 'active',
+                parent_id            TEXT,
+                target_date          TEXT,
+                review_interval_days INTEGER,
+                next_review_at       TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_user_status ON projects(user_id, status);
+            CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_projects_due ON projects(user_id, next_review_at);
+
+            CREATE TABLE IF NOT EXISTS project_reviews (
+                id          TEXT PRIMARY KEY,
+                project_id  TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                progress    TEXT NOT NULL,
+                next_steps  TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_project_reviews ON project_reviews(project_id, created_at);
+
+            -- Notes with optional project_id (NULL = Unfiled).
+            -- Embeddings stored as f32[dim] little-endian BLOB for semantic search.
+            CREATE TABLE IF NOT EXISTS notes (
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL,
+                project_id    TEXT,
+                title         TEXT NOT NULL DEFAULT '',
+                body          TEXT NOT NULL,
+                tags          TEXT,
+                embedding     BLOB,
+                embedding_dim INTEGER,
+                embedding_at  TEXT,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes(user_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(user_id, project_id);
+            CREATE INDEX IF NOT EXISTS idx_notes_pending_embed ON notes(user_id) WHERE embedding IS NULL;
+
             -- FX rate cache. One row per (base, quote, fetched_date). We
             -- fetch daily mid prices from exchangerate.host and key by ISO
             -- date so historical net-worth snapshots can be reproduced.
@@ -379,17 +428,16 @@ impl Db {
 
     pub fn get_cached_quote(&self, cache_key: &str) -> SqlResult<Option<CachedQuote>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cache_key, price, currency, source, fetched_at FROM quote_cache
+            "SELECT price, currency, source, fetched_at FROM quote_cache
              WHERE cache_key = ?1",
         )?;
         stmt.query_row(params![cache_key], |r| {
-            let price_s: String = r.get(1)?;
-            let fet_s: String = r.get(4)?;
+            let price_s: String = r.get(0)?;
+            let fet_s: String = r.get(3)?;
             Ok(CachedQuote {
-                cache_key: r.get(0)?,
                 price: Decimal::from_str(&price_s).unwrap_or(Decimal::ZERO),
-                currency: r.get(2)?,
-                source: r.get(3)?,
+                currency: r.get(1)?,
+                source: r.get(2)?,
                 fetched_at: parse_rfc3339(&fet_s),
             })
         })
@@ -527,19 +575,6 @@ impl Db {
     }
 
     // ───── FX rates ─────
-
-    /// Look up the cached rate for (base → quote) on a specific UTC date.
-    /// Returns None if not cached; caller decides whether to fetch.
-    pub fn get_fx_rate(&self, base: &str, quote: &str, date: &str) -> SqlResult<Option<f64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT rate FROM fx_rates
-             WHERE base = ?1 AND quote = ?2 AND fetched_date = ?3",
-        )?;
-        let row: Option<String> = stmt
-            .query_row(params![base, quote, date], |r| r.get(0))
-            .optional()?;
-        Ok(row.and_then(|s| s.parse::<f64>().ok()))
-    }
 
     /// Latest cached rate for the pair on or before `date`. Used when today's
     /// fetch failed but yesterday's value is good enough.
@@ -1123,6 +1158,7 @@ impl Db {
             .optional()
     }
 
+    #[allow(dead_code)] // used by tests
     pub fn get_asset_by_id(&self, user_id: &str, id: &str) -> SqlResult<Option<Asset>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, symbol, name, asset_class, provider_id, currency, created_at
@@ -1707,28 +1743,8 @@ impl Db {
         )? as u32)
     }
 
-    /// Active subscriptions whose `next_charge_date <= as_of` — drive the
-    /// daily `--auto-charge-subs` runner.
-    pub fn due_subscriptions(
-        &self,
-        user_id: &str,
-        as_of: NaiveDate,
-    ) -> SqlResult<Vec<Subscription>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, amount, currency, frequency, next_charge_date,
-                    account_id, category, pay_channel, note, status,
-                    created_at, cancelled_at
-             FROM subscriptions
-             WHERE user_id = ?1 AND status = 'active' AND next_charge_date <= ?2
-             ORDER BY next_charge_date ASC",
-        )?;
-        let rows = stmt.query_map(
-            params![user_id, as_of.format("%Y-%m-%d").to_string()],
-            Self::row_to_subscription,
-        )?;
-        rows.collect()
-    }
-
+    /// Active subscriptions across all users whose `next_charge_date <= as_of`
+    /// — drives the daily `--auto-charge-subs` runner.
     pub fn due_subscriptions_all_users(
         &self,
         as_of: NaiveDate,
@@ -2142,6 +2158,451 @@ impl Db {
         )?;
         Ok(())
     }
+
+    // ───── projects ─────
+
+    /// Create a project (or milestone when `parent_id` is Some).
+    /// `next_review_at` is seeded to now + interval for top-level cadenced
+    /// projects; milestones never get a review cadence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_project(
+        &self,
+        user_id: &str,
+        name: &str,
+        detail: &str,
+        parent_id: Option<&str>,
+        target_date: Option<&str>,
+        review_interval_days: Option<i64>,
+    ) -> SqlResult<Project> {
+        let id = random_id();
+        let now = Utc::now();
+        let now_s = now.to_rfc3339();
+        // Seed next_review_at for top-level projects (no parent) with a cadence.
+        let next_review_at: Option<String> = if parent_id.is_none() {
+            review_interval_days.map(|d| (now + chrono::Duration::days(d)).to_rfc3339())
+        } else {
+            None
+        };
+        self.conn.execute(
+            "INSERT INTO projects(id, user_id, name, detail, status,
+                                  parent_id, target_date, review_interval_days,
+                                  next_review_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?9)",
+            params![id, user_id, name, detail, parent_id,
+                    target_date, review_interval_days, next_review_at, now_s],
+        )?;
+        self.get_project(user_id, &id).map(|o| o.expect("project vanished after insert"))
+    }
+
+    pub fn get_project(&self, user_id: &str, id: &str) -> SqlResult<Option<Project>> {
+        let sql = format!("SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND id = ?2");
+        self.conn.prepare(&sql)?
+            .query_row(params![user_id, id], row_to_project)
+            .optional()
+    }
+
+    /// List projects for a user. `status` filters when Some. `only_due` keeps
+    /// only projects whose next_review_at has passed (for the review-due list).
+    /// Only returns top-level projects (parent_id IS NULL) unless you want
+    /// milestones too — use `list_milestones` for those.
+    pub fn list_projects(
+        &self,
+        user_id: &str,
+        status: Option<&str>,
+        only_due: bool,
+    ) -> SqlResult<Vec<Project>> {
+        let mut sql = format!(
+            "SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND parent_id IS NULL"
+        );
+        let mut p: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(user_id.to_string())];
+        if let Some(st) = status {
+            sql.push_str(&format!(" AND status = ?{}", p.len() + 1));
+            p.push(Box::new(st.to_string()));
+        }
+        if only_due {
+            sql.push_str(&format!(
+                " AND next_review_at IS NOT NULL AND next_review_at <= ?{}",
+                p.len() + 1
+            ));
+            p.push(Box::new(Utc::now().to_rfc3339()));
+        }
+        sql.push_str(" ORDER BY COALESCE(next_review_at, target_date, created_at) ASC");
+        let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(refs), row_to_project)?;
+        rows.collect()
+    }
+
+    /// List milestones (direct children) of a project.
+    pub fn list_milestones(&self, user_id: &str, parent_id: &str) -> SqlResult<Vec<Project>> {
+        let sql = format!(
+            "SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND parent_id = ?2 \
+             ORDER BY created_at ASC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![user_id, parent_id], row_to_project)?;
+        rows.collect()
+    }
+
+    /// Count projects whose review cadence is due, for the dashboard badge.
+    pub fn count_due_projects(&self, user_id: &str) -> SqlResult<u32> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM projects
+             WHERE user_id = ?1 AND status = 'active' AND parent_id IS NULL
+               AND next_review_at IS NOT NULL AND next_review_at <= ?2",
+            params![user_id, Utc::now().to_rfc3339()],
+            |r| r.get::<_, i64>(0),
+        ).map(|n| n as u32)
+    }
+
+    /// COALESCE-style update: any `None` field is left as-is in the DB.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_project(
+        &self,
+        user_id: &str,
+        id: &str,
+        status: Option<&str>,
+        name: Option<&str>,
+        detail: Option<&str>,
+        target_date: Option<&str>,
+        review_interval_days: Option<i64>,
+    ) -> SqlResult<u32> {
+        let now = Utc::now().to_rfc3339();
+        let n = self.conn.execute(
+            "UPDATE projects SET
+               status = COALESCE(?3, status),
+               name   = COALESCE(?4, name),
+               detail = COALESCE(?5, detail),
+               target_date = COALESCE(?6, target_date),
+               review_interval_days = COALESCE(?7, review_interval_days),
+               updated_at = ?8
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, status, name, detail, target_date,
+                    review_interval_days, now],
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Delete a project in a transaction: cascade reviews + milestones + self.
+    pub fn delete_project(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        let tx = self.conn.unchecked_transaction()?;
+        // Reviews for this project.
+        tx.execute(
+            "DELETE FROM project_reviews WHERE user_id = ?1 AND project_id = ?2",
+            params![user_id, id],
+        )?;
+        // Reviews for any milestones of this project.
+        tx.execute(
+            "DELETE FROM project_reviews WHERE user_id = ?1
+             AND project_id IN (SELECT id FROM projects WHERE user_id = ?1 AND parent_id = ?2)",
+            params![user_id, id],
+        )?;
+        // The milestones themselves.
+        tx.execute(
+            "DELETE FROM projects WHERE user_id = ?1 AND parent_id = ?2",
+            params![user_id, id],
+        )?;
+        // The project itself.
+        let n = tx.execute(
+            "DELETE FROM projects WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
+        )?;
+        tx.commit()?;
+        Ok(n as u32)
+    }
+
+    /// Insert a review and advance the project's next_review_at by its
+    /// interval (or by `override_days` if provided).
+    pub fn add_project_review(
+        &self,
+        user_id: &str,
+        project_id: &str,
+        progress: &str,
+        next_steps: &str,
+        override_days: Option<i64>,
+    ) -> SqlResult<ProjectReview> {
+        let id = random_id();
+        let now = Utc::now();
+        let now_s = now.to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO project_reviews(id, project_id, user_id, progress, next_steps, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, project_id, user_id, progress, next_steps, now_s],
+        )?;
+        // Advance next_review_at: use override, else the project's interval.
+        let interval: Option<i64> = override_days.or_else(|| {
+            self.conn.query_row(
+                "SELECT review_interval_days FROM projects WHERE user_id = ?1 AND id = ?2",
+                params![user_id, project_id],
+                |r| r.get(0),
+            ).optional().ok().flatten()
+        });
+        if let Some(d) = interval {
+            let next = (now + chrono::Duration::days(d)).to_rfc3339();
+            self.conn.execute(
+                "UPDATE projects SET next_review_at = ?3, updated_at = ?4
+                 WHERE user_id = ?1 AND id = ?2",
+                params![user_id, project_id, next, now_s],
+            )?;
+        }
+        Ok(ProjectReview {
+            id,
+            project_id: project_id.to_string(),
+            progress: progress.to_string(),
+            next_steps: next_steps.to_string(),
+            created_at: now_s,
+        })
+    }
+
+    pub fn list_project_reviews(
+        &self,
+        user_id: &str,
+        project_id: &str,
+        limit: u32,
+    ) -> SqlResult<Vec<ProjectReview>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, progress, next_steps, created_at
+             FROM project_reviews WHERE user_id = ?1 AND project_id = ?2
+             ORDER BY created_at DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![user_id, project_id, limit as i64], |r| {
+            Ok(ProjectReview {
+                id: r.get(0)?,
+                project_id: r.get(1)?,
+                progress: r.get(2)?,
+                next_steps: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    // ───── notes ─────
+
+    pub fn create_note(
+        &self,
+        user_id: &str,
+        project_id: Option<&str>,
+        title: &str,
+        body: &str,
+        tags: &[String],
+    ) -> SqlResult<Note> {
+        let id = random_id();
+        let now = Utc::now();
+        let tag_str = tags.join(",");
+        self.conn.execute(
+            "INSERT INTO notes(id, user_id, project_id, title, body, tags,
+                               embedding, embedding_dim, embedding_at,
+                               created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, ?7, ?7)",
+            params![id, user_id, project_id, title, body, tag_str, now.to_rfc3339()],
+        )?;
+        Ok(Note {
+            id,
+            project_id: project_id.map(str::to_string),
+            title: title.to_string(),
+            body: body.to_string(),
+            tags: tags.to_vec(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn get_note(&self, user_id: &str, id: &str) -> SqlResult<Option<Note>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, title, body, tags, created_at, updated_at
+             FROM notes WHERE user_id = ?1 AND id = ?2",
+        )?;
+        stmt.query_row(params![user_id, id], row_to_note).optional()
+    }
+
+    /// Update title / body / tags. Any field passed as `None` is left as-is.
+    /// Always clears the embedding so the worker re-embeds next pass.
+    pub fn update_note(
+        &self,
+        user_id: &str,
+        id: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> SqlResult<u32> {
+        let now = Utc::now();
+        let tag_str = tags.map(|t| t.join(","));
+        let n = self.conn.execute(
+            "UPDATE notes
+             SET title = COALESCE(?3, title),
+                 body  = COALESCE(?4, body),
+                 tags  = COALESCE(?5, tags),
+                 embedding = NULL, embedding_dim = NULL, embedding_at = NULL,
+                 updated_at = ?6
+             WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id, title, body, tag_str, now.to_rfc3339()],
+        )?;
+        Ok(n as u32)
+    }
+
+    pub fn delete_note(&self, user_id: &str, id: &str) -> SqlResult<u32> {
+        Ok(self.conn.execute(
+            "DELETE FROM notes WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
+        )? as u32)
+    }
+
+    /// Recent notes for a user. `project_id` filters when Some (None = all).
+    pub fn list_recent_notes(
+        &self,
+        user_id: &str,
+        project_id: Option<&str>,
+        limit: u32,
+    ) -> SqlResult<Vec<Note>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, title, body, tags, created_at, updated_at
+             FROM notes WHERE user_id = ?1",
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(pid) = project_id {
+            sql.push_str(&format!(" AND project_id = ?{}", p.len() + 1));
+            p.push(pid.to_string());
+        }
+        sql.push_str(&format!(" ORDER BY updated_at DESC LIMIT ?{}", p.len() + 1));
+        p.push((limit as i64).to_string());
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), row_to_note)?;
+        rows.collect()
+    }
+
+    /// Like `list_recent_notes` but with inclusive `since` / `until` filters
+    /// on `updated_at`. Either bound can be `None`. RFC3339 strings.
+    pub fn list_notes_in_range(
+        &self,
+        user_id: &str,
+        project_id: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+        limit: u32,
+    ) -> SqlResult<Vec<Note>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, title, body, tags, created_at, updated_at
+             FROM notes WHERE user_id = ?1",
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(pid) = project_id {
+            sql.push_str(&format!(" AND project_id = ?{}", p.len() + 1));
+            p.push(pid.to_string());
+        }
+        if let Some(s) = since {
+            sql.push_str(&format!(" AND updated_at >= ?{}", p.len() + 1));
+            p.push(s.to_string());
+        }
+        if let Some(u) = until {
+            sql.push_str(&format!(" AND updated_at <= ?{}", p.len() + 1));
+            p.push(u.to_string());
+        }
+        sql.push_str(&format!(" ORDER BY updated_at DESC LIMIT ?{}", p.len() + 1));
+        p.push((limit as i64).to_string());
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), row_to_note)?;
+        rows.collect()
+    }
+
+    pub fn count_notes(&self, user_id: &str) -> SqlResult<u32> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE user_id = ?1",
+                params![user_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as u32)
+    }
+
+    // ───── embedding storage ─────
+
+    /// Pull the next batch of notes that need embedding.
+    pub fn pending_embeds(&self, batch: u32) -> SqlResult<Vec<PendingEmbed>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, user_id, title, body
+             FROM notes WHERE embedding IS NULL
+             ORDER BY updated_at ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![batch as i64], |r| {
+            Ok(PendingEmbed {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                title: r.get(2)?,
+                body: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn write_embedding(&self, id: &str, dim: usize, vector: &[f32]) -> SqlResult<u32> {
+        let mut bytes = Vec::with_capacity(vector.len() * 4);
+        for v in vector {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let now = Utc::now().to_rfc3339();
+        Ok(self.conn.execute(
+            "UPDATE notes
+             SET embedding = ?2, embedding_dim = ?3, embedding_at = ?4
+             WHERE id = ?1",
+            params![id, bytes, dim as i64, now],
+        )? as u32)
+    }
+
+    /// Load all embedded notes for a user. `project_id` filters when Some.
+    pub fn list_embeddings(
+        &self,
+        user_id: &str,
+        project_id: Option<&str>,
+    ) -> SqlResult<Vec<NoteEmbedding>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, title, body, tags, embedding, embedding_dim,
+                    created_at, updated_at
+             FROM notes
+             WHERE user_id = ?1 AND embedding IS NOT NULL",
+        );
+        let mut p: Vec<String> = vec![user_id.to_string()];
+        if let Some(pid) = project_id {
+            sql.push_str(&format!(" AND project_id = ?{}", p.len() + 1));
+            p.push(pid.to_string());
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_dyn: Vec<&dyn rusqlite::ToSql> =
+            p.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_dyn.as_slice(), |r| {
+            let blob: Vec<u8> = r.get(5)?;
+            let dim: i64 = r.get(6)?;
+            let dim = dim as usize;
+            let mut vec = Vec::with_capacity(dim);
+            for chunk in blob.chunks_exact(4) {
+                vec.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+            let tags_s: Option<String> = r.get(4)?;
+            let tags = tags_s
+                .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+                .unwrap_or_default();
+            let c: String = r.get(7)?;
+            let u: String = r.get(8)?;
+            Ok(NoteEmbedding {
+                note: Note {
+                    id: r.get(0)?,
+                    project_id: r.get(1)?,
+                    title: r.get(2)?,
+                    body: r.get(3)?,
+                    tags,
+                    created_at: parse_rfc3339(&c),
+                    updated_at: parse_rfc3339(&u),
+                },
+                embedding: vec,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2176,6 +2637,109 @@ pub struct UserStats {
     /// back to a specific invite link.
     pub invite_code_used: Option<String>,
 }
+
+// ───── Dashboard structs ─────────────────────────────────────────────────────
+
+/// A project (top-level) or milestone (parent_id IS NOT NULL).
+/// No `space` / `kind` — those concepts are dropped.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub detail: String,
+    pub status: String,
+    pub parent_id: Option<String>,
+    pub target_date: Option<String>,
+    pub review_interval_days: Option<i64>,
+    pub next_review_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProjectReview {
+    pub id: String,
+    pub project_id: String,
+    pub progress: String,
+    pub next_steps: String,
+    pub created_at: String,
+}
+
+/// A note optionally attached to a project (`project_id = None` → Unfiled).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub tags: Vec<String>,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub created_at: DateTime<Utc>,
+    #[serde(serialize_with = "ser_rfc3339")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingEmbed {
+    pub id: String,
+    pub user_id: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NoteEmbedding {
+    pub note: Note,
+    pub embedding: Vec<f32>,
+}
+
+const PROJECT_COLS: &str =
+    "id, user_id, name, detail, status, parent_id, target_date, \
+     review_interval_days, next_review_at, created_at, updated_at";
+
+fn row_to_project(r: &rusqlite::Row<'_>) -> SqlResult<Project> {
+    Ok(Project {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        name: r.get(2)?,
+        detail: r.get(3)?,
+        status: r.get(4)?,
+        parent_id: r.get(5)?,
+        target_date: r.get(6)?,
+        review_interval_days: r.get(7)?,
+        next_review_at: r.get(8)?,
+        created_at: r.get(9)?,
+        updated_at: r.get(10)?,
+    })
+}
+
+fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
+    let tags_s: Option<String> = r.get(4)?;
+    let tags = tags_s
+        .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    let c: String = r.get(5)?;
+    let u: String = r.get(6)?;
+    Ok(Note {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        title: r.get(2)?,
+        body: r.get(3)?,
+        tags,
+        created_at: parse_rfc3339(&c),
+        updated_at: parse_rfc3339(&u),
+    })
+}
+
+fn random_id() -> String {
+    use rand::RngCore;
+    let mut buf = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    hex::encode(buf)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 fn ser_rfc3339<S: serde::Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&t.to_rfc3339())
@@ -2469,6 +3033,28 @@ mod tests {
         assert_eq!(budgets[0].category, "餐饮");
         // The canonical (existing) budget survives.
         assert_eq!(budgets[0].monthly_limit, Decimal::from_str("1500").unwrap());
+    }
+
+    fn tmp_db() -> Db {
+        Db::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn projects_and_notes_basic() {
+        let db = tmp_db();
+        let p = db.create_project("u1", "上线 SaaS", "", None, Some("2026-09-30"), Some(30)).unwrap();
+        assert!(p.next_review_at.is_some());
+        let m = db.create_project("u1", "做落地页", "", Some(&p.id), None, None).unwrap();
+        assert_eq!(db.list_milestones("u1", &p.id).unwrap().len(), 1);
+        assert_eq!(m.parent_id.as_deref(), Some(p.id.as_str()));
+        let n = db.create_note("u1", Some(&p.id), "想法", "正文", &["idea".into()]).unwrap();
+        assert_eq!(n.project_id.as_deref(), Some(p.id.as_str()));
+        assert_eq!(db.list_recent_notes("u1", Some(&p.id), 50).unwrap().len(), 1);
+        assert_eq!(db.list_recent_notes("u1", None, 50).unwrap().len(), 1);
+        db.add_project_review("u1", &p.id, "做了线框", "下周写代码", None).unwrap();
+        assert_eq!(db.list_project_reviews("u1", &p.id, 10).unwrap().len(), 1);
+        assert_eq!(db.delete_project("u1", &p.id).unwrap(), 1);
+        assert!(db.get_project("u1", &p.id).unwrap().is_none());
     }
 
     #[test]
