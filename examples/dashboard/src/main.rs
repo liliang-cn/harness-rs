@@ -88,6 +88,20 @@ pub(crate) const TOOL_NAMES: &[&str] = &[
     // ─── web access (from harness-rs-tools-web) ───
     "web_search",
     "web_fetch",
+    // ─── projects (goal + milestones + 复盘 reviews) ───
+    "create_project",
+    "update_project",
+    "list_projects",
+    "add_milestones",
+    "log_project_review",
+    // ─── notes (attached to a project) ───
+    "create_note",
+    "search_notes",
+    "list_recent_notes",
+    "update_note",
+    "delete_note",
+    // ─── AI artifact (data-driven generated pages) ───
+    "render_artifact",
 ];
 
 /// Guide that surfaces the catalogue of `#[skill]`-registered playbooks to the
