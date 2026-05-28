@@ -1546,17 +1546,23 @@ impl Hook for ChannelHook {
                 }
             }
             Event::PostToolUse { action, result } => {
-                let mut preview = result.content.clone();
-                let s = serde_json::to_string(&preview).unwrap_or_default();
-                if s.len() > 280 {
-                    preview = json!(format!("{}…", &s[..280]));
+                if action.tool == "render_artifact" {
+                    // The artifact event was already emitted on PreToolUse;
+                    // suppress the tool_end so there's no orphan status chip.
+                    None
+                } else {
+                    let mut preview = result.content.clone();
+                    let s = serde_json::to_string(&preview).unwrap_or_default();
+                    if s.len() > 280 {
+                        preview = json!(format!("{}…", &s[..280]));
+                    }
+                    Some(json!({
+                        "type": "tool_end",
+                        "name": action.tool,
+                        "ok": result.ok,
+                        "preview": preview,
+                    }))
                 }
-                Some(json!({
-                    "type": "tool_end",
-                    "name": action.tool,
-                    "ok": result.ok,
-                    "preview": preview,
-                }))
             }
             Event::PostModel { out } => {
                 if let Some(text) = &out.text {

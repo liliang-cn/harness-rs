@@ -51,6 +51,8 @@ window.App = (typeof App !== 'undefined') ? App : (window.App || null);
   import { createRoot } from 'react-dom/client';
   const post = (m) => { try { parent.postMessage(m, '*'); } catch {} };
   window.onerror = (msg) => post({ type: 'artifact-error', message: String(msg) });
+  window.addEventListener('unhandledrejection', (e) =>
+    post({ type: 'artifact-error', message: String((e.reason && e.reason.stack) || e.reason) }));
   const root = createRoot(document.getElementById('root'));
   function mount() {
     const C = window.App;
