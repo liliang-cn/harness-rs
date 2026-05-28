@@ -1505,6 +1505,13 @@ pub(crate) fn open_db() -> Result<Db, ApiError> {
 
 /// Hook that forwards a curated subset of lifecycle events into an mpsc
 /// channel so the SSE stream can show live progress.
+/// Whether a finished (non-budget) chat turn produced nothing renderable —
+/// no text and no artifact. Used to log a WARN for the otherwise-silent
+/// empty-reply case (e.g. a model returning an empty completion).
+fn chat_reply_is_empty(reply: &str, artifact_count: usize) -> bool {
+    reply.trim().is_empty() && artifact_count == 0
+}
+
 struct ChannelHook {
     tx: mpsc::UnboundedSender<Value>,
     /// render_artifact specs seen this run, collected for persistence.
@@ -1522,6 +1529,7 @@ impl Hook for ChannelHook {
         let payload: Option<Value> = match ev {
             Event::Heartbeat { iter } => Some(json!({"type": "iter", "iter": iter})),
             Event::PreToolUse { action } => {
+                tracing::info!(tool = %action.tool, "tool start");
                 if action.tool == "render_artifact" {
                     // Collect for persistence + emit a dedicated artifact event
                     // (instead of a generic tool_start status chip).
@@ -1546,6 +1554,11 @@ impl Hook for ChannelHook {
                 }
             }
             Event::PostToolUse { action, result } => {
+                if result.ok {
+                    tracing::info!(tool = %action.tool, "tool end ok");
+                } else {
+                    tracing::warn!(tool = %action.tool, "tool end FAILED");
+                }
                 if action.tool == "render_artifact" {
                     // The artifact event was already emitted on PreToolUse;
                     // suppress the tool_end so there's no orphan status chip.
@@ -1822,6 +1835,13 @@ async fn session_stream_handler(
     // tool can see them on profile.extra below.
     let attachment_ids = req.attachment_ids.clone();
 
+    tracing::info!(
+        user = %user_id,
+        model = %model_id,
+        session = %session_id,
+        msg_len = req.message.len(),
+        "chat request",
+    );
     tokio::spawn(async move {
         let model = match s.build_model_for(&model_id_for_task) {
             Ok(m) => m,
@@ -1959,6 +1979,21 @@ async fn session_stream_handler(
                         usage.output_tokens as i64,
                     );
                 }
+                let artifact_count = artifacts_acc.lock().map(|g| g.len()).unwrap_or(0);
+                if chat_reply_is_empty(&reply, artifact_count) {
+                    tracing::warn!(
+                        model = %model_id_for_task, session = %session_id_for_task,
+                        iters, in_tokens = usage.input_tokens, out_tokens = usage.output_tokens,
+                        "chat EMPTY reply",
+                    );
+                } else {
+                    tracing::info!(
+                        model = %model_id_for_task, session = %session_id_for_task,
+                        iters, in_tokens = usage.input_tokens, out_tokens = usage.output_tokens,
+                        reply_len = reply.len(), artifacts = artifact_count,
+                        "chat done",
+                    );
+                }
                 let _ = tx_for_done.send(json!({
                     "type": "done", "ok": true, "iters": iters, "reply": reply,
                 }));
@@ -1988,12 +2023,21 @@ async fn session_stream_handler(
                         usage.output_tokens as i64,
                     );
                 }
+                tracing::warn!(
+                    model = %model_id_for_task, session = %session_id_for_task,
+                    iters, in_tokens = usage.input_tokens, out_tokens = usage.output_tokens,
+                    "chat budget exhausted",
+                );
                 let _ = tx_for_done.send(json!({
                     "type": "done", "ok": false, "iters": iters,
                     "reply": reply, "warning": "budget_exhausted",
                 }));
             }
             Err(e) => {
+                tracing::error!(
+                    model = %model_id_for_task, session = %session_id_for_task,
+                    error = %e, "chat run failed",
+                );
                 let _ = tx_for_done.send(json!({
                     "type": "error", "message": format!("agent: {e}"),
                 }));
@@ -3014,5 +3058,26 @@ impl axum::response::IntoResponse for ApiError {
             ApiError::Internal(s) => (StatusCode::INTERNAL_SERVER_ERROR, s),
         };
         (status, Json(json!({"error": msg}))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::chat_reply_is_empty;
+
+    #[test]
+    fn empty_reply_no_artifacts_is_empty() {
+        assert!(chat_reply_is_empty("", 0));
+        assert!(chat_reply_is_empty("   \n ", 0));
+    }
+
+    #[test]
+    fn empty_reply_with_artifact_is_not_empty() {
+        assert!(!chat_reply_is_empty("", 1));
+    }
+
+    #[test]
+    fn nonempty_reply_is_not_empty() {
+        assert!(!chat_reply_is_empty("hi", 0));
     }
 }
