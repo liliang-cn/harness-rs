@@ -1507,6 +1507,8 @@ pub(crate) fn open_db() -> Result<Db, ApiError> {
 /// channel so the SSE stream can show live progress.
 struct ChannelHook {
     tx: mpsc::UnboundedSender<Value>,
+    /// render_artifact specs seen this run, collected for persistence.
+    artifacts: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
 }
 
 impl Hook for ChannelHook {
@@ -1519,11 +1521,29 @@ impl Hook for ChannelHook {
     fn fire(&self, ev: &Event<'_>, _world: &mut CoreWorld) -> HookOutcome {
         let payload: Option<Value> = match ev {
             Event::Heartbeat { iter } => Some(json!({"type": "iter", "iter": iter})),
-            Event::PreToolUse { action } => Some(json!({
-                "type": "tool_start",
-                "name": action.tool,
-                "args": &action.args,
-            })),
+            Event::PreToolUse { action } => {
+                if action.tool == "render_artifact" {
+                    // Collect for persistence + emit a dedicated artifact event
+                    // (instead of a generic tool_start status chip).
+                    if let Ok(mut v) = self.artifacts.lock() {
+                        v.push(action.args.clone());
+                    }
+                    let mut ev = serde_json::Map::new();
+                    ev.insert("type".into(), json!("artifact"));
+                    if let Value::Object(args) = &action.args {
+                        for (k, val) in args {
+                            ev.insert(k.clone(), val.clone());
+                        }
+                    }
+                    Some(Value::Object(ev))
+                } else {
+                    Some(json!({
+                        "type": "tool_start",
+                        "name": action.tool,
+                        "args": &action.args,
+                    }))
+                }
+            }
             Event::PostToolUse { action, result } => {
                 let mut preview = result.content.clone();
                 let s = serde_json::to_string(&preview).unwrap_or_default();
@@ -1873,7 +1893,11 @@ async fn session_stream_handler(
         for t in all_tools {
             loop_ = loop_.with_tool(t);
         }
-        loop_ = loop_.with_hook(Arc::new(ChannelHook { tx: tx.clone() }));
+        let artifacts_acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        loop_ = loop_.with_hook(Arc::new(ChannelHook {
+            tx: tx.clone(),
+            artifacts: artifacts_acc.clone(),
+        }));
         let mut profile = s.profile.clone();
         profile.extra.insert("user_id".into(), serde_json::Value::String(user_id_for_task.clone()));
         profile.extra.insert("tier".into(), serde_json::Value::String(user_tier.clone()));
@@ -1901,6 +1925,10 @@ async fn session_stream_handler(
                 let reply = text.unwrap_or_default();
                 // Persist the assistant reply + update session model_id.
                 if let Ok(db) = open_db() {
+                    let artifacts_json = {
+                        let v = artifacts_acc.lock().map(|g| g.clone()).unwrap_or_default();
+                        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
+                    };
                     let _ = db.append_chat_message(
                         &user_id_for_task,
                         &session_id_for_task,
@@ -1908,7 +1936,7 @@ async fn session_stream_handler(
                         &reply,
                         Some(iters),
                         &[],
-                        None,
+                        artifacts_json.as_deref(),
                     );
                     let _ = db.update_chat_session_model(
                         &user_id_for_task,
@@ -1931,6 +1959,10 @@ async fn session_stream_handler(
             Ok(Outcome::BudgetExhausted { iters, last_text, usage, .. }) => {
                 let reply = last_text.unwrap_or_else(|| "(budget exhausted)".into());
                 if let Ok(db) = open_db() {
+                    let artifacts_json = {
+                        let v = artifacts_acc.lock().map(|g| g.clone()).unwrap_or_default();
+                        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
+                    };
                     let _ = db.append_chat_message(
                         &user_id_for_task,
                         &session_id_for_task,
@@ -1938,7 +1970,7 @@ async fn session_stream_handler(
                         &reply,
                         Some(iters),
                         &[],
-                        None,
+                        artifacts_json.as_deref(),
                     );
                     let _ = db.insert_audit(
                         Some(&user_id_for_task),
@@ -2018,7 +2050,10 @@ async fn chat_stream_handler(
         for t in all_tools {
             loop_ = loop_.with_tool(t);
         }
-        loop_ = loop_.with_hook(Arc::new(ChannelHook { tx: tx.clone() }));
+        loop_ = loop_.with_hook(Arc::new(ChannelHook {
+            tx: tx.clone(),
+            artifacts: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
         let mut profile = s.profile.clone();
         profile
             .extra

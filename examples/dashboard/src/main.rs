@@ -413,7 +413,23 @@ bullet list for queries. No preamble, no apologies. Use the user's currency.\n\
 19. CRITICAL HONESTY RULE (extended): For project + note writes, the same rule \
    applies: never claim \"已创建\" / \"已记录\" / \"saved\" unless you actually called \
    `create_project`, `add_milestones`, `update_project`, `log_project_review`, \
-   `create_note`, `update_note`, or `delete_note` in the CURRENT session.";
+   `create_note`, `update_note`, or `delete_note` in the CURRENT session.\n\
+\n\
+── Artifacts ──\n\
+20. **ARTIFACTS — rendering a data page:** When the user asks to see/visualise a \
+   project's progress (or any project data page), call the `render_artifact` tool. \
+   Steps: (1) resolve the project id with `list_projects` if you only have a name; \
+   (2) call `render_artifact` with a SHORT `title`, \
+   `data: { \"source\": \"project\", \"id\": <id> }`, and `code` = ONE \
+   self-contained React component named `App` that reads its data from the global \
+   `window.DATA`, shaped as:\n\
+     { project: {id,name,detail,status,target_date,created_at,parent_id,message_count},\n\
+       milestones: [{id,name,due_date,status,created_at}],\n\
+       reviews:    [{id,progress,next_steps,created_at,next_review_date}] }\n\
+   Do NOT fetch data inside the component — it is injected. Do NOT import React for \
+   JSX (automatic runtime). You MAY `import { useState } from 'react'` and import \
+   charts from `recharts` (e.g. LineChart/Line/XAxis/YAxis/Tooltip). Keep it ONE \
+   file, dependency-light. After the tool returns, write a one-line confirmation.";
 
 const BRIEF_PROMPT: &str = "\
 Compose my monthly money brief. Steps:\n\
