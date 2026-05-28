@@ -230,6 +230,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       let buf = '';
       let finalReply = '';
       let gotDone = false;
+      const artifactsAcc: import('@/lib/artifact').ArtifactSpec[] = [];
 
       await streamSession(
         sessionId,
@@ -241,6 +242,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
             case 'delta':
               buf += ev.text;
               setStreaming(buf);
+              break;
+            case 'artifact':
+              artifactsAcc.push(ev.spec);
               break;
             case 'tool_start':
               setToolEvents((cur) => [
@@ -294,6 +298,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
           text: replyText,
           created_at: new Date().toISOString(),
           truncated: wasAborted || !gotDone,
+          artifacts: artifactsAcc,
         };
         setMessages((cur) => [...cur, assistant]);
       }

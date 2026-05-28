@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, AlertCircle, FileText, RotateCw } from 'lucide-react';
 import type { ChatMessage } from '@/lib/api';
 import { fetchAttachmentBlob } from '@/lib/api';
+import { ArtifactCard } from '@/components/chat/artifact-card';
+import type { ArtifactSpec } from '@/lib/artifact';
 import { renderMarkdown } from '@/lib/markdown';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -62,6 +64,7 @@ export function MessageList({
             attachmentIds={m.attachment_ids}
             truncated={m.truncated}
             onReload={onReload}
+            artifacts={m.artifacts}
           />
         ))}
         {streaming !== null && (
@@ -86,6 +89,7 @@ function Bubble({
   attachmentIds,
   truncated,
   onReload,
+  artifacts,
 }: {
   role: string;
   text: string;
@@ -93,6 +97,7 @@ function Bubble({
   attachmentIds?: string[];
   truncated?: boolean;
   onReload?: () => void;
+  artifacts?: ArtifactSpec[];
 }) {
   const { t } = useTranslation();
   const isUser = role === 'user';
@@ -146,6 +151,13 @@ function Bubble({
               {t('chat.reload', { defaultValue: 'Reload' })}
             </Button>
           )}
+        </div>
+      )}
+      {(artifacts?.length ?? 0) > 0 && (
+        <div className="w-full">
+          {artifacts!.map((a, i) => (
+            <ArtifactCard key={i} spec={a} />
+          ))}
         </div>
       )}
     </div>
