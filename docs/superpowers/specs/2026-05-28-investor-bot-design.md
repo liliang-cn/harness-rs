@@ -42,9 +42,19 @@ startup-cron pattern in `main.rs:883`) produces ONE shared snapshot per day:
   structured-output mode in one call** — so we ground as text, then structure
   separately.
 
-Cached as one row under key `macro:snapshot` (JSON value in `quote_cache`,
-`fetched_at` = now). TTL ~24h; the cron refreshes it; a stale read still serves
-the last good value.
+**Persisted (not just TTL-cached)** so the data is durable + queryable from chat,
+and so daily rows **accumulate a real history over time**. New table:
+
+```sql
+CREATE TABLE IF NOT EXISTS macro_snapshots (
+    snapshot_date TEXT PRIMARY KEY,   -- 'YYYY-MM-DD' (one row/day)
+    json          TEXT NOT NULL,      -- serialized MacroSnapshot
+    created_at    TEXT NOT NULL
+);
+```
+The cron upserts today's row; the panel + chat tool read the latest row. "Stale"
+= today's row missing (the cron, or a `GET` fallback, fills it). Old rows are
+kept (cheap; future trend views can read the series).
 
 ```rust
 struct MacroSnapshot {
@@ -66,8 +76,23 @@ net worth (`latest_net_worth_snapshot`, db.rs:655) → a short markdown advice
 per user.**
 
 ### Endpoint
-- `GET /api/macro/brief` → returns `MacroBrief { snapshot: MacroSnapshot, advice_md: String, advice_as_of: String }`. Generates/caches the per-user advice if stale; serves cached snapshot. If no snapshot exists yet (first boot before the cron ran), trigger Pass A+B inline once (and cache).
+- `GET /api/macro/brief` → returns `MacroBrief { snapshot: MacroSnapshot, advice_md: String, advice_as_of: String }`. Reads the latest `macro_snapshots` row; generates/caches the per-user advice if stale. If no snapshot row exists yet (first boot before the cron ran), trigger Pass A+B inline once (and persist).
 - `POST /api/macro/brief/refresh` → force a re-run of the snapshot (if stale) + this user's advice. Backs the panel's 刷新 button.
+
+### Layer 3 — Chat access (read the saved data)
+A read-only agent tool `get_macro_brief` returns the **latest saved**
+`MacroSnapshot` (indicators + smart_money + sources + as_of) from
+`macro_snapshots`, so chat questions — "现在 CPI 多少？", "Buffett 最近的持仓变化？",
+"给我宏观投资建议" — are answered from the **saved daily data** (cheap, consistent
+with the panel) instead of re-grounding every time. The agent still has its own
+Gemini grounding for follow-ups, but `get_macro_brief` is the cheap default for
+"what's the current macro picture."
+- Optional arg `date?` to fetch a specific past day's row (history is accumulating).
+- **Must be added to the `TOOL_NAMES` allowlist in `main.rs`** — registering the
+  `#[harness::tool]` is not enough; `collect_tools()` (main.rs) filters by
+  `TOOL_NAMES`, so an unlisted tool never reaches the model (this bit us before —
+  the whole project/note/render_artifact set was missing from it). The SYSTEM_PROMPT gets a line:
+  for macro/market/Buffett/"投资建议" questions, call `get_macro_brief` first.
 
 ### Models
 Grounded research (Pass A) **must** use Gemini (search grounding). Structuring
@@ -87,8 +112,11 @@ the server default) — no grounding needed there.
 ## Reuse map
 - Gemini grounded call shape + key resolution: `quotes.rs` (`gemini_grounded_price`,
   `gemini_api_key`). Adapt to free-form text + JSON.
-- Cache: `Db::get_cached_quote` / `put_cached_quote` (db.rs:432/450), JSON in the
-  `price`/value column.
+- Snapshot persistence: new `macro_snapshots` table (one row/day) + `Db` helpers
+  `latest_macro_snapshot()` / `get_macro_snapshot(date)` / `put_macro_snapshot(date, json)`.
+- Per-user advice cache: `Db::get_cached_quote`/`put_cached_quote` (db.rs:432/450),
+  key `macro:advice:<uid>`, 1-day TTL (advice is ephemeral; no need to persist long-term).
+- Tool registration: new `get_macro_brief` in `tools.rs` **and** in `TOOL_NAMES` (main.rs).
 - Cron: the startup-cron pattern (`main.rs:883`).
 - Typed output for `MacroSnapshot` structuring: the `BriefReport` /
   `run_typed_with_max_iters` pattern (server.rs:1374) — or a tolerant manual JSON
@@ -104,15 +132,19 @@ the server default) — no grounding needed there.
 - All `quote_cache` writes are best-effort (`let _ =`).
 
 ## Testing
-- `cargo test -p dashboard`: `MacroSnapshot`/`MacroBrief` (de)serialize; cache
-  round-trip + TTL staleness; a pure `build_advice_prompt(snapshot, positions,
-  net_worth) -> String` helper (asserts it includes the holdings + key numbers).
+- `cargo test -p dashboard`: `MacroSnapshot`/`MacroBrief` (de)serialize;
+  `put_macro_snapshot` → `latest_macro_snapshot`/`get_macro_snapshot(date)`
+  round-trip; per-user advice cache TTL staleness; a pure
+  `build_advice_prompt(snapshot, positions, net_worth) -> String` helper (asserts
+  it includes the holdings + key numbers).
 - Manual (real keys): run the snapshot cron once → `GET /api/macro/brief` returns
   indicators + smart-money; open the dashboard home → panel renders; 刷新 re-runs;
-  confirm a second user reuses the same snapshot (no re-grounding).
+  a second user reuses the same snapshot (no re-grounding); in chat, ask "现在
+  CPI 多少？" → agent calls `get_macro_brief` and answers from saved data.
 
 ## Non-goals
-- No historical charts / time-series (grounding can't do reliable history).
+- No historical **charts** in v1 (but saved daily snapshots accumulate a real
+  series, so trend charts become possible later without grounding).
 - No per-visit live regeneration; no proactive push/notifications.
 - No trade execution; no external macro/data-vendor API.
 - Advice is daily-cached per user, not real-time.
