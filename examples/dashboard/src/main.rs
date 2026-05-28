@@ -445,7 +445,13 @@ bullet list for queries. No preamble, no apologies. Use the user's currency.\n\
    Do NOT fetch data inside the component — it is injected. Do NOT import React for \
    JSX (automatic runtime). You MAY `import { useState } from 'react'` and import \
    charts from `recharts` (e.g. LineChart/Line/XAxis/YAxis/Tooltip). Keep it ONE \
-   file, dependency-light. After the tool returns, write a one-line confirmation.";
+   file, dependency-light. After the tool returns, write a one-line confirmation.\n\
+   For INVESTMENTS / 资产配置 / 净值走势, call `render_artifact` with \
+   `data: { \"source\": \"portfolio\" }` (NO id) and a component reading `window.DATA`:\n\
+     { positions:[{symbol,qty,avg_cost,market_value,unrealized_pl,currency,asset_class}],\n\
+       assets:[…], trades:[…], summary:{…by currency/class…}, allocation:{…},\n\
+       netWorth:{…current snapshot…}, netWorthSeries:[{…history…}] }\n\
+   Use recharts for an allocation pie / net-worth line. Numbers may be strings.";
 
 const BRIEF_PROMPT: &str = "\
 Compose my monthly money brief. Steps:\n\

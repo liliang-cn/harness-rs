@@ -1937,10 +1937,10 @@ async fn delete_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         "data": {
           "type": "object",
           "properties": {
-            "source": { "type": "string", "enum": ["project"], "description": "Data source; only 'project' is supported" },
-            "id": { "type": "string", "description": "The project id to bind" }
+            "source": { "type": "string", "enum": ["project", "portfolio"], "description": "Data source: 'project' (needs id) or 'portfolio' (the user's whole portfolio, no id)" },
+            "id": { "type": "string", "description": "The project id to bind — required when source=project" }
           },
-          "required": ["source", "id"]
+          "required": ["source"]
         },
         "code": { "type": "string", "description": "ONE self-contained React component named App that reads window.DATA. No React import needed (automatic JSX runtime). You may import from 'recharts' and 'react'." }
       },
@@ -1954,29 +1954,43 @@ async fn render_artifact(args: Value, w: &mut World) -> Result<ToolResult, ToolE
     let source = data.get("source").and_then(|v| v.as_str()).unwrap_or("");
     let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
-    if source != "project" {
+    if title.is_empty() || code.is_empty() {
         return Err(ToolError::InvalidArgs {
             name: "render_artifact".into(),
-            reason: format!("unsupported data source `{source}` (only `project` in Phase 1)"),
+            reason: "title and code are required".into(),
         });
     }
-    if title.is_empty() || code.is_empty() || id.is_empty() {
-        return Err(ToolError::InvalidArgs {
-            name: "render_artifact".into(),
-            reason: "title, code, and data.id are required".into(),
-        });
-    }
-    let db = open_db()?;
-    let uid = uid_of(w)?;
-    if db
-        .get_project(&uid, id)
-        .map_err(|e| ToolError::Exec(format!("get_project: {e}")))?
-        .is_none()
-    {
-        return Err(ToolError::InvalidArgs {
-            name: "render_artifact".into(),
-            reason: format!("project `{id}` not found"),
-        });
+    match source {
+        "project" => {
+            if id.is_empty() {
+                return Err(ToolError::InvalidArgs {
+                    name: "render_artifact".into(),
+                    reason: "data.id is required when source = project".into(),
+                });
+            }
+            let db = open_db()?;
+            let uid = uid_of(w)?;
+            if db
+                .get_project(&uid, id)
+                .map_err(|e| ToolError::Exec(format!("get_project: {e}")))?
+                .is_none()
+            {
+                return Err(ToolError::InvalidArgs {
+                    name: "render_artifact".into(),
+                    reason: format!("project `{id}` not found"),
+                });
+            }
+        }
+        "portfolio" => {
+            // The user's whole portfolio; the client fetches it with their own
+            // token. Nothing to validate here.
+        }
+        other => {
+            return Err(ToolError::InvalidArgs {
+                name: "render_artifact".into(),
+                reason: format!("unsupported data source `{other}`"),
+            });
+        }
     }
     Ok(ToolResult {
         ok: true,
