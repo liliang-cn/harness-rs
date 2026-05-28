@@ -423,9 +423,11 @@ bullet list for queries. No preamble, no apologies. Use the user's currency.\n\
    `data: { \"source\": \"project\", \"id\": <id> }`, and `code` = ONE \
    self-contained React component named `App` that reads its data from the global \
    `window.DATA`, shaped as:\n\
-     { project: {id,name,detail,status,target_date,created_at,parent_id,message_count},\n\
-       milestones: [{id,name,due_date,status,created_at}],\n\
-       reviews:    [{id,progress,next_steps,created_at,next_review_date}] }\n\
+     { project: {id,name,detail,status,target_date,created_at},\n\
+       milestones: [{id,name,status,target_date,created_at}],  (each is a child project)\n\
+       reviews:    [{id,progress,next_steps,created_at}] }\n\
+   status is one of 'active'|'paused'|'done'|'dropped'; dates are ISO strings \
+   (may be null). Use only these fields.\n\
    Do NOT fetch data inside the component — it is injected. Do NOT import React for \
    JSX (automatic runtime). You MAY `import { useState } from 'react'` and import \
    charts from `recharts` (e.g. LineChart/Line/XAxis/YAxis/Tooltip). Keep it ONE \
