@@ -44,11 +44,18 @@ export function ArtifactView({ spec, open, onOpenChange }: Props) {
   }, [open, load]);
 
   // Receive ready/error signals from the sandbox; inject data on ready.
+  // Re-subscribes when `data` changes so the handler always posts the freshest
+  // value. On Refresh, React batches setData+setSrcdoc+setStatus into one
+  // commit, so this listener is reattached before the new iframe's scripts run
+  // and fire `artifact-ready`.
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.source !== iframeRef.current?.contentWindow) return;
       const m = e.data;
       if (m?.type === 'artifact-ready') {
+        if (data === null) return; // data not loaded yet — a re-subscribe will deliver it
+        // An opaque-origin srcdoc iframe can't be targeted by origin, so '*' is
+        // the only option; safe here — the sandbox holds no credentials.
         iframeRef.current?.contentWindow?.postMessage({ type: 'artifact-data', data }, '*');
       } else if (m?.type === 'artifact-error') {
         setErrorMsg(String(m.message));
