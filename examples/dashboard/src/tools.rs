@@ -1970,7 +1970,7 @@ async fn render_artifact(args: Value, w: &mut World) -> Result<ToolResult, ToolE
     let uid = uid_of(w)?;
     if db
         .get_project(&uid, id)
-        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .map_err(|e| ToolError::Exec(format!("get_project: {e}")))?
         .is_none()
     {
         return Err(ToolError::InvalidArgs {
