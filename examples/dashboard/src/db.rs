@@ -404,6 +404,9 @@ impl Db {
         // message. Stored as text so it round-trips through SQLite without
         // a JSON column type. Nullable for messages that predate this column.
         self.ensure_column("chat_messages", "attachment_ids", "TEXT")?;
+        // JSON array of render_artifact specs the assistant emitted. NULL for
+        // turns/rows without artifacts.
+        self.ensure_column("chat_messages", "artifacts", "TEXT")?;
         Ok(())
     }
 
@@ -1850,7 +1853,7 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, role, text, iters, created_at, attachment_ids
+            "SELECT id, session_id, role, text, iters, created_at, attachment_ids, artifacts
              FROM chat_messages
              WHERE user_id = ?1 AND session_id = ?2
              ORDER BY created_at ASC
@@ -1865,6 +1868,10 @@ impl Db {
                     Some(s) => serde_json::from_str(&s).unwrap_or_default(),
                     None => Vec::new(),
                 };
+                let artifacts: serde_json::Value = match r.get::<_, Option<String>>(7)? {
+                    Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Array(vec![])),
+                    None => serde_json::Value::Array(vec![]),
+                };
                 Ok(ChatMessage {
                     id: r.get(0)?,
                     session_id: r.get(1)?,
@@ -1873,6 +1880,7 @@ impl Db {
                     iters: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
                     created_at: parse_rfc3339(&created_s),
                     attachment_ids: att,
+                    artifacts,
                 })
             },
         )?;
@@ -1890,6 +1898,7 @@ impl Db {
         text: &str,
         iters: Option<u32>,
         attachment_ids: &[String],
+        artifacts: Option<&str>,
     ) -> SqlResult<String> {
         use uuid::Uuid;
         let id = Uuid::new_v4().to_string()[..8].to_string();
@@ -1901,9 +1910,9 @@ impl Db {
         };
         self.conn.execute(
             "INSERT INTO chat_messages(
-                id, session_id, user_id, role, text, iters, created_at, attachment_ids
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now, att_json],
+                id, session_id, user_id, role, text, iters, created_at, attachment_ids, artifacts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now, att_json, artifacts],
         )?;
         self.conn.execute(
             "UPDATE chat_sessions
@@ -3076,5 +3085,23 @@ mod tests {
             .unwrap();
         assert_eq!(only_dining.len(), 1);
         assert_eq!(only_dining[0].category.as_deref(), Some("餐饮"));
+    }
+
+    #[test]
+    fn chat_message_artifacts_round_trip() {
+        // FK constraints are not enforced (no PRAGMA foreign_keys), so a bare
+        // session row is enough — no user row needed.
+        let db = Db::open_in_memory().unwrap();
+        let uid = "u_test";
+        let sid = "s_test";
+        db.create_chat_session(uid, sid, None).unwrap();
+        let spec = r#"[{"title":"T","data":{"source":"project","id":"p1"},"code":"function App(){return null}"}]"#;
+        db.append_chat_message(uid, sid, "asst", "hi", Some(1), &[], Some(spec)).unwrap();
+        let msgs = db.get_chat_messages(uid, sid, 10).unwrap();
+        let last = msgs.last().unwrap();
+        assert_eq!(
+            last.artifacts,
+            serde_json::from_str::<serde_json::Value>(spec).unwrap()
+        );
     }
 }
