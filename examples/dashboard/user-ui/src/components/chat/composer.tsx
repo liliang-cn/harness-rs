@@ -10,6 +10,9 @@ interface ComposerProps {
   onSend: (text: string, attachment_ids: string[]) => void;
   onStop?: () => void;
   busy: boolean;
+  /** Set by openChatWith() (via ChatSheet) to seed the textarea. A fresh
+   *  object each call so repeated prefills — even identical text — re-apply. */
+  prefill?: { text: string } | null;
 }
 
 const MAX_ATTACHMENTS = 3;
@@ -40,9 +43,14 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-export function Composer({ onSend, onStop, busy }: ComposerProps) {
+export function Composer({ onSend, onStop, busy, prefill }: ComposerProps) {
   const { t, i18n } = useTranslation();
   const [text, setText] = useState('');
+
+  // Seed the textarea when another page opens the chat via openChatWith().
+  useEffect(() => {
+    if (prefill?.text) setText(prefill.text);
+  }, [prefill]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [listening, setListening] = useState(false);
   const recogRef = useRef<SpeechRecognition | null>(null);

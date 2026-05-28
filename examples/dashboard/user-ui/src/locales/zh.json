@@ -38,7 +38,9 @@
   },
   "nav": {
     "dashboard": "仪表盘",
+    "finance": "财务",
     "money": "收支",
+    "investments": "投资",
     "project": "项目",
     "profile": "我的",
     "ledger": "收支",
