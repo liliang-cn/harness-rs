@@ -26,7 +26,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
@@ -1508,7 +1508,7 @@ pub(crate) fn open_db() -> Result<Db, ApiError> {
 struct ChannelHook {
     tx: mpsc::UnboundedSender<Value>,
     /// render_artifact specs seen this run, collected for persistence.
-    artifacts: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    artifacts: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Hook for ChannelHook {
@@ -1528,14 +1528,15 @@ impl Hook for ChannelHook {
                     if let Ok(mut v) = self.artifacts.lock() {
                         v.push(action.args.clone());
                     }
-                    let mut ev = serde_json::Map::new();
-                    ev.insert("type".into(), json!("artifact"));
+                    let mut obj = serde_json::Map::new();
                     if let Value::Object(args) = &action.args {
                         for (k, val) in args {
-                            ev.insert(k.clone(), val.clone());
+                            obj.insert(k.clone(), val.clone());
                         }
                     }
-                    Some(Value::Object(ev))
+                    // Set type last so tool args can never clobber it.
+                    obj.insert("type".into(), json!("artifact"));
+                    Some(Value::Object(obj))
                 } else {
                     Some(json!({
                         "type": "tool_start",
@@ -1893,7 +1894,7 @@ async fn session_stream_handler(
         for t in all_tools {
             loop_ = loop_.with_tool(t);
         }
-        let artifacts_acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let artifacts_acc = Arc::new(Mutex::new(Vec::<Value>::new()));
         loop_ = loop_.with_hook(Arc::new(ChannelHook {
             tx: tx.clone(),
             artifacts: artifacts_acc.clone(),
@@ -2052,7 +2053,8 @@ async fn chat_stream_handler(
         }
         loop_ = loop_.with_hook(Arc::new(ChannelHook {
             tx: tx.clone(),
-            artifacts: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            // Legacy handler: artifacts are not persisted here.
+            artifacts: Arc::new(Mutex::new(Vec::new())),
         }));
         let mut profile = s.profile.clone();
         profile
