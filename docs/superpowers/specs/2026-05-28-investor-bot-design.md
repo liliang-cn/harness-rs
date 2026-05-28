@@ -1,7 +1,23 @@
 # Investor bot — "Market & Advice" panel (Spec 2)
 
 **Date:** 2026-05-28
-**Status:** design approved, pending spec review
+**Status:** ⛔ **SHELVED at spec review (2026-05-28) — YAGNI.** Not building this.
+
+> **Decision:** the chat agent already has Gemini **search grounding**, so it can
+> answer macro/investment questions ("给我宏观投资建议", "现在 CPI?", "Buffett 最近
+> 持仓?") **live, today, with zero new code**. The entire subsystem below (daily
+> cron + grounded research + structuring pass + `macro_snapshots` table +
+> per-user advice cache + dashboard panel + `get_macro_brief` tool) exists only
+> to make it **proactive** (an always-on home panel) and to save tokens/accumulate
+> history. We decided that **reactive (just ask in chat, live-grounded)** is
+> enough for now. This doc is kept as the rationale for *not* building it, and as
+> a ready design if we later want the proactive home panel.
+>
+> **What we'll do instead (minimal):** optionally a one-line SYSTEM_PROMPT nudge so
+> the agent reliably grounds for macro/investment questions + factors in the
+> user's portfolio, and a "今日宏观建议" chat-prefill button (reuses `openChatWith`).
+> No backend, no cron, no tables.
+
 **Part of:** the Dashboard product. Integrates into the dashboard **home** (`/app`).
 Builds on the AI-artifact work only loosely — this is a **fixed panel**, not an
 ad-hoc artifact.
