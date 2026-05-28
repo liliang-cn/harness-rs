@@ -455,6 +455,7 @@ export const ledgerApi = {
       by_class: { class: string; value: number; pct: number }[];
       missing_rate_for: string[];
     }>('/api/portfolio/allocation'),
+  summary: () => api<Record<string, unknown>>('/api/portfolio/summary'),
   monthlyReport: (year?: number, month?: number) => {
     const p = new URLSearchParams();
     if (year !== undefined) p.set('year', String(year));
