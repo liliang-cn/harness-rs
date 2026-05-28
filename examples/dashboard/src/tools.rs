@@ -1922,3 +1922,65 @@ async fn delete_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
         trace: None,
     })
 }
+
+/// Render a data-bound React page to the user. Does no server-side rendering —
+/// it validates the request and acks; the client fetches the declared data and
+/// renders `code` in a sandboxed iframe. The ChannelHook turns this call into
+/// an `artifact` SSE event (see server.rs).
+#[harness::tool(
+    name = "render_artifact",
+    risk = "read-only",
+    schema = r#"{
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Short title shown on the artifact card" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "enum": ["project"], "description": "Data source; only 'project' is supported" },
+            "id": { "type": "string", "description": "The project id to bind" }
+          },
+          "required": ["source", "id"]
+        },
+        "code": { "type": "string", "description": "ONE self-contained React component named App that reads window.DATA. No React import needed (automatic JSX runtime). You may import from 'recharts' and 'react'." }
+      },
+      "required": ["title", "data", "code"]
+    }"#
+)]
+async fn render_artifact(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
+    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let code = args.get("code").and_then(|v| v.as_str()).unwrap_or("");
+    let data = args.get("data").cloned().unwrap_or(Value::Null);
+    let source = data.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if source != "project" {
+        return Err(ToolError::InvalidArgs {
+            name: "render_artifact".into(),
+            reason: format!("unsupported data source `{source}` (only `project` in Phase 1)"),
+        });
+    }
+    if title.is_empty() || code.is_empty() || id.is_empty() {
+        return Err(ToolError::InvalidArgs {
+            name: "render_artifact".into(),
+            reason: "title, code, and data.id are required".into(),
+        });
+    }
+    let db = open_db()?;
+    let uid = uid_of(w)?;
+    if db
+        .get_project(&uid, id)
+        .map_err(|e| ToolError::Exec(e.to_string()))?
+        .is_none()
+    {
+        return Err(ToolError::InvalidArgs {
+            name: "render_artifact".into(),
+            reason: format!("project `{id}` not found"),
+        });
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "ok": true, "note": "artifact shown to the user" }),
+        trace: None,
+    })
+}
