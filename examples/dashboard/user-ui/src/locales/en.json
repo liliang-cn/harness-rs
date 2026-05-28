@@ -135,6 +135,7 @@
   },
   "chat": {
     "fab": "Chat with AI",
+    "model": "Model",
     "title": "Chat",
     "newChat": "New chat",
     "back": "Back to sessions",

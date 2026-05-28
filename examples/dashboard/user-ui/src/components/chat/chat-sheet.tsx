@@ -18,6 +18,7 @@ import { SessionsList } from './sessions-list';
 import { MessageList, type ToolEvent } from './message-list';
 import { Composer } from './composer';
 import { streamSession } from './stream';
+import { ChatModelSelect } from './chat-model-select';
 import { subscribeChatPrefill } from '@/lib/chat-prefill';
 
 interface ChatSheetProps {
@@ -53,6 +54,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   // Set by openChatWith() (other pages) to seed the composer. New object per
   // call so the Composer's effect re-fires even for identical text.
   const [prefill, setPrefill] = useState<{ text: string } | null>(null);
+  // Per-conversation model override (null → server default). Synced from the
+  // session on load; sent with each message and persisted server-side.
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const toolIdRef = useRef(0);
   // Set when handleSend just lazy-created the session — we already know
@@ -67,6 +71,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
     try {
       const j = await ledgerApi.getChatSession(id);
       setSession(j.session);
+      setSelectedModel(j.session.model_id ?? null);
       setMessages(j.messages);
       // Mark all messages as "seen" for the unread badge (Fix 3).
       try {
@@ -101,6 +106,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       .then((j) => {
         if (cancelled) return;
         setSession(j.session);
+        setSelectedModel(j.session.model_id ?? null);
         setMessages(j.messages);
         try {
           const raw = localStorage.getItem('chat-seen-count') ?? '{}';
@@ -165,6 +171,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   const handleNew = useCallback(() => {
     setActiveId(null);
     setSession(null);
+    setSelectedModel(null);
     setMessages([]);
     setStreaming(null);
     setToolEvents([]);
@@ -281,6 +288,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
         ctrl.signal,
         i18n.language,
         attachment_ids,
+        selectedModel ?? undefined,
       );
 
       // Commit the assistant message. Use server-provided `reply` if non-empty
@@ -314,7 +322,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       // Refresh sessions list (message_count + updated_at moved).
       setSessionsKey((k) => k + 1);
     },
-    [activeId, busy, t, i18n.language],
+    [activeId, busy, t, i18n.language, selectedModel],
   );
 
   /** Drop the trailing assistant turn (if any) and re-run the last user
@@ -378,6 +386,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
               ? t('chat.title')
               : session?.title?.trim() || t('chat.untitled')}
           </div>
+          {!showSessions && (
+            <ChatModelSelect value={selectedModel} onChange={setSelectedModel} />
+          )}
           {!showSessions && (
             <Button
               variant="ghost"
