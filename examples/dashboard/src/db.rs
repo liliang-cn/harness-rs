@@ -1868,9 +1868,10 @@ impl Db {
                     Some(s) => serde_json::from_str(&s).unwrap_or_default(),
                     None => Vec::new(),
                 };
-                let artifacts: serde_json::Value = match r.get::<_, Option<String>>(7)? {
-                    Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Array(vec![])),
-                    None => serde_json::Value::Array(vec![]),
+                // artifacts is a JSON array text; older rows have NULL.
+                let artifacts: Vec<serde_json::Value> = match r.get::<_, Option<String>>(7)? {
+                    Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+                    None => Vec::new(),
                 };
                 Ok(ChatMessage {
                     id: r.get(0)?,
@@ -3101,7 +3102,7 @@ mod tests {
         let last = msgs.last().unwrap();
         assert_eq!(
             last.artifacts,
-            serde_json::from_str::<serde_json::Value>(spec).unwrap()
+            serde_json::from_str::<Vec<serde_json::Value>>(spec).unwrap()
         );
     }
 }
