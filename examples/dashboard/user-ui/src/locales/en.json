@@ -38,7 +38,9 @@
   },
   "nav": {
     "dashboard": "Dashboard",
+    "finance": "Finance",
     "money": "Income & Cost",
+    "investments": "Investments",
     "project": "Projects",
     "profile": "Profile",
     "ledger": "Income & Cost",

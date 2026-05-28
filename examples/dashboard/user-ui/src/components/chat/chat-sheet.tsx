@@ -18,6 +18,7 @@ import { SessionsList } from './sessions-list';
 import { MessageList, type ToolEvent } from './message-list';
 import { Composer } from './composer';
 import { streamSession } from './stream';
+import { subscribeChatPrefill } from '@/lib/chat-prefill';
 
 interface ChatSheetProps {
   open: boolean;
@@ -49,6 +50,9 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
   // We hold off on creating the DB session until the first real message
   // arrives, so empty FAB-clicks don't leave 0-message rows behind.
   const [drafting, setDrafting] = useState(false);
+  // Set by openChatWith() (other pages) to seed the composer. New object per
+  // call so the Composer's effect re-fires even for identical text.
+  const [prefill, setPrefill] = useState<{ text: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const toolIdRef = useRef(0);
   // Set when handleSend just lazy-created the session — we already know
@@ -124,8 +128,24 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
       abortRef.current?.abort();
       abortRef.current = null;
       setDrafting(false);
+      setPrefill(null);
     }
   }, [open]);
+
+  // Other pages call openChatWith(text) to pop the chat open with the
+  // composer pre-filled (e.g. "Add project", "Review"). Subscribe here so
+  // those clicks actually open the sheet and seed a fresh draft.
+  useEffect(() => {
+    return subscribeChatPrefill((text) => {
+      setActiveId(null);
+      setMessages([]);
+      setStreaming(null);
+      setToolEvents([]);
+      setDrafting(true);
+      setPrefill({ text });
+      onOpenChange(true);
+    });
+  }, [onOpenChange]);
 
   // Fix 1: when the sheet re-opens while a session is already active,
   // refresh from the server. Covers the case where the user closed
@@ -401,7 +421,7 @@ export function ChatSheet({ open, onOpenChange }: ChatSheetProps) {
                 </Button>
               </div>
             )}
-            <Composer onSend={handleSend} onStop={handleStop} busy={busy} />
+            <Composer onSend={handleSend} onStop={handleStop} busy={busy} prefill={prefill} />
           </>
         )}
       </SheetContent>
