@@ -168,6 +168,11 @@ pub struct ChatMessage {
     /// for assistant turns and for messages predating the feature.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_ids: Vec<String>,
+    /// Artifacts the assistant emitted in this turn (render_artifact tool
+    /// args). JSON array; empty for turns without artifacts. Stored so the
+    /// chat re-hydrates artifact cards on reload.
+    #[serde(default)]
+    pub artifacts: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1761,6 +1761,7 @@ async fn session_stream_handler(
         &req.message,
         None,
         &req.attachment_ids,
+        None,
     )
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -1907,6 +1908,7 @@ async fn session_stream_handler(
                         &reply,
                         Some(iters),
                         &[],
+                        None,
                     );
                     let _ = db.update_chat_session_model(
                         &user_id_for_task,
@@ -1936,6 +1938,7 @@ async fn session_stream_handler(
                         &reply,
                         Some(iters),
                         &[],
+                        None,
                     );
                     let _ = db.insert_audit(
                         Some(&user_id_for_task),
