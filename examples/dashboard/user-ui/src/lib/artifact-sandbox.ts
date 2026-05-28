@@ -26,7 +26,9 @@ export function transpile(code: string): string {
  *  origin: it cannot read the parent DOM, localStorage, cookies, or call
  *  same-origin APIs. Data arrives only via postMessage({type:'artifact-data', data}). */
 export function buildSrcdoc(code: string): string {
-  const compiled = transpile(code);
+  // Neutralise any literal </script> in the user code so it can't terminate
+  // the host <script> block early (corrupts the module / breaks parsing).
+  const compiled = transpile(code).replace(/<\/script>/gi, '<\\/script>');
   return `<!doctype html>
 <html>
 <head>
@@ -51,14 +53,19 @@ window.App = (typeof App !== 'undefined') ? App : (window.App || null);
   window.onerror = (msg) => post({ type: 'artifact-error', message: String(msg) });
   const root = createRoot(document.getElementById('root'));
   function mount() {
+    const C = window.App;
+    if (!C) {
+      post({ type: 'artifact-error', message: 'No component named App was defined.' });
+      return;
+    }
     try {
-      const C = window.App;
-      root.render(C ? React.createElement(C) : null);
+      root.render(React.createElement(C));
     } catch (e) {
       post({ type: 'artifact-error', message: String((e && e.stack) || e) });
     }
   }
   window.addEventListener('message', (e) => {
+    if (e.source !== window.parent) return;
     if (e.data && e.data.type === 'artifact-data') {
       window.DATA = e.data.data;
       mount();
