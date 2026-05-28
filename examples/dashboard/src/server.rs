@@ -1765,6 +1765,10 @@ struct SessionStreamReq {
     /// the `extract_receipt` tool can resolve them.
     #[serde(default)]
     attachment_ids: Vec<String>,
+    /// Per-conversation model override (paid/admin only). Used for this turn and
+    /// persisted to the session so the chat remembers it. Ignored for trial users.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// Per-session streaming chat handler — replaces the old session-less
@@ -1785,8 +1789,9 @@ async fn session_stream_handler(
     let _ = SYSTEM_PROMPT;
 
     let db = open_db()?;
-    // Validate the session belongs to the user before doing any work.
-    let _ = db
+    // Validate the session belongs to the user before doing any work. Keep it —
+    // its `model_id` is the per-conversation model override.
+    let session = db
         .get_chat_session(&auth.user.id, &session_id)
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::BadRequest(format!("no session `{session_id}`")))?;
@@ -1826,7 +1831,22 @@ async fn session_stream_handler(
 
     let user_id = auth.user.id.clone();
     let user_tier = auth.user.tier.clone();
-    let model_id = s.effective_model_for(&auth.user);
+    // Per-conversation model: a paid/admin user may pick a model for this chat
+    // (sent in the request, or remembered on the session). Trial users always
+    // get the global default — `effective_model_for` enforces it, and we also
+    // ignore the override here. The chosen model is persisted to the session
+    // (update_chat_session_model in the Done arm), so the chat remembers it.
+    let model_id = {
+        let is_paid = user_tier != "trial";
+        let cfg = s.cfg();
+        let ok = |m: &str| cfg.available_models.iter().any(|x| x.id == m && x.available);
+        req.model
+            .as_deref()
+            .filter(|m| is_paid && ok(m))
+            .or_else(|| session.model_id.as_deref().filter(|m| is_paid && ok(m)))
+            .map(str::to_string)
+            .unwrap_or_else(|| s.effective_model_for(&auth.user))
+    };
     let tx_for_done = tx.clone();
     let session_id_for_task = session_id.clone();
     let user_id_for_task = user_id.clone();
