@@ -127,6 +127,11 @@
       "other": "其他"
     }
   },
+  "artifact": {
+    "open": "打开",
+    "refresh": "刷新",
+    "error": "无法渲染此页面"
+  },
   "chat": {
     "fab": "和 AI 聊聊",
     "title": "聊天",

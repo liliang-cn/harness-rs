@@ -17,6 +17,7 @@
 // dropped (purely diagnostic). `thought` is treated like a delta so the
 // non-streaming code path still appears live.
 import { getToken } from '@/lib/api';
+import { asArtifactSpec } from '@/lib/artifact';
 
 export type StreamEvent =
   | { type: 'start' }
@@ -24,7 +25,8 @@ export type StreamEvent =
   | { type: 'tool_start'; name: string }
   | { type: 'tool_end'; name: string; ok: boolean }
   | { type: 'done'; ok: boolean; reply: string; warning?: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'artifact'; spec: import('@/lib/artifact').ArtifactSpec };
 
 export async function streamSession(
   sessionId: string,
@@ -138,6 +140,10 @@ function mapEvent(obj: Record<string, unknown>): StreamEvent | null {
       const warning =
         typeof obj['warning'] === 'string' ? (obj['warning'] as string) : undefined;
       return { type: 'done', ok, reply, warning };
+    }
+    case 'artifact': {
+      const spec = asArtifactSpec(obj);
+      return spec ? { type: 'artifact', spec } : null;
     }
     case 'iter':
     default:
