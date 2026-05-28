@@ -343,6 +343,9 @@ export interface ChatMessage {
    *  shows a ⚠ marker + a reload button. Cleared once the canonical
    *  reply is fetched from the server. */
   truncated?: boolean;
+  /** Artifacts (render_artifact specs) the assistant emitted this turn.
+   *  Hydrated from the server on reload; appended live during streaming. */
+  artifacts?: import('@/lib/artifact').ArtifactSpec[];
 }
 
 // ─── endpoints ────────────────────────────────────────────
