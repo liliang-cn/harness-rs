@@ -30,6 +30,38 @@ pub struct NetWorthSnapshot {
     pub net_amt: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DigestSettings {
+    pub enabled: bool,
+    pub send_time: String,        // "HH:MM"
+    pub timezone: String,         // IANA
+    pub channel: String,          // "in_app" | "email" | "both"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_digest_date: Option<String>,
+}
+
+impl Default for DigestSettings {
+    fn default() -> Self {
+        DigestSettings {
+            enabled: false,
+            send_time: "08:00".into(),
+            timezone: "UTC".into(),
+            channel: "in_app".into(),
+            last_digest_date: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotificationRow {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub body: serde_json::Value, // parsed from the stored JSON string
+    pub created_at: i64,
+    pub read_at: Option<i64>,
+}
+
 /// One row of the attachments table. Receipt photo / PDF uploaded
 /// from the chat composer; the bytes live under HARNESS_LEDGER_UPLOADS,
 /// `path` is relative to that root.
@@ -195,6 +227,37 @@ impl Db {
                 currency    TEXT NOT NULL,
                 source      TEXT NOT NULL,
                 fetched_at  TEXT NOT NULL
+            );
+
+            -- Per-user daily-digest config. One row per user, created on first PATCH.
+            -- A missing row means "disabled with defaults".
+            CREATE TABLE IF NOT EXISTS digest_settings (
+                user_id          TEXT PRIMARY KEY,
+                enabled          INTEGER NOT NULL DEFAULT 0,
+                send_time        TEXT NOT NULL DEFAULT '08:00',
+                timezone         TEXT NOT NULL DEFAULT 'UTC',
+                channel          TEXT NOT NULL DEFAULT 'in_app',
+                last_digest_date TEXT,
+                updated_at       INTEGER NOT NULL
+            );
+
+            -- In-app notification inbox. `body` is a JSON Digest payload.
+            CREATE TABLE IF NOT EXISTS notifications (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                created_at  INTEGER NOT NULL,
+                read_at     INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at);
+
+            -- Shared per-UTC-day market brief (gold/BTC/index). Generated once daily.
+            CREATE TABLE IF NOT EXISTS daily_market_brief (
+                day         TEXT PRIMARY KEY,
+                body        TEXT NOT NULL,
+                created_at  INTEGER NOT NULL
             );
 
             -- Recurring expenses (SaaS subscriptions, rent, gym, ...).
@@ -465,6 +528,171 @@ impl Db {
                 source,
                 fetched_at.to_rfc3339(),
             ],
+        )?;
+        Ok(())
+    }
+
+    // ───── digest settings ─────
+
+    pub fn get_digest_settings(&self, user_id: &str) -> SqlResult<DigestSettings> {
+        let mut stmt = self.conn.prepare(
+            "SELECT enabled, send_time, timezone, channel, last_digest_date
+             FROM digest_settings WHERE user_id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![user_id], |r| {
+                Ok(DigestSettings {
+                    enabled: r.get::<_, i64>(0)? != 0,
+                    send_time: r.get(1)?,
+                    timezone: r.get(2)?,
+                    channel: r.get(3)?,
+                    last_digest_date: r.get(4)?,
+                })
+            })
+            .optional()?;
+        Ok(row.unwrap_or_default())
+    }
+
+    /// Upsert config without touching `last_digest_date` (preserved).
+    pub fn upsert_digest_settings(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        send_time: &str,
+        timezone: &str,
+        channel: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO digest_settings(user_id, enabled, send_time, timezone, channel, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                send_time = excluded.send_time,
+                timezone = excluded.timezone,
+                channel = excluded.channel,
+                updated_at = excluded.updated_at",
+            params![
+                user_id,
+                enabled as i64,
+                send_time,
+                timezone,
+                channel,
+                Utc::now().timestamp(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_last_digest_date(&self, user_id: &str, date: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE digest_settings SET last_digest_date = ?2 WHERE user_id = ?1",
+            params![user_id, date],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_digest_enabled_user_ids(&self) -> SqlResult<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT user_id FROM digest_settings WHERE enabled = 1")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    // ───── notifications (in-app inbox) ─────
+
+    pub fn insert_notification(
+        &self,
+        user_id: &str,
+        kind: &str,
+        title: &str,
+        body: &serde_json::Value,
+    ) -> SqlResult<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO notifications(id, user_id, kind, title, body, created_at, read_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params![id, user_id, kind, title, body.to_string(), Utc::now().timestamp()],
+        )?;
+        Ok(id)
+    }
+
+    pub fn list_notifications(
+        &self,
+        user_id: &str,
+        unread_only: bool,
+        limit: i64,
+    ) -> SqlResult<Vec<NotificationRow>> {
+        let sql = if unread_only {
+            "SELECT id, kind, title, body, created_at, read_at FROM notifications
+             WHERE user_id = ?1 AND read_at IS NULL ORDER BY created_at DESC LIMIT ?2"
+        } else {
+            "SELECT id, kind, title, body, created_at, read_at FROM notifications
+             WHERE user_id = ?1 ORDER BY created_at DESC LIMIT ?2"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![user_id, limit], |r| {
+            let body_s: String = r.get(3)?;
+            Ok(NotificationRow {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                title: r.get(2)?,
+                body: serde_json::from_str(&body_s).unwrap_or(serde_json::Value::Null),
+                created_at: r.get(4)?,
+                read_at: r.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn count_unread_notifications(&self, user_id: &str) -> SqlResult<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ?1 AND read_at IS NULL",
+            params![user_id],
+            |r| r.get(0),
+        )
+    }
+
+    /// Mark notifications read. `ids = None` marks all of the user's unread.
+    /// Returns the number of rows updated.
+    pub fn mark_notifications_read(&self, user_id: &str, ids: Option<&[String]>) -> SqlResult<usize> {
+        let now = Utc::now().timestamp();
+        match ids {
+            None => self.conn.execute(
+                "UPDATE notifications SET read_at = ?2 WHERE user_id = ?1 AND read_at IS NULL",
+                params![user_id, now],
+            ),
+            Some(ids) => {
+                let mut n = 0;
+                for id in ids {
+                    n += self.conn.execute(
+                        "UPDATE notifications SET read_at = ?3
+                         WHERE user_id = ?1 AND id = ?2 AND read_at IS NULL",
+                        params![user_id, id, now],
+                    )?;
+                }
+                Ok(n)
+            }
+        }
+    }
+
+    // ───── shared daily market brief ─────
+
+    pub fn get_market_brief(&self, day: &str) -> SqlResult<Option<serde_json::Value>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT body FROM daily_market_brief WHERE day = ?1")?;
+        let row = stmt
+            .query_row(params![day], |r| r.get::<_, String>(0))
+            .optional()?;
+        Ok(row.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    pub fn put_market_brief(&self, day: &str, body: &serde_json::Value) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO daily_market_brief(day, body, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![day, body.to_string(), Utc::now().timestamp()],
         )?;
         Ok(())
     }
@@ -3104,5 +3332,63 @@ mod tests {
             last.artifacts,
             serde_json::from_str::<Vec<serde_json::Value>>(spec).unwrap()
         );
+    }
+
+    #[test]
+    fn digest_settings_roundtrip_and_dedup() {
+        let db = Db::open_in_memory().unwrap();
+        let d = db.get_digest_settings("u1").unwrap();
+        assert!(!d.enabled);
+        assert_eq!(d.send_time, "08:00");
+        assert_eq!(d.timezone, "UTC");
+        assert_eq!(d.channel, "in_app");
+        assert!(d.last_digest_date.is_none());
+
+        db.upsert_digest_settings("u1", true, "07:30", "Asia/Shanghai", "both").unwrap();
+        let d = db.get_digest_settings("u1").unwrap();
+        assert!(d.enabled);
+        assert_eq!(d.send_time, "07:30");
+        assert_eq!(d.timezone, "Asia/Shanghai");
+        assert_eq!(d.channel, "both");
+
+        db.set_last_digest_date("u1", "2026-05-29").unwrap();
+        db.upsert_digest_settings("u1", true, "09:00", "Asia/Shanghai", "email").unwrap();
+        assert_eq!(db.get_digest_settings("u1").unwrap().last_digest_date.as_deref(), Some("2026-05-29"));
+
+        db.upsert_digest_settings("u2", false, "08:00", "UTC", "in_app").unwrap();
+        let enabled: Vec<String> = db.list_digest_enabled_user_ids().unwrap();
+        assert_eq!(enabled, vec!["u1".to_string()]);
+    }
+
+    #[test]
+    fn notifications_insert_list_read() {
+        let db = Db::open_in_memory().unwrap();
+        let body = serde_json::json!({"date": "2026-05-29", "spending": {"total": 12.5}});
+        db.insert_notification("u1", "digest", "今日简报", &body).unwrap();
+        db.insert_notification("u1", "digest", "今日简报", &body).unwrap();
+
+        let all = db.list_notifications("u1", false, 50).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all[0].read_at.is_none());
+        assert_eq!(all[0].title, "今日简报");
+        assert_eq!(all[0].body["spending"]["total"], 12.5);
+
+        let unread = db.list_notifications("u1", true, 50).unwrap();
+        assert_eq!(unread.len(), 2);
+
+        let n = db.mark_notifications_read("u1", None).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(db.list_notifications("u1", true, 50).unwrap().len(), 0);
+        assert_eq!(db.mark_notifications_read("u1", None).unwrap(), 0);
+    }
+
+    #[test]
+    fn market_brief_cache_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(db.get_market_brief("2026-05-29").unwrap().is_none());
+        let body = serde_json::json!({"summary": "黄金走平，比特币回落"});
+        db.put_market_brief("2026-05-29", &body).unwrap();
+        let got = db.get_market_brief("2026-05-29").unwrap().unwrap();
+        assert_eq!(got["summary"], "黄金走平，比特币回落");
     }
 }
