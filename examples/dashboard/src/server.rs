@@ -318,6 +318,9 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/me/net-worth/series", get(net_worth_series_handler))
         .route("/api/me/net-worth/refresh", post(net_worth_refresh_handler))
         .route("/api/me/base-currency", post(set_base_currency_handler))
+        .route("/api/me/digest-settings", get(get_digest_settings_handler).patch(patch_digest_settings_handler))
+        .route("/api/me/notifications", get(list_notifications_handler))
+        .route("/api/me/notifications/read", post(mark_notifications_read_handler))
         .route("/api/me/loans", get(list_loans_handler))
         .route("/api/me/loans/:id/retire", post(retire_loan_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
@@ -2355,6 +2358,102 @@ async fn set_base_currency_handler(
     let snap = crate::net_worth::snapshot_now(&db, &auth.user.id, &c)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({"ok": true, "base_currency": c, "snapshot": snap})))
+}
+
+// ─── daily digest settings ───────────────────────────────────────────────
+
+async fn get_digest_settings_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let s = db.get_digest_settings(&auth.user.id).map_err(api_err)?;
+    Ok(Json(json!({ "settings": s })))
+}
+
+#[derive(serde::Deserialize)]
+struct DigestSettingsReq {
+    enabled: bool,
+    time: String,     // "HH:MM"
+    timezone: String, // IANA
+    channel: String,  // in_app | email | both
+}
+
+async fn patch_digest_settings_handler(
+    auth: AuthCtx,
+    Json(req): Json<DigestSettingsReq>,
+) -> Result<Json<Value>, ApiError> {
+    let valid_time = {
+        let mut p = req.time.splitn(2, ':');
+        match (
+            p.next().and_then(|h| h.parse::<u32>().ok()),
+            p.next().and_then(|m| m.parse::<u32>().ok()),
+        ) {
+            (Some(h), Some(m)) => h < 24 && m < 60,
+            _ => false,
+        }
+    };
+    if !valid_time {
+        return Err(ApiError::BadRequest("time must be HH:MM (24h)".into()));
+    }
+    if req.timezone.parse::<chrono_tz::Tz>().is_err() {
+        return Err(ApiError::BadRequest(format!(
+            "unknown timezone `{}`",
+            req.timezone
+        )));
+    }
+    if !matches!(req.channel.as_str(), "in_app" | "email" | "both") {
+        return Err(ApiError::BadRequest(
+            "channel must be in_app | email | both".into(),
+        ));
+    }
+    let db = open_db()?;
+    db.upsert_digest_settings(
+        &auth.user.id,
+        req.enabled,
+        &req.time,
+        &req.timezone,
+        &req.channel,
+    )
+    .map_err(api_err)?;
+    let s = db.get_digest_settings(&auth.user.id).map_err(api_err)?;
+    Ok(Json(json!({ "ok": true, "settings": s })))
+}
+
+// ─── in-app notifications ────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct NotificationsQuery {
+    #[serde(default)]
+    unread: bool,
+}
+
+async fn list_notifications_handler(
+    auth: AuthCtx,
+    axum::extract::Query(q): axum::extract::Query<NotificationsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let items = db
+        .list_notifications(&auth.user.id, q.unread, 50)
+        .map_err(api_err)?;
+    let unread = db
+        .count_unread_notifications(&auth.user.id)
+        .map_err(api_err)?;
+    Ok(Json(json!({ "notifications": items, "unread": unread })))
+}
+
+#[derive(serde::Deserialize)]
+struct MarkReadReq {
+    #[serde(default)]
+    ids: Option<Vec<String>>,
+}
+
+async fn mark_notifications_read_handler(
+    auth: AuthCtx,
+    Json(req): Json<MarkReadReq>,
+) -> Result<Json<Value>, ApiError> {
+    let db = open_db()?;
+    let n = db
+        .mark_notifications_read(&auth.user.id, req.ids.as_deref())
+        .map_err(api_err)?;
+    Ok(Json(json!({ "ok": true, "updated": n })))
 }
 
 // ─── loans ──────────────────────────────────────────────────────────────
