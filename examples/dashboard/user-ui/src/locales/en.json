@@ -133,6 +133,19 @@
     "refresh": "Refresh",
     "error": "Couldn't render this page"
   },
+  "digest": {
+    "title": "Daily digest",
+    "subtitle": "A morning summary of yesterday's spending, your wealth, and the market.",
+    "enable": "Enable daily digest",
+    "time": "Send time",
+    "timezone": "Timezone",
+    "channel": "Delivery",
+    "channelInApp": "In-app",
+    "channelEmail": "Email",
+    "channelBoth": "In-app + Email",
+    "saved": "Digest settings saved",
+    "saveFailed": "Couldn't save digest settings"
+  },
   "chat": {
     "fab": "Chat with AI",
     "model": "Model",
