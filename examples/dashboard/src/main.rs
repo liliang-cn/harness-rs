@@ -883,6 +883,7 @@ async fn main() -> anyhow::Result<()> {
         );
         fx::spawn_refresher(db_path.clone());
         net_worth::spawn_snapshot_cron(db_path.clone());
+        digest::cron::spawn_digest_cron(db_path.clone());
         loans::spawn_accrual_cron(db_path);
 
         return server::serve(state, addr).await;
