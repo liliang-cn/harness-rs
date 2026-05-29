@@ -240,6 +240,11 @@
     "body": "在此输入…",
     "tags": "标签（逗号分隔）"
   },
+  "notifications": {
+    "title": "通知",
+    "empty": "暂时没有通知。",
+    "markAllRead": "全部已读"
+  },
   "currency": {
     "USD": "美元",
     "EUR": "欧元",

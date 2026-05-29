@@ -244,6 +244,11 @@
     "body": "Write here…",
     "tags": "Tags (comma separated)"
   },
+  "notifications": {
+    "title": "Notifications",
+    "empty": "Nothing here yet.",
+    "markAllRead": "Mark all read"
+  },
   "currency": {
     "USD": "US Dollar",
     "EUR": "Euro",
