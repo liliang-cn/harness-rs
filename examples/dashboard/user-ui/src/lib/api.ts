@@ -279,6 +279,25 @@ export interface NoteSearchHit extends Note {
   via_grep: boolean;
 }
 
+// ─── digest / notifications ───────────────────────────────
+
+export interface DigestSettings {
+  enabled: boolean;
+  send_time: string; // "HH:MM"
+  timezone: string;  // IANA
+  channel: 'in_app' | 'email' | 'both';
+  last_digest_date?: string | null;
+}
+
+export interface NotificationItem {
+  id: string;
+  kind: string;
+  title: string;
+  body: any;
+  created_at: number;
+  read_at: number | null;
+}
+
 // ─── chat ─────────────────────────────────────────────────
 
 export interface Attachment {
@@ -553,6 +572,23 @@ export const ledgerApi = {
     if (projectId) p.set('project_id', projectId);
     return api<{ hits: NoteSearchHit[] }>(`/api/notes/search?${p}`);
   },
+
+  digestSettings: () =>
+    api<{ settings: DigestSettings }>('/api/me/digest-settings'),
+  saveDigestSettings: (s: { enabled: boolean; time: string; timezone: string; channel: string }) =>
+    api<{ ok: boolean; settings: DigestSettings }>('/api/me/digest-settings', {
+      method: 'PATCH',
+      body: JSON.stringify(s),
+    }),
+  notifications: (unread = false) =>
+    api<{ notifications: NotificationItem[]; unread: number }>(
+      `/api/me/notifications${unread ? '?unread=true' : ''}`,
+    ),
+  markNotificationsRead: (ids?: string[]) =>
+    api<{ ok: boolean; updated: number }>('/api/me/notifications/read', {
+      method: 'POST',
+      body: JSON.stringify(ids ? { ids } : {}),
+    }),
 
   /**
    * CSV download is a special-case: the server returns text/csv with a

@@ -14,6 +14,7 @@ import { ledgerApi, type User } from '@/lib/api';
 import { AccountCard } from '@/components/profile/account-card';
 import { PasswordForm } from '@/components/profile/password-form';
 import { ModelPicker } from '@/components/profile/model-picker';
+import { DigestCard } from '@/components/profile/digest-card';
 import { MemorySheet } from '@/components/memory/memory-sheet';
 
 /**
@@ -98,6 +99,8 @@ export function Profile() {
         effectiveModelId={effectiveModel}
         onChanged={loadMe}
       />
+
+      <DigestCard />
 
       <Card>
         <CardHeader>

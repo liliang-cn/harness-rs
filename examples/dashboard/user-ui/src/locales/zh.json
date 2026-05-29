@@ -132,6 +132,19 @@
     "refresh": "刷新",
     "error": "无法渲染此页面"
   },
+  "digest": {
+    "title": "每日简报",
+    "subtitle": "每天早上汇总昨日支出、你的资产变化和市场行情。",
+    "enable": "开启每日简报",
+    "time": "推送时间",
+    "timezone": "时区",
+    "channel": "推送方式",
+    "channelInApp": "应用内",
+    "channelEmail": "邮件",
+    "channelBoth": "应用内 + 邮件",
+    "saved": "简报设置已保存",
+    "saveFailed": "简报设置保存失败"
+  },
   "chat": {
     "fab": "和 AI 聊聊",
     "model": "模型",
