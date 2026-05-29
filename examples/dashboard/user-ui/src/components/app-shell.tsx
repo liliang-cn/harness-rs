@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatFab } from '@/components/chat/chat-fab';
+import { NotificationBell } from '@/components/notifications/bell';
 import { ledgerApi, setToken } from '@/lib/api';
 import { ConfirmProvider } from '@/components/confirm-dialog';
 import { cn } from '@/lib/utils';
@@ -159,6 +160,7 @@ export function AppShell({ chatSlot }: { chatSlot?: ReactNode }) {
           </nav>
           <div className="flex-1" />
           <span className="text-muted-foreground hidden text-xs md:inline">{email}</span>
+          <NotificationBell />
           <LangSwitch />
           <Button variant="ghost" size="sm" onClick={logout} aria-label={t('common.logout')}>
             <LogOut className="size-4" />
