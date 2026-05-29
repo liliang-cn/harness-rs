@@ -65,14 +65,20 @@ adapters, so generation is testable without delivery.
 All migrations use the existing `ensure_column` / `CREATE TABLE IF NOT EXISTS`
 pattern in `db.rs`.
 
-### `users` — new columns
-| column | type | default | meaning |
-|---|---|---|---|
-| `digest_enabled` | INTEGER | `0` | opt-in flag |
-| `digest_time` | TEXT | `'08:00'` | HH:MM, user-local |
-| `digest_timezone` | TEXT | `'UTC'` | IANA name, e.g. `Asia/Shanghai` |
-| `digest_channel` | TEXT | `'in_app'` | `in_app` \| `email` \| `both` |
-| `last_digest_date` | TEXT | NULL | user-local YYYY-MM-DD already sent (dedup) |
+### `digest_settings` — per-user digest config (dedicated table)
+One row per user, created lazily on first PATCH. A missing row means "disabled
+with defaults" — keeps the `users` table and `row_to_user` untouched.
+```sql
+CREATE TABLE IF NOT EXISTS digest_settings (
+  user_id          TEXT PRIMARY KEY,
+  enabled          INTEGER NOT NULL DEFAULT 0,   -- opt-in
+  send_time        TEXT NOT NULL DEFAULT '08:00',-- HH:MM, user-local
+  timezone         TEXT NOT NULL DEFAULT 'UTC',  -- IANA, e.g. Asia/Shanghai
+  channel          TEXT NOT NULL DEFAULT 'in_app',-- in_app | email | both
+  last_digest_date TEXT,                          -- user-local YYYY-MM-DD already sent (dedup)
+  updated_at       INTEGER NOT NULL
+);
+```
 
 ### `notifications` — in-app inbox
 ```sql
@@ -105,17 +111,17 @@ CREATE TABLE IF NOT EXISTS daily_market_brief (
 - Each tick:
   1. `now_utc = Utc::now()`.
   2. Load opted-in users (`digest_enabled = 1`).
-  3. For each user:
-     - Parse `digest_timezone` as `chrono_tz::Tz`; on parse error fall back to
-       `UTC` and log WARN.
+  3. For each user (with a `digest_settings` row, `enabled = 1`):
+     - Parse `timezone` as `chrono_tz::Tz`; on parse error fall back to `UTC`
+       and log WARN.
      - `local = now_utc.with_timezone(&tz)`; `local_date = local.date()`.
      - `is_due` = `local_date != last_digest_date` AND
-       `local.time() >= parse(digest_time)`. (Catch-up: a server that was down
+       `local.time() >= parse(send_time)`. (Catch-up: a server that was down
        at the exact minute still sends later the same local day.)
      - If due: ensure today's market brief (UTC day), `build_digest`, deliver
        per channel, set `last_digest_date = local_date`.
 
-`is_due(now_utc, tz, digest_time, last_digest_date) -> bool` is extracted as a
+`is_due(now_utc, tz, send_time, last_digest_date) -> bool` is extracted as a
 pure function for unit testing.
 
 ## Generation — `build_digest(user) -> Digest`
@@ -131,7 +137,7 @@ struct Digest {
     market: Option<MarketBrief>,  // None if generation failed today
 }
 struct SpendingSection { total: f64, currency: String, by_category: Vec<(String, f64)> }
-struct WealthSection { net_worth: f64, delta_vs_yesterday: f64, portfolio_value: f64, unrealized: f64, currency: String }
+struct WealthSection { net_worth: f64, net_delta: f64, cash: f64, investments: f64, investments_delta: f64, debt: f64, currency: String }
 struct MarketBrief { gold: Quote, btc: Quote, index: Quote, summary: String }
 struct Quote { name: String, price: String, conclusion: String }
 ```
@@ -139,11 +145,12 @@ struct Quote { name: String, price: String, conclusion: String }
 - **Spending (yesterday):** `list_transactions(user, from, to)` where `[from,to)`
   is the user-local *previous* day converted to epoch. Aggregate expenses by
   category in the user's `base_currency`. No LLM.
-- **Wealth:** net worth from the latest `net_worth` snapshot + Δ vs the prior
-  day's snapshot (both already computed daily). Portfolio value + unrealized
-  P/L from existing positions. Note: per-asset "biggest mover" needs intraday
-  history we don't store, so the investments movement is represented by the
-  snapshot Δ, not a per-asset mover.
+- **Wealth:** computed entirely from the two latest `net_worth_snapshots` rows
+  (already computed daily). `net_worth`, `cash`, `investments`, `debt` from the
+  latest; `net_delta` and `investments_delta` = latest minus the prior row.
+  This covers both "net-worth delta" and "portfolio's day" with zero recompute.
+  Per-asset "biggest mover" / cost-basis unrealized needs intraday history we
+  don't store — deferred.
 - **Market:** read from `daily_market_brief`.
 
 ## Market brief generation
@@ -171,10 +178,11 @@ as generation failure).
   with `Authorization: Bearer {resend_api_key}` and body
   `{ from: digest_from, to: [user.email], subject, html }`. Non-2xx → log WARN.
 
-New `AppConfig` fields (hot-reloadable, `Arc<RwLock<>>`):
-`resend_api_key: Option<String>`, `digest_from: Option<String>` (e.g.
-`"Dashboard <digest@superleo.app>"`). If `resend_api_key` is `None`, email is
-skipped with a WARN; in-app delivery is unaffected.
+Email secrets are read from env, mirroring how `quotes.rs::gemini_api_key()`
+reads `GEMINI_API_KEY` (deploy-time secrets, not admin-hot-reload material):
+`RESEND_API_KEY` and `DIGEST_FROM` (e.g. `"Dashboard <digest@superleo.app>"`).
+If `RESEND_API_KEY` is unset/empty, email is skipped with a WARN; in-app
+delivery is unaffected.
 
 ## API
 
