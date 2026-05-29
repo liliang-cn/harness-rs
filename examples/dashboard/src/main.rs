@@ -16,6 +16,7 @@ mod admin;
 mod attachments;
 mod auth;
 mod db;
+mod digest;
 mod embed_slot;
 mod embed_worker;
 mod fx;
