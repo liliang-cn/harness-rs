@@ -1,0 +1,22 @@
+[package]
+name = "harness-rs-recall-sqlite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SQLite (FTS5 + trigram) backend for harness-rs cross-session recall. The only recall backend that pulls rusqlite; opt in when you want FTS-grade search."
+
+[lib]
+name = "harness_recall_sqlite"
+
+[dependencies]
+harness-core = { workspace = true }
+async-trait  = { workspace = true }
+serde_json   = { workspace = true }
+tracing      = { workspace = true }
+rusqlite     = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

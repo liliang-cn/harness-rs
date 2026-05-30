@@ -23,6 +23,7 @@ members = [
     "crates/harness-templates",
     "crates/harness-mcp",
     "crates/harness-daemon",
+    "crates/harness-recall-sqlite",
     "crates/harness-cli",
     "examples/crate-keeper",
     "examples/deepseek-hello",
