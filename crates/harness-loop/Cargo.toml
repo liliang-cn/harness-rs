@@ -33,3 +33,8 @@ futures           = { workspace = true }
 harness-skills    = { workspace = true }
 harness-tools-fs  = { workspace = true }
 once_cell         = { workspace = true }
+harness-context   = { workspace = true }
+harness-core      = { workspace = true }
+async-trait       = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
