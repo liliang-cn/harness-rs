@@ -577,6 +577,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-caps-e2e"
+version = "0.0.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-models",
+ "harness-rs-scheduler",
+ "harness-rs-tools-memory",
+ "harness-rs-tools-skills",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "deepseek-hello"
 version = "0.0.4"
 dependencies = [
@@ -986,6 +1003,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 
@@ -1028,6 +1046,7 @@ dependencies = [
  "harness-rs-models",
  "harness-rs-skills",
  "harness-rs-tools-fs",
+ "harness-rs-tools-skills",
  "once_cell",
  "schemars",
  "serde",
@@ -1091,12 +1110,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-rs-recall-sqlite"
+version = "0.0.4"
+dependencies = [
+ "async-trait",
+ "harness-rs-core",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "harness-rs-sandbox"
 version = "0.0.4"
 dependencies = [
  "async-trait",
  "harness-rs-context",
  "harness-rs-core",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "harness-rs-scheduler"
+version = "0.0.4"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-daemon",
+ "harness-rs-loop",
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1190,6 +1239,18 @@ dependencies = [
  "harness-rs-core",
  "once_cell",
  "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "harness-rs-tools-skills"
+version = "0.0.4"
+dependencies = [
+ "async-trait",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-skills",
  "serde_json",
  "tokio",
 ]
