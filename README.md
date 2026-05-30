@@ -21,6 +21,9 @@ architectural rationale.
 | **Compactor** | 5-stage progressive compaction (auto-triggered by budget) | `harness-compactor` |
 | **Loop** | ReAct + tool-call dispatch + sensor feedback + auto-fix + forced final-synthesis on budget exhaustion | `harness-loop` |
 | **Memory** | Open `Memory` trait + JSONL `FileMemory` + `MemoryGuide` (recall) + `MemorySynthesizer` (cheap-model distillation into atomic facts) | `harness-core`, `harness-context`, `harness-loop` |
+| **Recall** | Cross-session conversation search — `RecallStore` trait + JSONL `FileRecall` (default) + FTS5/CJK-trigram `SqliteRecall`; one-call `.with_recall(store)` adds capture + a `session_search` tool, owner-scoped | `harness-core`, `harness-context`, `harness-recall-sqlite` |
+| **Learning loop** | Self-evolving skills + memory — `.with_learning_loop(cfg)` forks a review subagent at session end that writes/patches skills (`skill_manage`) and memory from the transcript | `harness-loop`, `harness-tools-skills` |
+| **Scheduler** | In-process scheduled agent jobs with delivery — `JobStore` + `Channel` (stdout / email-Resend) + a `Scheduler` that runs jobs as agent turns + a `cronjob` tool for self-scheduling | `harness-scheduler` |
 | **Observability** | `SessionRecorder` JSONL traces, `LiveProgressHook` live stderr stream, `harness trace --verbose` | `harness-loop` + `harness-cli` |
 | **Blueprint** | deterministic + agent state machine with retry/fallback | `harness-blueprint` |
 | **Sandbox** | git worktree isolation (container/VM in v0.2) | `harness-sandbox` |
@@ -231,12 +234,21 @@ of increasing surface area:
   in stages; superseded by 0.0.3.)
 - **v0.0.3** — Re-publish of the 0.0.2 feature set as a single consistent
   snapshot. No new features.
-- **v0.0.4** — ✅ **current**. Observability (`LiveProgressHook`,
+- **v0.0.4** — Observability (`LiveProgressHook`,
   `harness trace --verbose`), forced final-synthesis on budget exhaustion,
   and **open long-term memory** (`Memory` trait, `FileMemory` JSONL,
   `MemoryGuide`, `MemorySynthesizer` cheap-model distillation). Examples
   ship `--memory` / `--synth-model` / `--progress` / `--record` /
-  `HARNESS_*` env vars. See [CHANGELOG](CHANGELOG.md).
+  `HARNESS_*` env vars.
+- **v0.0.5** — ✅ **current**. Three new opt-in, one-builder-call capabilities:
+  **cross-session recall** (`RecallStore` + `FileRecall` + `session_search`;
+  optional FTS5 `harness-rs-recall-sqlite`), a **self-evolving learning loop**
+  (`.with_learning_loop()` forks a review subagent to write/patch skills +
+  memory; new `harness-rs-tools-skills` `skill_manage`), and **in-process
+  scheduling + delivery** (new `harness-rs-scheduler`: `JobStore`, `Channel`,
+  `cronjob`). Plus `harness_core::DynModel` (use a boxed `Arc<dyn Model>` as a
+  concrete `M`). Verified with a real-DeepSeek end-to-end
+  (`examples/deepseek-caps-e2e`). See [CHANGELOG](CHANGELOG.md).
 - **v0.1+** — `ContainerSandbox` / `VmSandbox` / first-class blueprint
   `Node::Agent` / semantic memory backends are on the road.
 
