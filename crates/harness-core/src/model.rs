@@ -97,3 +97,73 @@ pub trait Model: Send + Sync + 'static {
 
     fn info(&self) -> ModelInfo;
 }
+
+/// Lets a boxed/shared model (`Arc<dyn Model>`) be used anywhere a `Model` is
+/// required — e.g. as the concrete `M` in `AgentLoop<M>` / `Subagent<M>`. The
+/// `Model` trait is object-safe, so this just forwards to the inner value.
+#[async_trait]
+impl<T: Model + ?Sized> Model for std::sync::Arc<T> {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        (**self).complete(ctx).await
+    }
+    async fn stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError>
+    {
+        (**self).stream(ctx).await
+    }
+    fn info(&self) -> ModelInfo {
+        (**self).info()
+    }
+}
+
+#[cfg(test)]
+mod arc_model_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct Dummy;
+
+    #[async_trait]
+    impl Model for Dummy {
+        async fn complete(&self, _ctx: &Context) -> Result<ModelOutput, ModelError> {
+            Ok(ModelOutput {
+                text: Some("ok".into()),
+                tool_calls: vec![],
+                usage: Usage::default(),
+                stop_reason: StopReason::EndTurn,
+                reasoning: None,
+            })
+        }
+        fn info(&self) -> ModelInfo {
+            ModelInfo {
+                handle: "dummy".into(),
+                provider: "test".into(),
+                model: "dummy".into(),
+                context_window: 8192,
+                input_cost_usd_per_million_tokens: None,
+                output_cost_usd_per_million_tokens: None,
+                supports_tool_use: false,
+                supports_streaming: false,
+            }
+        }
+    }
+
+    fn assert_is_model<M: Model>(_m: &M) {}
+
+    #[tokio::test]
+    async fn arc_dyn_model_is_a_model() {
+        let m: Arc<dyn Model> = Arc::new(Dummy);
+        assert_is_model(&m); // compiles only if Arc<dyn Model>: Model
+        let out = m
+            .complete(&Context::new(crate::Task {
+                description: "x".into(),
+                source: None,
+                deadline: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(out.text.as_deref(), Some("ok"));
+    }
+}
