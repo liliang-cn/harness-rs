@@ -1,0 +1,29 @@
+[package]
+name = "harness-rs-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "In-process agent scheduler for harness-rs: run scheduled agent jobs and deliver their output to a Channel (stdout / email). Optional."
+
+[lib]
+name = "harness_scheduler"
+
+[dependencies]
+harness-core   = { workspace = true }
+harness-loop   = { workspace = true }
+harness-context = { workspace = true }
+harness-daemon = { workspace = true }
+async-trait    = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+chrono         = { workspace = true }
+reqwest        = { workspace = true }
+tokio          = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
