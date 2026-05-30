@@ -132,3 +132,60 @@ async fn with_recall_captures_the_conversation() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+struct DenyAll;
+impl harness_core::Hook for DenyAll {
+    fn name(&self) -> &str {
+        "deny-all"
+    }
+    fn matches(&self, ev: &harness_core::Event<'_>) -> bool {
+        matches!(ev, harness_core::Event::PreToolUse { .. })
+    }
+    fn fire(
+        &self,
+        _ev: &harness_core::Event<'_>,
+        _world: &mut harness_core::World,
+    ) -> harness_core::HookOutcome {
+        harness_core::HookOutcome::Deny {
+            reason: "nope".into(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn denied_tool_calls_are_still_captured() {
+    let root = tmp_root();
+    let store: Arc<dyn RecallStore> = Arc::new(FileRecall::open(&root).unwrap());
+    let loop_ = AgentLoop::new(MockModel {
+        turn: AtomicU32::new(0),
+    })
+    .with_recall(store.clone())
+    .with_tool(Arc::new(Noop))
+    .with_hook(Arc::new(DenyAll));
+
+    let mut world = default_world(".");
+    world
+        .profile
+        .extra
+        .insert("recall_owner".into(), serde_json::json!("u1"));
+    world
+        .profile
+        .extra
+        .insert("recall_session".into(), serde_json::json!("c1"));
+    let task = Task {
+        description: "do a thing".into(),
+        source: None,
+        deadline: None,
+    };
+    let _ = loop_.run(task, &mut world).await.unwrap();
+
+    let scrolled = store.scroll("u1", "c1", 1, 50).await.unwrap();
+    // The denied tool attempt is captured as a tool message containing the deny reason.
+    assert!(
+        scrolled
+            .iter()
+            .any(|m| m.role == "tool" && m.content.contains("denied by hook")),
+        "expected a denied-by-hook tool message in recall; got: {scrolled:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

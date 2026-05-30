@@ -331,13 +331,7 @@ impl<M: Model> AgentLoop<M> {
         // ── recall: resolve owner/session, ensure the session row ──
         let (recall_owner, recall_session) = if self.recall.is_some() {
             use std::sync::atomic::Ordering;
-            let owner = world
-                .profile
-                .extra
-                .get("recall_owner")
-                .and_then(|v| v.as_str())
-                .unwrap_or("default")
-                .to_string();
+            let owner = crate::recall_owner(world);
             let session = world
                 .profile
                 .extra
@@ -359,7 +353,12 @@ impl<M: Model> AgentLoop<M> {
         };
 
         let recall_guide: Option<Arc<dyn Guide>> = if self.recall_auto_inject {
-            self.recall.clone().map(|s| Arc::new(crate::RecallGuide::new(s)) as Arc<dyn Guide>)
+            if self.recall.is_none() {
+                tracing::warn!("auto_inject() set but no recall store — call with_recall(store) first; skipping recall guide");
+                None
+            } else {
+                self.recall.clone().map(|s| Arc::new(crate::RecallGuide::new(s)) as Arc<dyn Guide>)
+            }
         } else {
             None
         };
@@ -408,7 +407,7 @@ impl<M: Model> AgentLoop<M> {
             // re-recalling against the latest user message). Default
             // `apply_before_iter` is a no-op, so this loop is cheap for
             // guides that don't override it.
-            for g in &self.guides {
+            for g in &all_guides {
                 if g.scope().matches(&ctx.task)
                     && let Err(e) = g.apply_before_iter(&mut ctx, world).await
                 {
@@ -480,6 +479,19 @@ impl<M: Model> AgentLoop<M> {
                             }),
                         }],
                     });
+                    if self.recall.is_some() {
+                        self.recall_append(
+                            &recall_owner,
+                            &recall_session,
+                            harness_core::RecallMessage::new(
+                                "tool",
+                                format!("[denied by hook] {reason}"),
+                                world.clock.now_ms(),
+                            )
+                            .with_tool_name(action.tool.clone()),
+                        )
+                        .await;
+                    }
                     continue;
                 }
 
