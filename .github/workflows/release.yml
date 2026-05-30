@@ -1,0 +1,70 @@
+name: Release
+
+# Publish the whole workspace to crates.io when a version tag is pushed.
+#
+# Flow:
+#   1. Bump versions (workspace.package.version + the [workspace.dependencies]
+#      pins) to X.Y.Z and commit.
+#   2. git tag vX.Y.Z && git push origin main --tags
+#   3. This workflow verifies the tag matches the workspace version, runs the
+#      test gate, then publishes every crate in dependency order.
+#
+# Requires a repo secret CARGO_REGISTRY_TOKEN (a crates.io API token with
+# publish scope for the harness-rs-* crates).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Don't run two releases at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (1.92)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-workspaces
+        run: cargo install cargo-workspaces --locked --version "^0.4"
+
+      - name: Verify tag matches workspace version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          WS_VER="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="harness-rs-core") | .version')"
+          echo "tag=$TAG  workspace=$WS_VER"
+          if [ "$TAG" != "$WS_VER" ]; then
+            echo "::error::tag v$TAG does not match workspace version $WS_VER — bump Cargo.toml first"
+            exit 1
+          fi
+
+      - name: Test gate (same as CI)
+        run: cargo test --workspace --all-targets
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: Publish workspace in dependency order
+        # --publish-as-is: publish the versions exactly as committed (no bumping,
+        #   no extra git tags — this workflow is triggered BY the tag).
+        # cargo-workspaces orders crates topologically and waits for each to be
+        #   available on the index before publishing its dependents.
+        # Already-published versions are skipped, so a re-run after a transient
+        #   failure (e.g. the new-crate rate limit) is safe and resumes.
+        run: cargo ws publish --publish-as-is --allow-dirty --yes
