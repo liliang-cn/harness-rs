@@ -95,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         policy: Default::default(),
         metadata: BTreeMap::new(),
         tools: Vec::new(),
+        response_format: Default::default(),
     };
 
     // 4. Call DeepSeek — pass model name directly, no factory layer
