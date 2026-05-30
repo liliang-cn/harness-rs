@@ -10,12 +10,14 @@
 
 pub mod memory_layer;
 pub mod profile_guide;
+pub mod recall_layer;
 pub mod registry;
 pub mod replay;
 pub mod subagent;
 
 pub use memory_layer::*;
 pub use profile_guide::*;
+pub use recall_layer::*;
 pub use registry::*;
 pub use replay::*;
 pub use subagent::*;
