@@ -26,9 +26,9 @@ pub use subagent::*;
 
 use harness_compactor::DefaultCompactor;
 use harness_core::{
-    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model,
-    ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage, StopReason,
-    Task, ToolCall, ToolResult, Turn, TurnRole, Usage, World,
+    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model, ModelDelta,
+    ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage, StopReason, Task,
+    ToolCall, ToolResult, Turn, TurnRole, Usage, World,
 };
 use harness_hooks::HookBus;
 use std::collections::HashMap;
@@ -144,7 +144,8 @@ impl<M: Model> AgentLoop<M> {
     /// register the `session_search` tool. Owner + session id are read from
     /// `world.profile.extra["recall_owner"|"recall_session"]` at run time.
     pub fn with_recall(mut self, store: Arc<dyn harness_core::RecallStore>) -> Self {
-        self.tools.insert(Arc::new(crate::SessionSearchTool::new(store.clone())));
+        self.tools
+            .insert(Arc::new(crate::SessionSearchTool::new(store.clone())));
         self.recall = Some(store);
         self
     }
@@ -174,11 +175,7 @@ impl<M: Model> AgentLoop<M> {
     /// Shortcut for `with_response_format(ResponseFormat::JsonSchema { name, schema })`.
     /// Accepts a raw `serde_json::Value` so callers can hand-roll the schema or
     /// pull it from `schemars::schema_for!(T)`.
-    pub fn with_response_schema(
-        self,
-        name: impl Into<String>,
-        schema: serde_json::Value,
-    ) -> Self {
+    pub fn with_response_schema(self, name: impl Into<String>, schema: serde_json::Value) -> Self {
         self.with_response_format(ResponseFormat::JsonSchema {
             name: name.into(),
             schema,
@@ -243,13 +240,9 @@ impl<M: Model> AgentLoop<M> {
             .run_with_response_format(task, world, max_iters, fmt)
             .await?;
         let text = match outcome {
-            Outcome::Done {
-                text: Some(t),
-                ..
-            }
+            Outcome::Done { text: Some(t), .. }
             | Outcome::BudgetExhausted {
-                last_text: Some(t),
-                ..
+                last_text: Some(t), ..
             } => t,
             Outcome::Done { text: None, .. } => {
                 return Err(HarnessError::Other(
@@ -351,7 +344,11 @@ impl<M: Model> AgentLoop<M> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| {
-                    format!("sess-{}-{}", world.clock.now_ms(), RECALL_SEQ.fetch_add(1, Ordering::SeqCst))
+                    format!(
+                        "sess-{}-{}",
+                        world.clock.now_ms(),
+                        RECALL_SEQ.fetch_add(1, Ordering::SeqCst)
+                    )
                 });
             if let Some(store) = &self.recall {
                 let meta = harness_core::SessionMeta::new(&session, world.clock.now_ms());
@@ -366,10 +363,14 @@ impl<M: Model> AgentLoop<M> {
 
         let recall_guide: Option<Arc<dyn Guide>> = if self.recall_auto_inject {
             if self.recall.is_none() {
-                tracing::warn!("auto_inject() set but no recall store — call with_recall(store) first; skipping recall guide");
+                tracing::warn!(
+                    "auto_inject() set but no recall store — call with_recall(store) first; skipping recall guide"
+                );
                 None
             } else {
-                self.recall.clone().map(|s| Arc::new(crate::RecallGuide::new(s)) as Arc<dyn Guide>)
+                self.recall
+                    .clone()
+                    .map(|s| Arc::new(crate::RecallGuide::new(s)) as Arc<dyn Guide>)
             }
         } else {
             None
@@ -393,7 +394,11 @@ impl<M: Model> AgentLoop<M> {
             self.recall_append(
                 &recall_owner,
                 &recall_session,
-                harness_core::RecallMessage::new("user", ctx.task.description.clone(), world.clock.now_ms()),
+                harness_core::RecallMessage::new(
+                    "user",
+                    ctx.task.description.clone(),
+                    world.clock.now_ms(),
+                ),
             )
             .await;
         }
@@ -681,8 +686,7 @@ impl<M: Model> AgentLoop<M> {
             match delta {
                 ModelDelta::Text(t) => {
                     if !t.is_empty() {
-                        self.hooks
-                            .fire(&Event::ModelTokenDelta { text: &t }, world);
+                        self.hooks.fire(&Event::ModelTokenDelta { text: &t }, world);
                         text.push_str(&t);
                     }
                 }
@@ -690,7 +694,9 @@ impl<M: Model> AgentLoop<M> {
                     if !tool_starts.contains_key(&id) {
                         tool_order.push(id.clone());
                     }
-                    tool_starts.entry(id).or_insert_with(|| (name, String::new()));
+                    tool_starts
+                        .entry(id)
+                        .or_insert_with(|| (name, String::new()));
                 }
                 ModelDelta::ToolCallArgs { id, partial_json } => {
                     let entry = tool_starts
@@ -719,7 +725,7 @@ impl<M: Model> AgentLoop<M> {
             .filter_map(|id| {
                 tool_starts.remove(&id).map(|(name, args)| {
                     let args_v = serde_json::from_str::<serde_json::Value>(&args)
-                        .unwrap_or_else(|_| serde_json::Value::String(args));
+                        .unwrap_or(serde_json::Value::String(args));
                     ToolCall {
                         id,
                         name,
@@ -751,24 +757,30 @@ impl<M: Model> AgentLoop<M> {
 
     /// Best-effort append to the recall store. Never fails the turn.
     async fn recall_append(&self, owner: &str, session: &str, msg: harness_core::RecallMessage) {
-        if let Some(store) = &self.recall {
-            if let Err(e) = store.append(owner, session, &msg).await {
-                tracing::warn!(error = %e, "recall append failed");
-            }
+        if let Some(store) = &self.recall
+            && let Err(e) = store.append(owner, session, &msg).await
+        {
+            tracing::warn!(error = %e, "recall append failed");
         }
     }
 
     /// Best-effort post-session review. Never affects the finished run.
     async fn run_learning_review(&self, ctx: &Context, world: &mut World, tools_called: u32) {
         let Some(cfg) = &self.learning else { return };
-        if tools_called < cfg.nudge_interval { return; }
+        if tools_called < cfg.nudge_interval {
+            return;
+        }
         let transcript = crate::render_transcript(&ctx.history, 12_000);
         let task = harness_core::Task {
-            description: format!("{}\n\n## Conversation transcript\n{}", cfg.review_prompt, transcript),
+            description: format!(
+                "{}\n\n## Conversation transcript\n{}",
+                cfg.review_prompt, transcript
+            ),
             source: None,
             deadline: None,
         };
-        let mut spec = crate::SubagentSpec::new("learning-review", task).with_max_iters(cfg.max_iters);
+        let mut spec =
+            crate::SubagentSpec::new("learning-review", task).with_max_iters(cfg.max_iters);
         for t in &cfg.tools {
             spec = spec.with_tool(t.clone());
         }

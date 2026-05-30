@@ -449,6 +449,7 @@ mod tests {
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
         };
         for i in 0..turns {
             ctx.history.push(Turn {

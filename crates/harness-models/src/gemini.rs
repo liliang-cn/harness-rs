@@ -121,13 +121,21 @@ enum GeminiPart {
         /// https://ai.google.dev/gemini-api/docs/thought-signatures). Echo
         /// EXACTLY in the same part on subsequent requests or Gemini 3.x
         /// returns HTTP 400.
-        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         thought_signature: Option<String>,
     },
     FunctionResponse {
         #[serde(rename = "functionResponse")]
         function_response: GeminiFunctionResponse,
-        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         thought_signature: Option<String>,
     },
     /// Server-side built-in tool invocation (Google Search, code execution).
@@ -135,19 +143,31 @@ enum GeminiPart {
     ServerToolCall {
         #[serde(rename = "toolCall")]
         tool_call: ServerToolCallPayload,
-        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         thought_signature: Option<String>,
     },
     /// Server-side built-in tool response (mirror of the call above).
     ServerToolResponse {
         #[serde(rename = "toolResponse")]
         tool_response: serde_json::Value,
-        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         thought_signature: Option<String>,
     },
     Text {
         text: String,
-        #[serde(rename = "thoughtSignature", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         thought_signature: Option<String>,
     },
     /// Catch-all: any other part shape Gemini may emit (forward-compat). The
@@ -185,7 +205,6 @@ struct GeminiFunctionResponse {
     name: String,
     response: JsonValue,
 }
-
 
 #[derive(Serialize)]
 struct GeminiSystem {
@@ -373,7 +392,9 @@ impl Model for GeminiNative {
             if let Some(meta) = cand.grounding_metadata {
                 grounding_chunks.push(meta);
             }
-            let Some(content) = cand.content else { continue };
+            let Some(content) = cand.content else {
+                continue;
+            };
             // Patch: inject a synthesized `id` into any FunctionCall part that
             // lacks one. Gemini 3.x requires the id to be present when this
             // turn is echoed back, even if the model didn't emit one.
@@ -385,11 +406,7 @@ impl Model for GeminiNative {
                         thought_signature,
                     } => {
                         let call_id = fc.id.clone().unwrap_or_else(|| {
-                            format!(
-                                "gemini-call-{}-{}",
-                                fc.name,
-                                tool_calls.len() as u32 + 1
-                            )
+                            format!("gemini-call-{}-{}", fc.name, tool_calls.len() as u32 + 1)
                         });
                         tool_calls.push(ToolCall {
                             id: call_id.clone(),
@@ -405,7 +422,10 @@ impl Model for GeminiNative {
                             thought_signature,
                         });
                     }
-                    GeminiPart::Text { text: t, thought_signature } => {
+                    GeminiPart::Text {
+                        text: t,
+                        thought_signature,
+                    } => {
                         text.push_str(&t);
                         patched_parts.push(GeminiPart::Text {
                             text: t,
@@ -666,7 +686,9 @@ where
                         // this parser can treat events as plain `\n\n`-
                         // delimited.
                         if s.contains('\r') {
-                            state.buf.push_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
+                            state
+                                .buf
+                                .push_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
                         } else {
                             state.buf.push_str(s);
                         }
@@ -819,10 +841,7 @@ fn sanitize_for_gemini(schema: &JsonValue) -> JsonValue {
     strip_and_inline(schema, &defs)
 }
 
-fn strip_and_inline(
-    v: &JsonValue,
-    defs: &serde_json::Map<String, JsonValue>,
-) -> JsonValue {
+fn strip_and_inline(v: &JsonValue, defs: &serde_json::Map<String, JsonValue>) -> JsonValue {
     match v {
         JsonValue::Object(o) => {
             if let Some(r) = o.get("$ref").and_then(|s| s.as_str())
@@ -940,7 +959,10 @@ fn build_contents(ctx: &Context) -> (Option<String>, Vec<GeminiContent>) {
             match b {
                 Block::Text(s) => {
                     if !s.is_empty() {
-                        parts.push(GeminiPart::Text { text: s.clone(), thought_signature: None });
+                        parts.push(GeminiPart::Text {
+                            text: s.clone(),
+                            thought_signature: None,
+                        });
                     }
                 }
                 Block::ToolCall {
@@ -1041,7 +1063,6 @@ fn build_contents(ctx: &Context) -> (Option<String>, Vec<GeminiContent>) {
     (system, out)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,6 +1082,7 @@ mod tests {
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: vec![],
+            response_format: harness_core::ResponseFormat::Free,
         }
     }
 

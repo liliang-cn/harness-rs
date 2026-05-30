@@ -14,7 +14,9 @@ pub fn ledger_path() -> PathBuf {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".harness-ledger").join("ledger.db")
+    PathBuf::from(home)
+        .join(".harness-ledger")
+        .join("ledger.db")
 }
 
 /// Read the authenticated user_id from the agent's `World.profile.extra`.
@@ -201,8 +203,8 @@ async fn list_accounts(_args: Value, w: &mut World) -> Result<ToolResult, ToolEr
 async fn add_account(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let name = need_str(&args, "name")?.to_string();
     let kind_s = args.get("kind").and_then(|v| v.as_str()).unwrap_or("other");
-    let kind: AccountKind = serde_json::from_str(&format!("\"{kind_s}\""))
-        .map_err(|_| ToolError::InvalidArgs {
+    let kind: AccountKind =
+        serde_json::from_str(&format!("\"{kind_s}\"")).map_err(|_| ToolError::InvalidArgs {
             name: "ledger".into(),
             reason: format!("unknown kind `{kind_s}`"),
         })?;
@@ -554,13 +556,13 @@ async fn monthly_report(args: Value, w: &mut World) -> Result<ToolResult, ToolEr
     let totals = db
         .monthly_totals(&uid, year, month)
         .map_err(|e| ToolError::Exec(e.to_string()))?;
-    let grand: std::collections::HashMap<String, Decimal> = totals.iter().fold(
-        std::collections::HashMap::new(),
-        |mut acc, t| {
-            *acc.entry(t.currency.clone()).or_insert(Decimal::ZERO) += t.total;
-            acc
-        },
-    );
+    let grand: std::collections::HashMap<String, Decimal> =
+        totals
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut acc, t| {
+                *acc.entry(t.currency.clone()).or_insert(Decimal::ZERO) += t.total;
+                acc
+            });
     Ok(ToolResult {
         ok: true,
         content: json!({
@@ -907,7 +909,7 @@ async fn get_net_worth(args: Value, w: &mut World) -> Result<ToolResult, ToolErr
         .get("compare_days")
         .and_then(|v| v.as_i64())
         .unwrap_or(30)
-        .clamp(1, 3650) as i64;
+        .clamp(1, 3650);
     let db = open_db()?;
     let uid = crate::tools::uid_of(w)?;
     // Pull the user to get their base_currency (canonical). Profile.extra
@@ -1004,12 +1006,11 @@ async fn add_loan(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let name = need_str(&args, "name")?.to_string();
     let kind_s = need_str(&args, "kind")?;
     let kind: AccountKind = match kind_s {
-        "loan" | "mortgage" | "receivable" => {
-            serde_json::from_str(&format!("\"{kind_s}\"")).map_err(|_| ToolError::InvalidArgs {
+        "loan" | "mortgage" | "receivable" => serde_json::from_str(&format!("\"{kind_s}\""))
+            .map_err(|_| ToolError::InvalidArgs {
                 name: "ledger".into(),
                 reason: format!("unknown kind `{kind_s}`"),
-            })?
-        }
+            })?,
         other => {
             return Err(ToolError::InvalidArgs {
                 name: "ledger".into(),
@@ -1318,7 +1319,11 @@ async fn gemini_extract_receipt(
         .and_then(|p| p.get(0))
         .and_then(|p| p.get("text"))
         .and_then(|t| t.as_str())
-        .ok_or_else(|| anyhow::anyhow!("gemini: candidates[0].content.parts[0].text missing; envelope={envelope}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "gemini: candidates[0].content.parts[0].text missing; envelope={envelope}"
+            )
+        })?;
     let parsed: Value = serde_json::from_str(inner_text)
         .map_err(|e| anyhow::anyhow!("gemini structured-text parse: {e}; text={inner_text}"))?;
     Ok(parsed)
@@ -1539,10 +1544,7 @@ async fn add_milestones(args: Value, w: &mut World) -> Result<ToolResult, ToolEr
     Ok(ToolResult {
         ok: true,
         content: json!({ "parent_id": parent_id, "created": ids.len(), "ids": ids }),
-        trace: Some(format!(
-            "added {} milestones to {parent_id}",
-            ids.len()
-        )),
+        trace: Some(format!("added {} milestones to {parent_id}", ids.len())),
     })
 }
 
@@ -1620,7 +1622,10 @@ async fn list_projects(args: Value, w: &mut World) -> Result<ToolResult, ToolErr
             .get("due_for_review")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let status = args.get("status").and_then(|v| v.as_str()).or(Some("active"));
+        let status = args
+            .get("status")
+            .and_then(|v| v.as_str())
+            .or(Some("active"));
         db.list_projects(&uid, status, due)
             .map_err(|e| ToolError::Exec(format!("{e}")))?
     };
@@ -1667,18 +1672,14 @@ async fn log_project_review(args: Value, w: &mut World) -> Result<ToolResult, To
         .get("next_steps")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let override_days = args
-        .get("next_review_in_days")
-        .and_then(|v| v.as_i64());
+    let override_days = args.get("next_review_in_days").and_then(|v| v.as_i64());
     let db = open_db()?;
     if db
         .get_project(&uid, project_id)
         .map_err(|e| ToolError::Exec(format!("{e}")))?
         .is_none()
     {
-        return Err(ToolError::Exec(format!(
-            "project `{project_id}` not found"
-        )));
+        return Err(ToolError::Exec(format!("project `{project_id}` not found")));
     }
     let review = db
         .add_project_review(&uid, project_id, progress, next_steps, override_days)
@@ -1746,7 +1747,11 @@ async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
             "project_id": note.project_id,
             "embedding_status": "pending — search will use grep fallback until the worker fills it (~5s)"
         }),
-        trace: Some(format!("created note {} ({} chars)", note.id, note.body.len())),
+        trace: Some(format!(
+            "created note {} ({} chars)",
+            note.id,
+            note.body.len()
+        )),
     })
 }
 
@@ -1775,10 +1780,7 @@ async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
             name: "search_notes".into(),
             reason: "query required".into(),
         })?;
-    let top_k = args
-        .get("top_k")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8) as usize;
+    let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
     let emb = embedder()?;
     let path = ledger_path();
     let hits = crate::search::semantic_search(&path, &uid, &emb, q, top_k, None)

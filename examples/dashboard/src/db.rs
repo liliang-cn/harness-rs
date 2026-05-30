@@ -22,7 +22,7 @@ pub struct CachedQuote {
 /// `base_currency` (already FX-converted at write time).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NetWorthSnapshot {
-    pub snapshot_date: String,    // YYYY-MM-DD
+    pub snapshot_date: String, // YYYY-MM-DD
     pub base_currency: String,
     pub cash_amt: f64,
     pub investments_amt: f64,
@@ -33,9 +33,9 @@ pub struct NetWorthSnapshot {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DigestSettings {
     pub enabled: bool,
-    pub send_time: String,        // "HH:MM"
-    pub timezone: String,         // IANA
-    pub channel: String,          // "in_app" | "email" | "both"
+    pub send_time: String, // "HH:MM"
+    pub timezone: String,  // IANA
+    pub channel: String,   // "in_app" | "email" | "both"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_digest_date: Option<String>,
 }
@@ -482,10 +482,8 @@ impl Db {
             .collect::<SqlResult<Vec<_>>>()?;
         drop(stmt);
         if !existing.iter().any(|c| c == col) {
-            self.conn.execute(
-                &format!("ALTER TABLE {table} ADD COLUMN {col} {typ}"),
-                [],
-            )?;
+            self.conn
+                .execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {typ}"), [])?;
         }
         Ok(())
     }
@@ -612,7 +610,14 @@ impl Db {
         self.conn.execute(
             "INSERT INTO notifications(id, user_id, kind, title, body, created_at, read_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
-            params![id, user_id, kind, title, body.to_string(), Utc::now().timestamp()],
+            params![
+                id,
+                user_id,
+                kind,
+                title,
+                body.to_string(),
+                Utc::now().timestamp()
+            ],
         )?;
         Ok(id)
     }
@@ -655,7 +660,11 @@ impl Db {
 
     /// Mark notifications read. `ids = None` marks all of the user's unread.
     /// Returns the number of rows updated.
-    pub fn mark_notifications_read(&self, user_id: &str, ids: Option<&[String]>) -> SqlResult<usize> {
+    pub fn mark_notifications_read(
+        &self,
+        user_id: &str,
+        ids: Option<&[String]>,
+    ) -> SqlResult<usize> {
         let now = Utc::now().timestamp();
         match ids {
             None => self.conn.execute(
@@ -733,7 +742,11 @@ impl Db {
                 .map(|d| d.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
             preferred_model: r.get(7).ok().flatten(),
-            base_currency: r.get::<_, Option<String>>(8).ok().flatten().unwrap_or_else(|| "USD".into()),
+            base_currency: r
+                .get::<_, Option<String>>(8)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "USD".into()),
         })
     }
 
@@ -809,7 +822,12 @@ impl Db {
 
     /// Latest cached rate for the pair on or before `date`. Used when today's
     /// fetch failed but yesterday's value is good enough.
-    pub fn latest_fx_rate(&self, base: &str, quote: &str, on_or_before: &str) -> SqlResult<Option<f64>> {
+    pub fn latest_fx_rate(
+        &self,
+        base: &str,
+        quote: &str,
+        on_or_before: &str,
+    ) -> SqlResult<Option<f64>> {
         let mut stmt = self.conn.prepare(
             "SELECT rate FROM fx_rates
              WHERE base = ?1 AND quote = ?2 AND fetched_date <= ?3
@@ -887,7 +905,8 @@ impl Db {
              WHERE user_id = ?1
              ORDER BY snapshot_date DESC LIMIT 1",
         )?;
-        stmt.query_row(params![user_id], Self::row_to_snapshot).optional()
+        stmt.query_row(params![user_id], Self::row_to_snapshot)
+            .optional()
     }
 
     pub fn net_worth_series(
@@ -902,10 +921,7 @@ impl Db {
              WHERE user_id = ?1 AND snapshot_date BETWEEN ?2 AND ?3
              ORDER BY snapshot_date ASC",
         )?;
-        let rows = stmt.query_map(
-            params![user_id, from_date, to_date],
-            Self::row_to_snapshot,
-        )?;
+        let rows = stmt.query_map(params![user_id, from_date, to_date], Self::row_to_snapshot)?;
         rows.collect()
     }
 
@@ -927,6 +943,7 @@ impl Db {
     /// `last_accrued_date` cursor is initialized to `start_date`, and the
     /// status is `'active'`. Caller is expected to have already created the
     /// matching `accounts` row (the FK references it).
+    #[allow(clippy::too_many_arguments)] // mirrors SQL INSERT column list; a builder would add boilerplate
     pub fn insert_loan(
         &self,
         account_id: &str,
@@ -1031,6 +1048,7 @@ impl Db {
 
     // ───── attachments (chat receipt uploads) ─────
 
+    #[allow(clippy::too_many_arguments)] // mirrors SQL INSERT column list; a builder would add boilerplate
     pub fn insert_attachment(
         &self,
         id: &str,
@@ -1062,11 +1080,7 @@ impl Db {
 
     /// Look up one attachment, scoped to `user_id` so a forged id from
     /// another user just returns None.
-    pub fn get_attachment(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> SqlResult<Option<AttachmentRecord>> {
+    pub fn get_attachment(&self, user_id: &str, id: &str) -> SqlResult<Option<AttachmentRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, user_id, mime_type, size_bytes, original_name,
                     path, kind, created_at
@@ -1100,13 +1114,15 @@ impl Db {
     pub fn compute_account_balance(&self, user_id: &str, account_id: &str) -> SqlResult<f64> {
         use rust_decimal::prelude::ToPrimitive;
         // Opening balance.
-        let mut stmt = self.conn.prepare(
-            "SELECT opening_balance FROM accounts WHERE user_id = ?1 AND id = ?2",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT opening_balance FROM accounts WHERE user_id = ?1 AND id = ?2")?;
         let opening: Option<String> = stmt
             .query_row(params![user_id, account_id], |r| r.get::<_, String>(0))
             .optional()?;
-        let Some(opening_s) = opening else { return Ok(0.0) };
+        let Some(opening_s) = opening else {
+            return Ok(0.0);
+        };
         let mut bal: f64 = Decimal::from_str(&opening_s)
             .unwrap_or(Decimal::ZERO)
             .to_f64()
@@ -1666,11 +1682,7 @@ impl Db {
              FROM transactions
              WHERE user_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3",
         );
-        let mut p: Vec<String> = vec![
-            user_id.to_string(),
-            from.to_rfc3339(),
-            to.to_rfc3339(),
-        ];
+        let mut p: Vec<String> = vec![user_id.to_string(), from.to_rfc3339(), to.to_rfc3339()];
         if let Some(c) = category {
             let idx = p.len() + 1;
             sql.push_str(&format!(" AND category = ?{idx}"));
@@ -1727,15 +1739,12 @@ impl Db {
              WHERE user_id = ?1 AND occurred_at >= ?2 AND occurred_at < ?3
                AND kind = 'expense'",
         )?;
-        let rows = stmt.query_map(
-            params![user_id, from.to_rfc3339(), to.to_rfc3339()],
-            |r| {
-                let cat: String = r.get(0)?;
-                let cur: String = r.get(1)?;
-                let amt_s: String = r.get(2)?;
-                Ok((cat, cur, Decimal::from_str(&amt_s).unwrap_or(Decimal::ZERO)))
-            },
-        )?;
+        let rows = stmt.query_map(params![user_id, from.to_rfc3339(), to.to_rfc3339()], |r| {
+            let cat: String = r.get(0)?;
+            let cur: String = r.get(1)?;
+            let amt_s: String = r.get(2)?;
+            Ok((cat, cur, Decimal::from_str(&amt_s).unwrap_or(Decimal::ZERO)))
+        })?;
         use std::collections::HashMap;
         let mut acc: HashMap<(String, String), (Decimal, u32)> = HashMap::new();
         for row in rows {
@@ -1794,7 +1803,12 @@ impl Db {
         rows.collect()
     }
 
-    pub fn budget_status(&self, user_id: &str, year: i32, month: u32) -> SqlResult<Vec<BudgetStatus>> {
+    pub fn budget_status(
+        &self,
+        user_id: &str,
+        year: i32,
+        month: u32,
+    ) -> SqlResult<Vec<BudgetStatus>> {
         let totals = self.monthly_totals(user_id, year, month)?;
         let budgets = self.list_budgets(user_id)?;
         let mut out = Vec::new();
@@ -1988,34 +2002,31 @@ impl Db {
              WHERE status = 'active' AND next_charge_date <= ?1
              ORDER BY user_id, next_charge_date ASC",
         )?;
-        let rows = stmt.query_map(
-            params![as_of.format("%Y-%m-%d").to_string()],
-            |r| {
-                let user_id: String = r.get(0)?;
-                let amount_s: String = r.get(3)?;
-                let freq_s: String = r.get(5)?;
-                let next_s: String = r.get(6)?;
-                let created_s: String = r.get(12)?;
-                let cancelled_s: Option<String> = r.get(13)?;
-                let sub = Subscription {
-                    id: r.get(1)?,
-                    name: r.get(2)?,
-                    amount: Decimal::from_str(&amount_s).unwrap_or(Decimal::ZERO),
-                    currency: r.get(4)?,
-                    frequency: Frequency::parse(&freq_s).unwrap_or(Frequency::Monthly),
-                    next_charge_date: NaiveDate::parse_from_str(&next_s, "%Y-%m-%d")
-                        .unwrap_or_else(|_| Utc::now().date_naive()),
-                    account_id: r.get(7)?,
-                    category: r.get(8)?,
-                    pay_channel: r.get(9)?,
-                    note: r.get(10)?,
-                    status: r.get(11)?,
-                    created_at: parse_rfc3339(&created_s),
-                    cancelled_at: cancelled_s.map(|s| parse_rfc3339(&s)),
-                };
-                Ok((user_id, sub))
-            },
-        )?;
+        let rows = stmt.query_map(params![as_of.format("%Y-%m-%d").to_string()], |r| {
+            let user_id: String = r.get(0)?;
+            let amount_s: String = r.get(3)?;
+            let freq_s: String = r.get(5)?;
+            let next_s: String = r.get(6)?;
+            let created_s: String = r.get(12)?;
+            let cancelled_s: Option<String> = r.get(13)?;
+            let sub = Subscription {
+                id: r.get(1)?,
+                name: r.get(2)?,
+                amount: Decimal::from_str(&amount_s).unwrap_or(Decimal::ZERO),
+                currency: r.get(4)?,
+                frequency: Frequency::parse(&freq_s).unwrap_or(Frequency::Monthly),
+                next_charge_date: NaiveDate::parse_from_str(&next_s, "%Y-%m-%d")
+                    .unwrap_or_else(|_| Utc::now().date_naive()),
+                account_id: r.get(7)?,
+                category: r.get(8)?,
+                pay_channel: r.get(9)?,
+                note: r.get(10)?,
+                status: r.get(11)?,
+                created_at: parse_rfc3339(&created_s),
+                cancelled_at: cancelled_s.map(|s| parse_rfc3339(&s)),
+            };
+            Ok((user_id, sub))
+        })?;
         rows.collect()
     }
 
@@ -2061,11 +2072,7 @@ impl Db {
         rows.collect()
     }
 
-    pub fn get_chat_session(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> SqlResult<Option<ChatSession>> {
+    pub fn get_chat_session(&self, user_id: &str, id: &str) -> SqlResult<Option<ChatSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, model_id, message_count, created_at, updated_at
              FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
@@ -2087,38 +2094,36 @@ impl Db {
              ORDER BY created_at ASC
              LIMIT ?3",
         )?;
-        let rows = stmt.query_map(
-            params![user_id, session_id, limit as i64],
-            |r| {
-                let created_s: String = r.get(5)?;
-                // attachment_ids is JSON text; older rows have NULL.
-                let att: Vec<String> = match r.get::<_, Option<String>>(6)? {
-                    Some(s) => serde_json::from_str(&s).unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                // artifacts is a JSON array text; older rows have NULL.
-                let artifacts: Vec<serde_json::Value> = match r.get::<_, Option<String>>(7)? {
-                    Some(s) => serde_json::from_str(&s).unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                Ok(ChatMessage {
-                    id: r.get(0)?,
-                    session_id: r.get(1)?,
-                    role: r.get(2)?,
-                    text: r.get(3)?,
-                    iters: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
-                    created_at: parse_rfc3339(&created_s),
-                    attachment_ids: att,
-                    artifacts,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(params![user_id, session_id, limit as i64], |r| {
+            let created_s: String = r.get(5)?;
+            // attachment_ids is JSON text; older rows have NULL.
+            let att: Vec<String> = match r.get::<_, Option<String>>(6)? {
+                Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            // artifacts is a JSON array text; older rows have NULL.
+            let artifacts: Vec<serde_json::Value> = match r.get::<_, Option<String>>(7)? {
+                Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            Ok(ChatMessage {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                text: r.get(3)?,
+                iters: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
+                created_at: parse_rfc3339(&created_s),
+                attachment_ids: att,
+                artifacts,
+            })
+        })?;
         rows.collect()
     }
 
-    /// Append a message and bump the session's `updated_at` + `message_count`
-    /// + (on first user message) `title`. Title is the first ~40 chars of
+    /// Append a message and bump the session's `updated_at`, `message_count`,
+    /// and (on first user message) `title`. Title is the first ~40 chars of
     /// the first user message — purely cosmetic.
+    #[allow(clippy::too_many_arguments)] // mirrors SQL INSERT column list; a builder would add boilerplate
     pub fn append_chat_message(
         &self,
         user_id: &str,
@@ -2141,7 +2146,17 @@ impl Db {
             "INSERT INTO chat_messages(
                 id, session_id, user_id, role, text, iters, created_at, attachment_ids, artifacts
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now, att_json, artifacts],
+            params![
+                id,
+                session_id,
+                user_id,
+                role,
+                text,
+                iters.map(|n| n as i64),
+                now,
+                att_json,
+                artifacts
+            ],
         )?;
         self.conn.execute(
             "UPDATE chat_sessions
@@ -2219,14 +2234,7 @@ impl Db {
                                       tokens_in, tokens_out, created_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                id,
-                user_id,
-                kind,
-                target_id,
-                meta_json,
-                tokens_in,
-                tokens_out,
-                now_ms,
+                id, user_id, kind, target_id, meta_json, tokens_in, tokens_out, now_ms,
             ],
         )?;
         Ok(())
@@ -2333,17 +2341,50 @@ impl Db {
         // Order matters where FKs are declared (transactions → accounts,
         // trades → assets, chat_messages → chat_sessions). Delete children
         // first.
-        tx.execute("DELETE FROM transactions   WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM trades         WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM prices         WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM assets         WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM accounts       WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM budgets        WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM subscriptions  WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM chat_messages  WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM chat_sessions  WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM sessions       WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM invites        WHERE created_by = ?1", params![user_id])?;
+        tx.execute(
+            "DELETE FROM transactions   WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM trades         WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM prices         WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM assets         WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM accounts       WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM budgets        WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM subscriptions  WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_messages  WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_sessions  WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions       WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM invites        WHERE created_by = ?1",
+            params![user_id],
+        )?;
         // Leave audit_events behind (anonymise instead) so admin can still
         // see the deletion trail — but null out the user_id link.
         tx.execute(
@@ -2358,10 +2399,10 @@ impl Db {
     // ───── admin: provider config KV ─────
 
     pub fn provider_config_all(&self) -> SqlResult<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT key, value FROM provider_config")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM provider_config")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.collect()
     }
 
@@ -2426,15 +2467,26 @@ impl Db {
                                   parent_id, target_date, review_interval_days,
                                   next_review_at, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?9)",
-            params![id, user_id, name, detail, parent_id,
-                    target_date, review_interval_days, next_review_at, now_s],
+            params![
+                id,
+                user_id,
+                name,
+                detail,
+                parent_id,
+                target_date,
+                review_interval_days,
+                next_review_at,
+                now_s
+            ],
         )?;
-        self.get_project(user_id, &id).map(|o| o.expect("project vanished after insert"))
+        self.get_project(user_id, &id)
+            .map(|o| o.expect("project vanished after insert"))
     }
 
     pub fn get_project(&self, user_id: &str, id: &str) -> SqlResult<Option<Project>> {
         let sql = format!("SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND id = ?2");
-        self.conn.prepare(&sql)?
+        self.conn
+            .prepare(&sql)?
             .query_row(params![user_id, id], row_to_project)
             .optional()
     }
@@ -2449,11 +2501,9 @@ impl Db {
         status: Option<&str>,
         only_due: bool,
     ) -> SqlResult<Vec<Project>> {
-        let mut sql = format!(
-            "SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND parent_id IS NULL"
-        );
-        let mut p: Vec<Box<dyn rusqlite::ToSql>> =
-            vec![Box::new(user_id.to_string())];
+        let mut sql =
+            format!("SELECT {PROJECT_COLS} FROM projects WHERE user_id = ?1 AND parent_id IS NULL");
+        let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(user_id.to_string())];
         if let Some(st) = status {
             sql.push_str(&format!(" AND status = ?{}", p.len() + 1));
             p.push(Box::new(st.to_string()));
@@ -2485,13 +2535,15 @@ impl Db {
 
     /// Count projects whose review cadence is due, for the dashboard badge.
     pub fn count_due_projects(&self, user_id: &str) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM projects
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM projects
              WHERE user_id = ?1 AND status = 'active' AND parent_id IS NULL
                AND next_review_at IS NOT NULL AND next_review_at <= ?2",
-            params![user_id, Utc::now().to_rfc3339()],
-            |r| r.get::<_, i64>(0),
-        ).map(|n| n as u32)
+                params![user_id, Utc::now().to_rfc3339()],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as u32)
     }
 
     /// COALESCE-style update: any `None` field is left as-is in the DB.
@@ -2516,8 +2568,16 @@ impl Db {
                review_interval_days = COALESCE(?7, review_interval_days),
                updated_at = ?8
              WHERE user_id = ?1 AND id = ?2",
-            params![user_id, id, status, name, detail, target_date,
-                    review_interval_days, now],
+            params![
+                user_id,
+                id,
+                status,
+                name,
+                detail,
+                target_date,
+                review_interval_days,
+                now
+            ],
         )?;
         Ok(n as u32)
     }
@@ -2570,11 +2630,15 @@ impl Db {
         )?;
         // Advance next_review_at: use override, else the project's interval.
         let interval: Option<i64> = override_days.or_else(|| {
-            self.conn.query_row(
-                "SELECT review_interval_days FROM projects WHERE user_id = ?1 AND id = ?2",
-                params![user_id, project_id],
-                |r| r.get(0),
-            ).optional().ok().flatten()
+            self.conn
+                .query_row(
+                    "SELECT review_interval_days FROM projects WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, project_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
         });
         if let Some(d) = interval {
             let next = (now + chrono::Duration::days(d)).to_rfc3339();
@@ -2634,7 +2698,15 @@ impl Db {
                                embedding, embedding_dim, embedding_at,
                                created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, ?7, ?7)",
-            params![id, user_id, project_id, title, body, tag_str, now.to_rfc3339()],
+            params![
+                id,
+                user_id,
+                project_id,
+                title,
+                body,
+                tag_str,
+                now.to_rfc3339()
+            ],
         )?;
         Ok(Note {
             id,
@@ -2748,6 +2820,7 @@ impl Db {
         rows.collect()
     }
 
+    #[allow(dead_code)] // quota-check helper; not yet wired to an HTTP handler
     pub fn count_notes(&self, user_id: &str) -> SqlResult<u32> {
         self.conn
             .query_row(
@@ -2822,7 +2895,12 @@ impl Db {
             }
             let tags_s: Option<String> = r.get(4)?;
             let tags = tags_s
-                .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+                .map(|s| {
+                    s.split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
             let c: String = r.get(7)?;
             let u: String = r.get(8)?;
@@ -2921,6 +2999,7 @@ pub struct Note {
 #[derive(Debug, Clone)]
 pub struct PendingEmbed {
     pub id: String,
+    #[allow(dead_code)] // retained for embedding pipeline; field populated but not yet consumed
     pub user_id: String,
     pub title: String,
     pub body: String,
@@ -2932,8 +3011,7 @@ pub struct NoteEmbedding {
     pub embedding: Vec<f32>,
 }
 
-const PROJECT_COLS: &str =
-    "id, user_id, name, detail, status, parent_id, target_date, \
+const PROJECT_COLS: &str = "id, user_id, name, detail, status, parent_id, target_date, \
      review_interval_days, next_review_at, created_at, updated_at";
 
 fn row_to_project(r: &rusqlite::Row<'_>) -> SqlResult<Project> {
@@ -2955,7 +3033,12 @@ fn row_to_project(r: &rusqlite::Row<'_>) -> SqlResult<Project> {
 fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
     let tags_s: Option<String> = r.get(4)?;
     let tags = tags_s
-        .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        .map(|s| {
+            s.split(',')
+                .filter(|x| !x.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let c: String = r.get(5)?;
     let u: String = r.get(6)?;
@@ -3115,12 +3198,15 @@ mod tests {
         let when = Utc.with_ymd_and_hms(2026, 5, 10, 12, 0, 0).unwrap();
         db.insert_transaction("u1", &mk_expense(&a.id, "1200", "CNY", "餐饮", when))
             .unwrap();
-        db.set_budget("u1", &Budget {
-            category: "餐饮".into(),
-            currency: "CNY".into(),
-            monthly_limit: Decimal::from_str("1000").unwrap(),
-            created_at: Utc::now(),
-        })
+        db.set_budget(
+            "u1",
+            &Budget {
+                category: "餐饮".into(),
+                currency: "CNY".into(),
+                monthly_limit: Decimal::from_str("1000").unwrap(),
+                created_at: Utc::now(),
+            },
+        )
         .unwrap();
 
         let status = db.budget_status("u1", 2026, 5).unwrap();
@@ -3197,26 +3283,32 @@ mod tests {
             created_at: now,
         };
         db.insert_asset("u1", &a).unwrap();
-        db.insert_trade("u1", &Trade {
-            id: "t1".into(),
-            asset_id: a.id.clone(),
-            kind: TradeKind::Buy,
-            qty: Decimal::from(50),
-            price_per_unit: Decimal::from(190),
-            currency: "USD".into(),
-            fees: Decimal::ZERO,
-            occurred_at: now,
-            note: None,
-            created_at: now,
-        })
+        db.insert_trade(
+            "u1",
+            &Trade {
+                id: "t1".into(),
+                asset_id: a.id.clone(),
+                kind: TradeKind::Buy,
+                qty: Decimal::from(50),
+                price_per_unit: Decimal::from(190),
+                currency: "USD".into(),
+                fees: Decimal::ZERO,
+                occurred_at: now,
+                note: None,
+                created_at: now,
+            },
+        )
         .unwrap();
-        db.insert_price("u1", &PriceQuote {
-            asset_id: a.id.clone(),
-            price: Decimal::from(200),
-            currency: "USD".into(),
-            fetched_at: now,
-            source: "tencent".into(),
-        })
+        db.insert_price(
+            "u1",
+            &PriceQuote {
+                asset_id: a.id.clone(),
+                price: Decimal::from(200),
+                currency: "USD".into(),
+                fetched_at: now,
+                source: "tencent".into(),
+            },
+        )
         .unwrap();
 
         let (n_trades, n_prices) = db.delete_asset("u1", &a.id).unwrap();
@@ -3241,19 +3333,25 @@ mod tests {
             .unwrap();
         // Pre-existing budget for the canonical name; the merge must NOT
         // overwrite it with the from-side budget.
-        db.set_budget("u1", &Budget {
-            category: "餐饮".into(),
-            currency: "CNY".into(),
-            monthly_limit: Decimal::from_str("1500").unwrap(),
-            created_at: Utc::now(),
-        })
+        db.set_budget(
+            "u1",
+            &Budget {
+                category: "餐饮".into(),
+                currency: "CNY".into(),
+                monthly_limit: Decimal::from_str("1500").unwrap(),
+                created_at: Utc::now(),
+            },
+        )
         .unwrap();
-        db.set_budget("u1", &Budget {
-            category: "吃饭".into(),
-            currency: "CNY".into(),
-            monthly_limit: Decimal::from_str("999").unwrap(),
-            created_at: Utc::now(),
-        })
+        db.set_budget(
+            "u1",
+            &Budget {
+                category: "吃饭".into(),
+                currency: "CNY".into(),
+                monthly_limit: Decimal::from_str("999").unwrap(),
+                created_at: Utc::now(),
+            },
+        )
         .unwrap();
 
         let (txn_n, bud_n) = db.rename_category("u1", "吃饭", "餐饮").unwrap();
@@ -3280,16 +3378,26 @@ mod tests {
     #[test]
     fn projects_and_notes_basic() {
         let db = tmp_db();
-        let p = db.create_project("u1", "上线 SaaS", "", None, Some("2026-09-30"), Some(30)).unwrap();
+        let p = db
+            .create_project("u1", "上线 SaaS", "", None, Some("2026-09-30"), Some(30))
+            .unwrap();
         assert!(p.next_review_at.is_some());
-        let m = db.create_project("u1", "做落地页", "", Some(&p.id), None, None).unwrap();
+        let m = db
+            .create_project("u1", "做落地页", "", Some(&p.id), None, None)
+            .unwrap();
         assert_eq!(db.list_milestones("u1", &p.id).unwrap().len(), 1);
         assert_eq!(m.parent_id.as_deref(), Some(p.id.as_str()));
-        let n = db.create_note("u1", Some(&p.id), "想法", "正文", &["idea".into()]).unwrap();
+        let n = db
+            .create_note("u1", Some(&p.id), "想法", "正文", &["idea".into()])
+            .unwrap();
         assert_eq!(n.project_id.as_deref(), Some(p.id.as_str()));
-        assert_eq!(db.list_recent_notes("u1", Some(&p.id), 50).unwrap().len(), 1);
+        assert_eq!(
+            db.list_recent_notes("u1", Some(&p.id), 50).unwrap().len(),
+            1
+        );
         assert_eq!(db.list_recent_notes("u1", None, 50).unwrap().len(), 1);
-        db.add_project_review("u1", &p.id, "做了线框", "下周写代码", None).unwrap();
+        db.add_project_review("u1", &p.id, "做了线框", "下周写代码", None)
+            .unwrap();
         assert_eq!(db.list_project_reviews("u1", &p.id, 10).unwrap().len(), 1);
         assert_eq!(db.delete_project("u1", &p.id).unwrap(), 1);
         assert!(db.get_project("u1", &p.id).unwrap().is_none());
@@ -3325,7 +3433,8 @@ mod tests {
         let sid = "s_test";
         db.create_chat_session(uid, sid, None).unwrap();
         let spec = r#"[{"title":"T","data":{"source":"project","id":"p1"},"code":"function App(){return null}"}]"#;
-        db.append_chat_message(uid, sid, "asst", "hi", Some(1), &[], Some(spec)).unwrap();
+        db.append_chat_message(uid, sid, "asst", "hi", Some(1), &[], Some(spec))
+            .unwrap();
         let msgs = db.get_chat_messages(uid, sid, 10).unwrap();
         let last = msgs.last().unwrap();
         assert_eq!(
@@ -3344,7 +3453,8 @@ mod tests {
         assert_eq!(d.channel, "in_app");
         assert!(d.last_digest_date.is_none());
 
-        db.upsert_digest_settings("u1", true, "07:30", "Asia/Shanghai", "both").unwrap();
+        db.upsert_digest_settings("u1", true, "07:30", "Asia/Shanghai", "both")
+            .unwrap();
         let d = db.get_digest_settings("u1").unwrap();
         assert!(d.enabled);
         assert_eq!(d.send_time, "07:30");
@@ -3352,10 +3462,18 @@ mod tests {
         assert_eq!(d.channel, "both");
 
         db.set_last_digest_date("u1", "2026-05-29").unwrap();
-        db.upsert_digest_settings("u1", true, "09:00", "Asia/Shanghai", "email").unwrap();
-        assert_eq!(db.get_digest_settings("u1").unwrap().last_digest_date.as_deref(), Some("2026-05-29"));
+        db.upsert_digest_settings("u1", true, "09:00", "Asia/Shanghai", "email")
+            .unwrap();
+        assert_eq!(
+            db.get_digest_settings("u1")
+                .unwrap()
+                .last_digest_date
+                .as_deref(),
+            Some("2026-05-29")
+        );
 
-        db.upsert_digest_settings("u2", false, "08:00", "UTC", "in_app").unwrap();
+        db.upsert_digest_settings("u2", false, "08:00", "UTC", "in_app")
+            .unwrap();
         let enabled: Vec<String> = db.list_digest_enabled_user_ids().unwrap();
         assert_eq!(enabled, vec!["u1".to_string()]);
     }
@@ -3364,8 +3482,10 @@ mod tests {
     fn notifications_insert_list_read() {
         let db = Db::open_in_memory().unwrap();
         let body = serde_json::json!({"date": "2026-05-29", "spending": {"total": 12.5}});
-        db.insert_notification("u1", "digest", "今日简报", &body).unwrap();
-        db.insert_notification("u1", "digest", "今日简报", &body).unwrap();
+        db.insert_notification("u1", "digest", "今日简报", &body)
+            .unwrap();
+        db.insert_notification("u1", "digest", "今日简报", &body)
+            .unwrap();
 
         let all = db.list_notifications("u1", false, 50).unwrap();
         assert_eq!(all.len(), 2);

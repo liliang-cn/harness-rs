@@ -24,11 +24,15 @@ use crate::portfolio::model::aggregate_trades;
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Run-once: compute and persist today's snapshot for one user. Used by
 /// both the cron and the on-demand "refresh" admin endpoint.
-pub fn snapshot_now(db: &Db, user_id: &str, base_currency: &str) -> anyhow::Result<NetWorthSnapshot> {
+pub fn snapshot_now(
+    db: &Db,
+    user_id: &str,
+    base_currency: &str,
+) -> anyhow::Result<NetWorthSnapshot> {
     let today = Utc::now().format("%Y-%m-%d").to_string();
 
     // ── cash + debt: iterate accounts, fold transactions ──
@@ -134,7 +138,9 @@ pub fn spawn_snapshot_cron(db_path: PathBuf) {
                 .and_hms_opt(0, 5, 0)
                 .unwrap()
                 .and_utc();
-            let wait = (tomorrow_005 - now).to_std().unwrap_or(std::time::Duration::from_secs(3600));
+            let wait = (tomorrow_005 - now)
+                .to_std()
+                .unwrap_or(std::time::Duration::from_secs(3600));
             tokio::time::sleep(wait).await;
             if let Err(e) = run_for_all(&db_path).await {
                 tracing::warn!(err = %e, "daily net-worth snapshot run failed");
@@ -143,12 +149,14 @@ pub fn spawn_snapshot_cron(db_path: PathBuf) {
     });
 }
 
-async fn run_for_all(db_path: &PathBuf) -> anyhow::Result<()> {
+async fn run_for_all(db_path: &Path) -> anyhow::Result<()> {
     // Open per-tick — Connection is !Send across awaits.
     let db = Db::open(db_path)?;
     let user_ids = db.list_all_user_ids()?;
     for uid in &user_ids {
-        let Some(user) = db.get_user_by_id(uid)? else { continue };
+        let Some(user) = db.get_user_by_id(uid)? else {
+            continue;
+        };
         match snapshot_now(&db, &user.id, &user.base_currency) {
             Ok(snap) => tracing::debug!(
                 user = %uid,

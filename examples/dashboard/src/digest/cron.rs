@@ -7,7 +7,7 @@
 use crate::db::Db;
 use crate::digest::{build, deliver, market, schedule};
 use chrono::Utc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const TICK: Duration = Duration::from_secs(15 * 60);
@@ -34,7 +34,7 @@ pub fn spawn_digest_cron(db_path: PathBuf) {
         .expect("spawn digest-cron thread");
 }
 
-async fn run_tick(db_path: &PathBuf) -> anyhow::Result<()> {
+async fn run_tick(db_path: &Path) -> anyhow::Result<()> {
     let db = Db::open(db_path)?;
     let user_ids = db.list_digest_enabled_user_ids()?;
     if user_ids.is_empty() {
@@ -50,10 +50,17 @@ async fn run_tick(db_path: &PathBuf) -> anyhow::Result<()> {
             continue;
         }
         let tz = schedule::parse_tz(&settings.timezone);
-        if !schedule::is_due(now, tz, &settings.send_time, settings.last_digest_date.as_deref()) {
+        if !schedule::is_due(
+            now,
+            tz,
+            &settings.send_time,
+            settings.last_digest_date.as_deref(),
+        ) {
             continue;
         }
-        let Some(user) = db.get_user_by_id(uid)? else { continue };
+        let Some(user) = db.get_user_by_id(uid)? else {
+            continue;
+        };
 
         // Generate the shared market brief lazily on the first due user.
         if market_brief.is_none() {
@@ -72,10 +79,10 @@ async fn run_tick(db_path: &PathBuf) -> anyhow::Result<()> {
         };
 
         let channel = settings.channel.as_str();
-        if channel == "in_app" || channel == "both" {
-            if let Err(e) = deliver::deliver_in_app(&db, &user.id, &digest) {
-                tracing::warn!(user = %uid, err = %e, "deliver_in_app failed");
-            }
+        if (channel == "in_app" || channel == "both")
+            && let Err(e) = deliver::deliver_in_app(&db, &user.id, &digest)
+        {
+            tracing::warn!(user = %uid, err = %e, "deliver_in_app failed");
         }
         if channel == "email" || channel == "both" {
             let _ = deliver::deliver_email(&client, &user.email, &digest).await;

@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// One scheduled agent job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +36,13 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(name: impl Into<String>, schedule: impl Into<String>, prompt: impl Into<String>, channel: impl Into<String>, created_ms: i64) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        schedule: impl Into<String>,
+        prompt: impl Into<String>,
+        channel: impl Into<String>,
+        created_ms: i64,
+    ) -> Self {
         Self {
             id: gen_id(created_ms),
             name: name.into(),
@@ -48,8 +56,14 @@ impl Job {
             created_ms,
         }
     }
-    pub fn with_target(mut self, t: Option<String>) -> Self { self.target = t; self }
-    pub fn with_next_run(mut self, ms: Option<i64>) -> Self { self.next_run_ms = ms; self }
+    pub fn with_target(mut self, t: Option<String>) -> Self {
+        self.target = t;
+        self
+    }
+    pub fn with_next_run(mut self, ms: Option<i64>) -> Self {
+        self.next_run_ms = ms;
+        self
+    }
 }
 
 /// Short-ish unique id: created-ms + a process-global counter.
@@ -62,8 +76,10 @@ fn gen_id(created_ms: i64) -> String {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum JobError {
-    #[error("job io: {0}")] Io(String),
-    #[error("job serde: {0}")] Serde(String),
+    #[error("job io: {0}")]
+    Io(String),
+    #[error("job serde: {0}")]
+    Serde(String),
 }
 
 #[async_trait]
@@ -73,7 +89,12 @@ pub trait JobStore: Send + Sync + 'static {
     async fn get(&self, id: &str) -> Result<Option<Job>, JobError>;
     async fn remove(&self, id: &str) -> Result<bool, JobError>;
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<bool, JobError>;
-    async fn record_run(&self, id: &str, last_run_ms: i64, next_run_ms: Option<i64>) -> Result<(), JobError>;
+    async fn record_run(
+        &self,
+        id: &str,
+        last_run_ms: i64,
+        next_run_ms: Option<i64>,
+    ) -> Result<(), JobError>;
 }
 
 /// JSON-array file backend. All jobs in one file; mutations read-all → modify →
@@ -86,23 +107,31 @@ pub struct FileJobStore {
 impl FileJobStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, JobError> {
         let path = path.into();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| JobError::Io(e.to_string()))?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| JobError::Io(e.to_string()))?;
         }
-        Ok(Self { path, write_lock: Mutex::new(()) })
+        Ok(Self {
+            path,
+            write_lock: Mutex::new(()),
+        })
     }
 
     fn read_all(&self) -> Result<Vec<Job>, JobError> {
         match std::fs::read_to_string(&self.path) {
-            Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s).map_err(|e| JobError::Serde(e.to_string())),
+            Ok(s) if !s.trim().is_empty() => {
+                serde_json::from_str(&s).map_err(|e| JobError::Serde(e.to_string()))
+            }
             _ => Ok(Vec::new()),
         }
     }
 
     fn write_all(&self, jobs: &[Job]) -> Result<(), JobError> {
-        let _g = self.write_lock.lock().map_err(|e| JobError::Io(e.to_string()))?;
+        let _g = self
+            .write_lock
+            .lock()
+            .map_err(|e| JobError::Io(e.to_string()))?;
         let buf = serde_json::to_string_pretty(jobs).map_err(|e| JobError::Serde(e.to_string()))?;
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, buf).map_err(|e| JobError::Io(e.to_string()))?;
@@ -118,7 +147,9 @@ impl JobStore for FileJobStore {
         jobs.push(job.clone());
         self.write_all(&jobs)
     }
-    async fn list(&self) -> Result<Vec<Job>, JobError> { self.read_all() }
+    async fn list(&self) -> Result<Vec<Job>, JobError> {
+        self.read_all()
+    }
     async fn get(&self, id: &str) -> Result<Option<Job>, JobError> {
         Ok(self.read_all()?.into_iter().find(|j| j.id == id))
     }
@@ -127,19 +158,38 @@ impl JobStore for FileJobStore {
         let before = jobs.len();
         jobs.retain(|j| j.id != id);
         let removed = jobs.len() != before;
-        if removed { self.write_all(&jobs)?; }
+        if removed {
+            self.write_all(&jobs)?;
+        }
         Ok(removed)
     }
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<bool, JobError> {
         let mut jobs = self.read_all()?;
         let mut found = false;
-        for j in &mut jobs { if j.id == id { j.enabled = enabled; found = true; } }
-        if found { self.write_all(&jobs)?; }
+        for j in &mut jobs {
+            if j.id == id {
+                j.enabled = enabled;
+                found = true;
+            }
+        }
+        if found {
+            self.write_all(&jobs)?;
+        }
         Ok(found)
     }
-    async fn record_run(&self, id: &str, last_run_ms: i64, next_run_ms: Option<i64>) -> Result<(), JobError> {
+    async fn record_run(
+        &self,
+        id: &str,
+        last_run_ms: i64,
+        next_run_ms: Option<i64>,
+    ) -> Result<(), JobError> {
         let mut jobs = self.read_all()?;
-        for j in &mut jobs { if j.id == id { j.last_run_ms = Some(last_run_ms); j.next_run_ms = next_run_ms; } }
+        for j in &mut jobs {
+            if j.id == id {
+                j.last_run_ms = Some(last_run_ms);
+                j.next_run_ms = next_run_ms;
+            }
+        }
         self.write_all(&jobs)
     }
 }
@@ -149,7 +199,10 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("harness-jobstore-{}-{n}.json", std::process::id()))
     }
 
@@ -157,7 +210,8 @@ mod tests {
     async fn crud_roundtrip() {
         let p = tmp();
         let store = FileJobStore::open(&p).unwrap();
-        let job = Job::new("digest", "daily 08:00", "summarize", "stdout", 1000).with_next_run(Some(2000));
+        let job = Job::new("digest", "daily 08:00", "summarize", "stdout", 1000)
+            .with_next_run(Some(2000));
         let id = job.id.clone();
         store.add(&job).await.unwrap();
 

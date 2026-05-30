@@ -11,7 +11,7 @@ use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::Result as SqlResult;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Spawn the background loop. Runs once at startup (so a service restart
@@ -45,7 +45,7 @@ pub fn spawn_accrual_cron(db_path: PathBuf) {
 /// Receivables (interest-free in v1) and 0% APR loans (just advance the
 /// cursor so we don't loop). Idempotent — same-day reruns are no-ops
 /// because `days = today - last_accrued_date` is 0.
-fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
+fn accrue_all(db_path: &Path) -> anyhow::Result<()> {
     let db = Db::open(db_path)?;
     let user_ids = db.list_all_user_ids()?;
     let today = Utc::now().date_naive();
@@ -53,7 +53,9 @@ fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
     for uid in &user_ids {
         let loans = db.list_loans(uid)?;
         for loan in loans.iter().filter(|l| l.status == "active") {
-            let Some(acct) = db.get_account(uid, &loan.account_id)? else { continue };
+            let Some(acct) = db.get_account(uid, &loan.account_id)? else {
+                continue;
+            };
             // Receivables (friends owing you, pending refunds) don't charge
             // interest in v1. Bail before we book anything.
             if matches!(acct.kind, crate::model::AccountKind::Receivable) {
@@ -69,8 +71,8 @@ fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
                 continue;
             }
 
-            let last = NaiveDate::parse_from_str(&loan.last_accrued_date, "%Y-%m-%d")
-                .unwrap_or(today);
+            let last =
+                NaiveDate::parse_from_str(&loan.last_accrued_date, "%Y-%m-%d").unwrap_or(today);
             let days = (today - last).num_days();
             if days <= 0 {
                 continue;
@@ -82,7 +84,11 @@ fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
             // ~-1004.11, i.e. more negative.
             let factor = (1.0 + apr / 365.0).powi(days as i32);
             let new_abs = current_balance.abs() * factor;
-            let new_balance = if current_balance < 0.0 { -new_abs } else { new_abs };
+            let new_balance = if current_balance < 0.0 {
+                -new_abs
+            } else {
+                new_abs
+            };
             let delta = new_balance - current_balance;
 
             // Book the |delta| as an Expense on the loan account. For a debt
@@ -91,8 +97,8 @@ fn accrue_all(db_path: &PathBuf) -> anyhow::Result<()> {
             // net_worth. Threshold below 0.0001 to skip noise from a freshly
             // booked loan with no balance yet.
             if delta.abs() > 0.0001 {
-                let interest_amount = Decimal::from_str(&format!("{:.4}", delta.abs()))
-                    .unwrap_or(Decimal::ZERO);
+                let interest_amount =
+                    Decimal::from_str(&format!("{:.4}", delta.abs())).unwrap_or(Decimal::ZERO);
                 db.insert_system_interest_transaction(
                     uid,
                     &loan.account_id,

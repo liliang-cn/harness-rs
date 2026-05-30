@@ -495,6 +495,7 @@ mod tests {
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: vec![],
+            response_format: harness_core::ResponseFormat::Free,
         }
     }
 
