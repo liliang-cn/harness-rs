@@ -461,6 +461,7 @@ impl<M: Model> AgentLoop<M> {
             if out.tool_calls.is_empty() {
                 self.hooks.fire(&Event::TaskCompleted, world);
                 self.hooks.fire(&Event::SessionEnd, world);
+                self.run_learning_review(&ctx, world, tools_called).await;
                 return Ok(Outcome::Done {
                     text: out.text,
                     iters: iter + 1,
@@ -635,6 +636,7 @@ impl<M: Model> AgentLoop<M> {
         }
 
         self.hooks.fire(&Event::SessionEnd, world);
+        self.run_learning_review(&ctx, world, tools_called).await;
         Ok(Outcome::BudgetExhausted {
             iters: ctx.policy.max_iters,
             last_text,
@@ -757,7 +759,6 @@ impl<M: Model> AgentLoop<M> {
     }
 
     /// Best-effort post-session review. Never affects the finished run.
-    #[allow(dead_code)]
     async fn run_learning_review(&self, ctx: &Context, world: &mut World, tools_called: u32) {
         let Some(cfg) = &self.learning else { return };
         if tools_called < cfg.nudge_interval { return; }
@@ -772,7 +773,11 @@ impl<M: Model> AgentLoop<M> {
             spec = spec.with_tool(t.clone());
         }
         let sub = crate::Subagent::new(cfg.review_model.clone(), spec);
-        if let Err(e) = sub.run(world).await {
+        // Box::pin breaks the recursive async-future cycle: AgentLoop<M> →
+        // run_learning_review → Subagent<Arc<dyn Model>>::run →
+        // AgentLoop<Arc<dyn Model>>::run_built_context. Without pinning the
+        // compiler rejects the infinite-sized future.
+        if let Err(e) = Box::pin(sub.run(world)).await {
             tracing::warn!(error = %e, "learning review failed");
         }
     }
