@@ -30,8 +30,9 @@ schemars          = { workspace = true }
 futures           = { workspace = true }
 
 [dev-dependencies]
-harness-skills    = { workspace = true }
-harness-tools-fs  = { workspace = true }
+harness-skills       = { workspace = true }
+harness-tools-fs     = { workspace = true }
+harness-tools-skills = { workspace = true }
 once_cell         = { workspace = true }
 harness-context   = { workspace = true }
 harness-core      = { workspace = true }
