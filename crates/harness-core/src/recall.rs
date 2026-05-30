@@ -104,6 +104,26 @@ pub struct SessionHit {
     pub bookend_end: Vec<RecallMessage>,
 }
 
+impl SessionHit {
+    pub fn new(
+        session: SessionMeta,
+        snippet: String,
+        anchor_id: i64,
+        bookend_start: Vec<RecallMessage>,
+        around: Vec<RecallMessage>,
+        bookend_end: Vec<RecallMessage>,
+    ) -> Self {
+        Self {
+            session,
+            snippet,
+            anchor_id,
+            bookend_start,
+            around,
+            bookend_end,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RecallError {
