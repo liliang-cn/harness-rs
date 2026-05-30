@@ -3,7 +3,7 @@
 //! for CJK, and a LIKE fallback for short CJK queries. Owner scoping is a SQL
 //! `WHERE owner = ?`, so cross-tenant leakage is structurally impossible.
 //!
-//! `rusqlite` runs synchronously behind an `Arc<Mutex<Connection>>`; the async
+//! `rusqlite` runs synchronously behind a `Mutex<Connection>`; the async
 //! trait methods lock and run the SQL inline (recall writes are small + fast).
 
 use async_trait::async_trait;
@@ -122,6 +122,34 @@ impl SqliteRecall {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| RecallError::Backend(e.to_string()))
     }
 
+    fn read_first(conn: &Connection, owner: &str, session_id: &str, n: i64) -> Result<Vec<RecallMessage>, RecallError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, content, tool_name, tool_calls, ts_ms FROM recall_messages
+                 WHERE owner=?1 AND session_id=?2 ORDER BY id ASC LIMIT ?3",
+            )
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![owner, session_id, n], row_to_msg)
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| RecallError::Backend(e.to_string()))
+    }
+
+    fn read_last(conn: &Connection, owner: &str, session_id: &str, n: i64) -> Result<Vec<RecallMessage>, RecallError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, role, content, tool_name, tool_calls, ts_ms FROM recall_messages
+                 WHERE owner=?1 AND session_id=?2 ORDER BY id DESC LIMIT ?3",
+            )
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![owner, session_id, n], row_to_msg)
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
+        let mut v = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| RecallError::Backend(e.to_string()))?;
+        v.reverse(); // back to chronological order
+        Ok(v)
+    }
+
     fn meta_of(conn: &Connection, owner: &str, session_id: &str) -> Option<SessionMeta> {
         conn.query_row(
             "SELECT session_id, title, source, started_at, message_count FROM recall_sessions WHERE owner=?1 AND session_id=?2",
@@ -215,9 +243,8 @@ impl RecallStore for SqliteRecall {
             }
             let Some(meta) = Self::meta_of(&conn, owner, &session_id) else { continue };
             let around = Self::read_window(&conn, owner, &session_id, anchor_id - 5, anchor_id + 5)?;
-            let max_id = meta.message_count;
-            let bookend_start = Self::read_window(&conn, owner, &session_id, 1, 3)?;
-            let bookend_end = Self::read_window(&conn, owner, &session_id, (max_id - 2).max(1), max_id)?;
+            let bookend_start = Self::read_first(&conn, owner, &session_id, 3)?;
+            let bookend_end = Self::read_last(&conn, owner, &session_id, 3)?;
             let snippet: String = conn
                 .query_row(
                     "SELECT snippet(recall_messages_fts, 0, '>>>', '<<<', '…', 12)
@@ -274,5 +301,37 @@ mod tests {
 
         let zh = r.search("u1", "支付服务", 5).await.unwrap();
         assert_eq!(zh.len(), 1, "trigram CJK search should hit");
+    }
+
+    #[tokio::test]
+    async fn bookends_correct_for_non_first_session() {
+        let r = SqliteRecall::open_in_memory().unwrap();
+        // Session A: 3 messages → global ids 1,2,3
+        r.ensure_session("u1", "a", &SessionMeta::new("a", 1)).await.unwrap();
+        for i in 0..3 {
+            r.append("u1", "a", &RecallMessage::new("user", format!("a-msg-{i}"), i)).await.unwrap();
+        }
+        // Session B: 4 messages → global ids 4,5,6,7 (NOT 1-based)
+        r.ensure_session("u1", "b", &SessionMeta::new("b", 10)).await.unwrap();
+        r.append("u1", "b", &RecallMessage::new("user", "find the kraken deployment runbook", 10)).await.unwrap();
+        r.append("u1", "b", &RecallMessage::new("assistant", "second b", 11)).await.unwrap();
+        r.append("u1", "b", &RecallMessage::new("assistant", "third b", 12)).await.unwrap();
+        r.append("u1", "b", &RecallMessage::new("assistant", "fourth b kraken", 13)).await.unwrap();
+
+        let hits = r.search("u1", "kraken", 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        let h = &hits[0];
+        assert_eq!(h.session.session_id, "b");
+        // bookends must be non-empty and contain ONLY session b's messages
+        assert!(!h.bookend_start.is_empty(), "bookend_start empty — the global-id bug");
+        assert!(!h.bookend_end.is_empty(), "bookend_end empty — the global-id bug");
+        assert!(
+            h.bookend_start.iter().any(|m| m.content == "find the kraken deployment runbook"),
+            "bookend_start must contain the first message of session b"
+        );
+        assert!(
+            h.bookend_end.iter().any(|m| m.content == "fourth b kraken"),
+            "bookend_end must contain the last message of session b"
+        );
     }
 }
