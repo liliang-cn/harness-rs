@@ -62,9 +62,17 @@ pub enum StopReason {
 #[non_exhaustive]
 pub enum ModelDelta {
     Text(String),
-    ToolCallStart { id: String, name: String },
-    ToolCallArgs { id: String, partial_json: String },
-    ToolCallEnd { id: String },
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    ToolCallArgs {
+        id: String,
+        partial_json: String,
+    },
+    ToolCallEnd {
+        id: String,
+    },
     Usage(Usage),
     Stop(StopReason),
     /// Provider-specific reasoning trace that must round-trip on the next

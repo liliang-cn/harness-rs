@@ -177,8 +177,7 @@ where
                 .ok_or_else(|| reject(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
 
             let _ = state; // hold the ref alive
-            let app: crate::server::AppState =
-                axum::extract::FromRef::from_ref(state);
+            let app: crate::server::AppState = axum::extract::FromRef::from_ref(state);
             let user = app
                 .resolve_session(&token)
                 .map_err(|e| reject(StatusCode::UNAUTHORIZED, &e))?;
@@ -188,10 +187,7 @@ where
 }
 
 fn reject(code: StatusCode, msg: &str) -> (StatusCode, axum::Json<serde_json::Value>) {
-    (
-        code,
-        axum::Json(serde_json::json!({ "error": msg })),
-    )
+    (code, axum::Json(serde_json::json!({ "error": msg })))
 }
 
 // ─── trial-tier quotas ───

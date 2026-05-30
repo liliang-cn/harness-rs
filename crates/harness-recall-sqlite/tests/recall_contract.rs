@@ -1,4 +1,4 @@
-use harness_core::{recall_contract, RecallStore};
+use harness_core::{RecallStore, recall_contract};
 use harness_recall_sqlite::SqliteRecall;
 use std::sync::Arc;
 

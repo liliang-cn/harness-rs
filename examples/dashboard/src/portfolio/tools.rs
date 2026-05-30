@@ -89,11 +89,10 @@ async fn add_asset(args: Value, w: &mut World) -> Result<ToolResult, ToolError> 
     let symbol = need_str(&args, "symbol")?.to_string();
     let name = need_str(&args, "name")?.to_string();
     let class_s = need_str(&args, "asset_class")?;
-    let asset_class =
-        AssetClass::parse(class_s).ok_or_else(|| ToolError::InvalidArgs {
-            name: "portfolio".into(),
-            reason: format!("unknown asset_class `{class_s}`"),
-        })?;
+    let asset_class = AssetClass::parse(class_s).ok_or_else(|| ToolError::InvalidArgs {
+        name: "portfolio".into(),
+        reason: format!("unknown asset_class `{class_s}`"),
+    })?;
     let currency = args
         .get("currency")
         .and_then(|v| v.as_str())

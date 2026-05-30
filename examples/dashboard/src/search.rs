@@ -6,7 +6,7 @@
 //! when one user crosses ~50k notes.
 
 use crate::db::{Db, Note, NoteEmbedding};
-use harness_core::{Embedder, EmbedError, dot, l2_normalize};
+use harness_core::{EmbedError, Embedder, dot, l2_normalize};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -53,7 +53,11 @@ pub async fn semantic_search(
     let mut hits: Vec<Hit> = Vec::new();
     if let Some(mut q_vec) = q_vec {
         l2_normalize(&mut q_vec);
-        for NoteEmbedding { note, mut embedding } in corpus.into_iter() {
+        for NoteEmbedding {
+            note,
+            mut embedding,
+        } in corpus.into_iter()
+        {
             if embedding.len() != q_vec.len() {
                 // Dimension mismatch (older row from a previous model).
                 // Skip; the worker will re-embed when it notices.
@@ -67,7 +71,11 @@ pub async fn semantic_search(
                 via_grep: false,
             });
         }
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     // If semantic returned nothing usable (no embeddings yet for this user
@@ -80,7 +88,11 @@ pub async fn semantic_search(
         for note in all {
             let hay = format!("{}\n{}", note.title, note.body).to_lowercase();
             if hay.contains(&needle) {
-                hits.push(Hit { note, score: 0.0, via_grep: true });
+                hits.push(Hit {
+                    note,
+                    score: 0.0,
+                    via_grep: true,
+                });
             }
         }
     }

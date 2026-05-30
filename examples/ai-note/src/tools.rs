@@ -167,7 +167,11 @@ async fn create_note(args: Value, w: &mut World) -> Result<ToolResult, ToolError
             "tags": note.tags,
             "embedding_status": "pending — search will use grep fallback until the worker fills it (~5s)"
         }),
-        trace: Some(format!("created note {} ({} chars)", note.id, note.body.len())),
+        trace: Some(format!(
+            "created note {} ({} chars)",
+            note.id,
+            note.body.len()
+        )),
     })
 }
 
@@ -196,10 +200,7 @@ async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
             name: "search_notes".into(),
             reason: "query required".into(),
         })?;
-    let top_k = args
-        .get("top_k")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8) as usize;
+    let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
 
     let emb = embedder()?;
     let path = db_path_of(w)?;
@@ -237,7 +238,11 @@ async fn search_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolErro
 )]
 async fn list_recent_notes(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let uid = uid_of(w)?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10).min(200) as u32;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .min(200) as u32;
     let since = args.get("since").and_then(|v| v.as_str());
     let until = args.get("until").and_then(|v| v.as_str());
     let sp = space_of(w);
@@ -370,16 +375,34 @@ async fn create_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError
     let space = space_of(w);
     let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("goal");
     if kind != "goal" && kind != "rule" {
-        return Err(ToolError::InvalidArgs { name: "create_goal".into(), reason: "kind must be goal|rule".into() });
+        return Err(ToolError::InvalidArgs {
+            name: "create_goal".into(),
+            reason: "kind must be goal|rule".into(),
+        });
     }
-    let title = args.get("title").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "create_goal".into(), reason: "title required".into() })?;
+    let title =
+        args.get("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs {
+                name: "create_goal".into(),
+                reason: "title required".into(),
+            })?;
     let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("");
     let target_date = args.get("target_date").and_then(|v| v.as_str());
     let interval = args.get("review_interval_days").and_then(|v| v.as_i64());
     let parent_id = args.get("parent_id").and_then(|v| v.as_str());
     let db = open_db(w)?;
-    let goal = db.create_goal(&uid, &space, kind, title, detail, parent_id, target_date, interval)
+    let goal = db
+        .create_goal(
+            &uid,
+            &space,
+            kind,
+            title,
+            detail,
+            parent_id,
+            target_date,
+            interval,
+        )
         .map_err(|e| ToolError::Exec(format!("insert goal: {e}")))?;
     Ok(ToolResult {
         ok: true,
@@ -416,28 +439,63 @@ async fn create_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError
 async fn decompose_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let uid = uid_of(w)?;
     let space = space_of(w);
-    let parent_id = args.get("parent_id").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "decompose_goal".into(), reason: "parent_id required".into() })?;
-    let subs = args.get("subgoals").and_then(|v| v.as_array())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "decompose_goal".into(), reason: "subgoals required".into() })?;
+    let parent_id = args
+        .get("parent_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "decompose_goal".into(),
+            reason: "parent_id required".into(),
+        })?;
+    let subs = args
+        .get("subgoals")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "decompose_goal".into(),
+            reason: "subgoals required".into(),
+        })?;
     let db = open_db(w)?;
     // Validate parent exists + belongs to user.
-    if db.get_goal(&uid, parent_id).map_err(|e| ToolError::Exec(format!("{e}")))?.is_none() {
-        return Err(ToolError::Exec(format!("parent goal `{parent_id}` not found")));
+    if db
+        .get_goal(&uid, parent_id)
+        .map_err(|e| ToolError::Exec(format!("{e}")))?
+        .is_none()
+    {
+        return Err(ToolError::Exec(format!(
+            "parent goal `{parent_id}` not found"
+        )));
     }
     let mut ids = Vec::new();
     for sg in subs {
-        let title = sg.get("title").and_then(|v| v.as_str()).unwrap_or("").trim();
-        if title.is_empty() { continue; }
+        let title = sg
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if title.is_empty() {
+            continue;
+        }
         let detail = sg.get("detail").and_then(|v| v.as_str()).unwrap_or("");
-        let g = db.create_goal(&uid, &space, "goal", title, detail, Some(parent_id), None, None)
+        let g = db
+            .create_goal(
+                &uid,
+                &space,
+                "goal",
+                title,
+                detail,
+                Some(parent_id),
+                None,
+                None,
+            )
             .map_err(|e| ToolError::Exec(format!("insert subgoal: {e}")))?;
         ids.push(g.id);
     }
     Ok(ToolResult {
         ok: true,
         content: json!({ "parent_id": parent_id, "created": ids.len(), "ids": ids }),
-        trace: Some(format!("decomposed {parent_id} into {} subgoals", ids.len())),
+        trace: Some(format!(
+            "decomposed {parent_id} into {} subgoals",
+            ids.len()
+        )),
     })
 }
 
@@ -461,19 +519,33 @@ async fn decompose_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolEr
 )]
 async fn update_goal(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let uid = uid_of(w)?;
-    let id = args.get("id").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "update_goal".into(), reason: "id required".into() })?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "update_goal".into(),
+            reason: "id required".into(),
+        })?;
     let db = open_db(w)?;
-    let n = db.update_goal(
-        &uid, id,
-        args.get("status").and_then(|v| v.as_str()),
-        args.get("title").and_then(|v| v.as_str()),
-        args.get("detail").and_then(|v| v.as_str()),
-        args.get("target_date").and_then(|v| v.as_str()),
-        args.get("review_interval_days").and_then(|v| v.as_i64()),
-    ).map_err(|e| ToolError::Exec(format!("update goal: {e}")))?;
-    if n == 0 { return Err(ToolError::Exec(format!("goal `{id}` not found"))); }
-    Ok(ToolResult { ok: true, content: json!({ "id": id, "updated": n }), trace: None })
+    let n = db
+        .update_goal(
+            &uid,
+            id,
+            args.get("status").and_then(|v| v.as_str()),
+            args.get("title").and_then(|v| v.as_str()),
+            args.get("detail").and_then(|v| v.as_str()),
+            args.get("target_date").and_then(|v| v.as_str()),
+            args.get("review_interval_days").and_then(|v| v.as_i64()),
+        )
+        .map_err(|e| ToolError::Exec(format!("update goal: {e}")))?;
+    if n == 0 {
+        return Err(ToolError::Exec(format!("goal `{id}` not found")));
+    }
+    Ok(ToolResult {
+        ok: true,
+        content: json!({ "id": id, "updated": n }),
+        trace: None,
+    })
 }
 
 /// List the user's goals in the current space. Use due_for_review=true to get
@@ -495,11 +567,19 @@ async fn list_goals(args: Value, w: &mut World) -> Result<ToolResult, ToolError>
     let space = space_of(w);
     let db = open_db(w)?;
     let goals = if let Some(pid) = args.get("parent_id").and_then(|v| v.as_str()) {
-        db.list_subgoals(&uid, pid).map_err(|e| ToolError::Exec(format!("{e}")))?
+        db.list_subgoals(&uid, pid)
+            .map_err(|e| ToolError::Exec(format!("{e}")))?
     } else {
-        let due = args.get("due_for_review").and_then(|v| v.as_bool()).unwrap_or(false);
-        let status = args.get("status").and_then(|v| v.as_str()).or(Some("active"));
-        db.list_goals(&uid, &space, status, due).map_err(|e| ToolError::Exec(format!("{e}")))?
+        let due = args
+            .get("due_for_review")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let status = args
+            .get("status")
+            .and_then(|v| v.as_str())
+            .or(Some("active"));
+        db.list_goals(&uid, &space, status, due)
+            .map_err(|e| ToolError::Exec(format!("{e}")))?
     };
     Ok(ToolResult {
         ok: true,
@@ -526,17 +606,35 @@ async fn list_goals(args: Value, w: &mut World) -> Result<ToolResult, ToolError>
 )]
 async fn log_review(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let uid = uid_of(w)?;
-    let goal_id = args.get("goal_id").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "log_review".into(), reason: "goal_id required".into() })?;
-    let progress = args.get("progress").and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs { name: "log_review".into(), reason: "progress required".into() })?;
-    let next_steps = args.get("next_steps").and_then(|v| v.as_str()).unwrap_or("");
+    let goal_id = args
+        .get("goal_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "log_review".into(),
+            reason: "goal_id required".into(),
+        })?;
+    let progress = args
+        .get("progress")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs {
+            name: "log_review".into(),
+            reason: "progress required".into(),
+        })?;
+    let next_steps = args
+        .get("next_steps")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let override_days = args.get("next_review_in_days").and_then(|v| v.as_i64());
     let db = open_db(w)?;
-    if db.get_goal(&uid, goal_id).map_err(|e| ToolError::Exec(format!("{e}")))?.is_none() {
+    if db
+        .get_goal(&uid, goal_id)
+        .map_err(|e| ToolError::Exec(format!("{e}")))?
+        .is_none()
+    {
         return Err(ToolError::Exec(format!("goal `{goal_id}` not found")));
     }
-    let review = db.add_review(&uid, goal_id, progress, next_steps, override_days)
+    let review = db
+        .add_review(&uid, goal_id, progress, next_steps, override_days)
         .map_err(|e| ToolError::Exec(format!("add review: {e}")))?;
     Ok(ToolResult {
         ok: true,

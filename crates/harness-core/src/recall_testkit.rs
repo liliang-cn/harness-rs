@@ -8,10 +8,34 @@ use std::sync::Arc;
 /// Run the full contract against a fresh, empty `store`.
 pub async fn recall_contract(store: Arc<dyn RecallStore>) {
     // ── append + search round-trip ──
-    store.ensure_session("alice", "s1", &SessionMeta::new("s1", 100)).await.unwrap();
-    store.append("alice", "s1", &RecallMessage::new("user", "refactor the auth module today", 100)).await.unwrap();
-    store.append("alice", "s1", &RecallMessage::new("assistant", "starting the auth refactor now", 101)).await.unwrap();
-    store.append("alice", "s1", &RecallMessage::new("tool", "edited auth.rs", 102).with_tool_name("edit")).await.unwrap();
+    store
+        .ensure_session("alice", "s1", &SessionMeta::new("s1", 100))
+        .await
+        .unwrap();
+    store
+        .append(
+            "alice",
+            "s1",
+            &RecallMessage::new("user", "refactor the auth module today", 100),
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            "alice",
+            "s1",
+            &RecallMessage::new("assistant", "starting the auth refactor now", 101),
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            "alice",
+            "s1",
+            &RecallMessage::new("tool", "edited auth.rs", 102).with_tool_name("edit"),
+        )
+        .await
+        .unwrap();
 
     let hits = store.search("alice", "auth refactor", 5).await.unwrap();
     assert_eq!(hits.len(), 1, "search should find the session");
@@ -24,8 +48,18 @@ pub async fn recall_contract(store: Arc<dyn RecallStore>) {
     assert!(scrolled.iter().any(|m| m.id == 2));
 
     // ── recent ordering ──
-    store.ensure_session("alice", "s2", &SessionMeta::new("s2", 200)).await.unwrap();
-    store.append("alice", "s2", &RecallMessage::new("user", "a newer session", 200)).await.unwrap();
+    store
+        .ensure_session("alice", "s2", &SessionMeta::new("s2", 200))
+        .await
+        .unwrap();
+    store
+        .append(
+            "alice",
+            "s2",
+            &RecallMessage::new("user", "a newer session", 200),
+        )
+        .await
+        .unwrap();
     let recent = store.recent("alice", 10).await.unwrap();
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[0].session_id, "s2", "newest first");

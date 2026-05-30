@@ -107,15 +107,15 @@ async fn main() -> anyhow::Result<()> {
     let gemini_key = std::env::var("GEMINI_API_KEY").ok();
     let chat_model: Arc<dyn Model> = match cli.chat_provider.as_str() {
         "gemini" => {
-            let key = gemini_key
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("GEMINI_API_KEY required for chat_provider=gemini"))?;
+            let key = gemini_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("GEMINI_API_KEY required for chat_provider=gemini")
+            })?;
             Arc::new(GeminiNative::with_key(&cli.chat_model, key))
         }
         _ => {
-            let key = deepseek_key
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("DEEPSEEK_API_KEY required for openai-compat chat"))?;
+            let key = deepseek_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("DEEPSEEK_API_KEY required for openai-compat chat")
+            })?;
             Arc::new(OpenAiCompat::with_key(
                 providers::DEEPSEEK.to_string(),
                 &cli.chat_model,
@@ -145,7 +145,9 @@ async fn main() -> anyhow::Result<()> {
     .spawn();
 
     // ── http server ──────────────────────────────────────────
-    let user_tz = std::env::var("HARNESS_USER_TZ").ok().filter(|s| !s.is_empty());
+    let user_tz = std::env::var("HARNESS_USER_TZ")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     // Seed provider_config from env on first launch; DB wins on subsequent
     // restarts after admin edits.
@@ -200,7 +202,11 @@ async fn main() -> anyhow::Result<()> {
     println!("  bind:    http://{}", addr);
     println!("  db:      {}", state.db_path.display());
     println!("  model:   {}", state.model_handle);
-    println!("  embed:   {} ({}d)", state.embedder.handle(), state.embedder.dim());
+    println!(
+        "  embed:   {} ({}d)",
+        state.embedder.handle(),
+        state.embedder.dim()
+    );
 
     server::serve(state, addr).await
 }

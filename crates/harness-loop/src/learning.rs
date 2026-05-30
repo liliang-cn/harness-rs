@@ -28,10 +28,22 @@ impl LearningConfig {
             max_iters: 6,
         }
     }
-    pub fn with_tool(mut self, t: Arc<dyn Tool>) -> Self { self.tools.push(t); self }
-    pub fn with_nudge_interval(mut self, n: u32) -> Self { self.nudge_interval = n; self }
-    pub fn with_review_prompt(mut self, p: impl Into<String>) -> Self { self.review_prompt = p.into(); self }
-    pub fn with_max_iters(mut self, n: u32) -> Self { self.max_iters = n; self }
+    pub fn with_tool(mut self, t: Arc<dyn Tool>) -> Self {
+        self.tools.push(t);
+        self
+    }
+    pub fn with_nudge_interval(mut self, n: u32) -> Self {
+        self.nudge_interval = n;
+        self
+    }
+    pub fn with_review_prompt(mut self, p: impl Into<String>) -> Self {
+        self.review_prompt = p.into();
+        self
+    }
+    pub fn with_max_iters(mut self, n: u32) -> Self {
+        self.max_iters = n;
+        self
+    }
 }
 
 /// Default review prompt — adapted from Hermes Agent's skill+memory review.
@@ -69,14 +81,18 @@ pub fn render_transcript(history: &[Turn], max_chars: usize) -> String {
         for b in &turn.blocks {
             match b {
                 Block::Text(t) => out.push_str(&format!("{role}: {t}\n")),
-                Block::ToolResult { content, .. } => out.push_str(&format!("tool_result: {content}\n")),
+                Block::ToolResult { content, .. } => {
+                    out.push_str(&format!("tool_result: {content}\n"))
+                }
                 _ => {} // ToolCall etc. — omit from the review transcript
             }
         }
     }
     if out.len() > max_chars {
         let start = out.len() - max_chars;
-        let start = (start..out.len()).find(|i| out.is_char_boundary(*i)).unwrap_or(out.len());
+        let start = (start..out.len())
+            .find(|i| out.is_char_boundary(*i))
+            .unwrap_or(out.len());
         out = format!("…(transcript truncated)…\n{}", &out[start..]);
     }
     out
@@ -89,14 +105,23 @@ mod tests {
     #[test]
     fn transcript_renders_roles_and_truncates_tail() {
         let history = vec![
-            Turn { role: TurnRole::User, blocks: vec![Block::Text("hello there".into())] },
-            Turn { role: TurnRole::Assistant, blocks: vec![Block::Text("hi".into())] },
+            Turn {
+                role: TurnRole::User,
+                blocks: vec![Block::Text("hello there".into())],
+            },
+            Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::Text("hi".into())],
+            },
         ];
         let t = render_transcript(&history, 10_000);
         assert!(t.contains("user: hello there"));
         assert!(t.contains("assistant: hi"));
 
-        let big = vec![Turn { role: TurnRole::User, blocks: vec![Block::Text("x".repeat(50_000))] }];
+        let big = vec![Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("x".repeat(50_000))],
+        }];
         let t = render_transcript(&big, 1_000);
         assert!(t.len() < 1_200);
         assert!(t.starts_with("…(transcript truncated)…"));

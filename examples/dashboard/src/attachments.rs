@@ -28,8 +28,9 @@ fn upload_root() -> PathBuf {
 
 fn kind_for(mime: &str) -> Option<&'static str> {
     match mime.to_ascii_lowercase().as_str() {
-        "image/jpeg" | "image/png" | "image/webp" | "image/heic" | "image/heif"
-        | "image/gif" => Some("image"),
+        "image/jpeg" | "image/png" | "image/webp" | "image/heic" | "image/heif" | "image/gif" => {
+            Some("image")
+        }
         "application/pdf" => Some("pdf"),
         _ => None,
     }
@@ -95,8 +96,7 @@ pub async fn upload_handler(
     let ext = ext_for(&mime);
 
     let user_dir = upload_root().join(&auth.user.id);
-    std::fs::create_dir_all(&user_dir)
-        .map_err(|e| ApiError::Internal(format!("mkdir: {e}")))?;
+    std::fs::create_dir_all(&user_dir).map_err(|e| ApiError::Internal(format!("mkdir: {e}")))?;
     let rel_path = format!("{}/{}.{ext}", auth.user.id, id);
     let full = upload_root().join(&rel_path);
     std::fs::write(&full, &bytes).map_err(|e| ApiError::Internal(format!("write: {e}")))?;
@@ -132,8 +132,7 @@ pub async fn serve_handler(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::BadRequest("attachment not found".into()))?;
     let full = upload_root().join(&rec.path);
-    let bytes =
-        std::fs::read(&full).map_err(|e| ApiError::Internal(format!("read: {e}")))?;
+    let bytes = std::fs::read(&full).map_err(|e| ApiError::Internal(format!("read: {e}")))?;
     Ok((
         [
             (header::CONTENT_TYPE, rec.mime_type.clone()),

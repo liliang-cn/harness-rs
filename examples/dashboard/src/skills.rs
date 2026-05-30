@@ -21,10 +21,7 @@ use harness::prelude::*;
     license = "MIT",
     harness(kind = "computational", risk = "read-only")
 )]
-async fn monthly_money_brief(
-    _ctx: &mut Context,
-    _world: &mut World,
-) -> Result<(), SkillError> {
+async fn monthly_money_brief(_ctx: &mut Context, _world: &mut World) -> Result<(), SkillError> {
     Ok(())
 }
 
@@ -44,10 +41,7 @@ async fn monthly_money_brief(
     license = "MIT",
     harness(kind = "computational", risk = "read-only")
 )]
-async fn portfolio_health_check(
-    _ctx: &mut Context,
-    _world: &mut World,
-) -> Result<(), SkillError> {
+async fn portfolio_health_check(_ctx: &mut Context, _world: &mut World) -> Result<(), SkillError> {
     Ok(())
 }
 

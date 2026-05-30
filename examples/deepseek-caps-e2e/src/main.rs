@@ -57,7 +57,11 @@ impl harness_core::Tool for ClockTool {
     fn risk(&self) -> ToolRisk {
         ToolRisk::ReadOnly
     }
-    async fn invoke(&self, _args: serde_json::Value, world: &mut World) -> Result<ToolResult, ToolError> {
+    async fn invoke(
+        &self,
+        _args: serde_json::Value,
+        world: &mut World,
+    ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
             ok: true,
             content: json!({ "now_ms": world.clock.now_ms() }),
@@ -167,8 +171,7 @@ async fn run_learning(key: &str) -> anyhow::Result<bool> {
         std::fs::create_dir_all(p)?;
     }
 
-    let mem: Arc<dyn harness_core::Memory> =
-        Arc::new(FileMemory::open(&mem_path)?);
+    let mem: Arc<dyn harness_core::Memory> = Arc::new(FileMemory::open(&mem_path)?);
     let review_model: Arc<dyn Model> = Arc::new(model(key));
 
     let cfg = LearningConfig::new(review_model)
@@ -207,7 +210,11 @@ async fn run_learning(key: &str) -> anyhow::Result<bool> {
         0
     };
 
-    println!("  Review wrote {} memories, {} skill entries", mems.len(), skills_count);
+    println!(
+        "  Review wrote {} memories, {} skill entries",
+        mems.len(),
+        skills_count
+    );
     for m in &mems {
         println!("    mem: {}", m.content);
     }
@@ -233,8 +240,7 @@ async fn run_scheduler(key: &str) -> anyhow::Result<bool> {
         std::fs::create_dir_all(p)?;
     }
 
-    let jobs: Arc<dyn harness_scheduler::JobStore> =
-        Arc::new(FileJobStore::open(&jobs_path)?);
+    let jobs: Arc<dyn harness_scheduler::JobStore> = Arc::new(FileJobStore::open(&jobs_path)?);
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -253,8 +259,7 @@ async fn run_scheduler(key: &str) -> anyhow::Result<bool> {
     jobs.add(&job).await?;
 
     let m: Arc<dyn Model> = Arc::new(model(key));
-    let sched = Scheduler::new(jobs.clone(), m)
-        .with_channel(Arc::new(StdoutChannel::new()));
+    let sched = Scheduler::new(jobs.clone(), m).with_channel(Arc::new(StdoutChannel::new()));
 
     let fired = sched.tick_once().await;
     println!("  Jobs fired: {fired}");
@@ -273,9 +278,8 @@ async fn run_scheduler(key: &str) -> anyhow::Result<bool> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let key = std::env::var("DEEPSEEK_API_KEY").expect(
-        "set DEEPSEEK_API_KEY to a valid DeepSeek key before running this binary",
-    );
+    let key = std::env::var("DEEPSEEK_API_KEY")
+        .expect("set DEEPSEEK_API_KEY to a valid DeepSeek key before running this binary");
 
     let recall_ok = run_recall(&key).await?;
     let learning_ok = run_learning(&key).await?;

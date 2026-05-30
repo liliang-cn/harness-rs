@@ -100,8 +100,7 @@ impl FileMemory {
             .map_err(|e| MemoryError::Backend(format!("poisoned mutex: {e}")))?;
         let mut buf = String::new();
         for e in entries {
-            let line =
-                serde_json::to_string(e).map_err(|e| MemoryError::Serde(e.to_string()))?;
+            let line = serde_json::to_string(e).map_err(|e| MemoryError::Serde(e.to_string()))?;
             buf.push_str(&line);
             buf.push('\n');
         }
@@ -110,8 +109,7 @@ impl FileMemory {
         let tmp = self.path.with_extension("jsonl.tmp");
         std::fs::write(&tmp, buf.as_bytes())
             .map_err(|e| MemoryError::Io(format!("write tmp: {e}")))?;
-        std::fs::rename(&tmp, &self.path)
-            .map_err(|e| MemoryError::Io(format!("rename: {e}")))?;
+        std::fs::rename(&tmp, &self.path).map_err(|e| MemoryError::Io(format!("rename: {e}")))?;
         Ok(())
     }
 
