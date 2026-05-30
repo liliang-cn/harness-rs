@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "ai-note"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "argon2",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "crate-keeper"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "dashboard"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "argon2",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-caps-e2e"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-hello"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "harness-rs",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "harness-rs-context",
  "harness-rs-core",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-blueprint"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "futures",
@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-compactor"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-context"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "futures",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-daemon"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-hooks"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "futures",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-macros"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-models"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-permissions"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "harness-rs-core",
  "serde",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-recall-sqlite"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sandbox"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-scheduler"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-common"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-rust"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-skills"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-templates"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "futures",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-fs"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-memory"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-shell"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-skills"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-tasks"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-web"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "harness-rs",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "investor-bot"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1921,7 +1921,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-assistant"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "async-trait",
