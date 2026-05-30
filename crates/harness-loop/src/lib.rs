@@ -73,6 +73,12 @@ pub struct AgentLoop<M: Model> {
     /// text fragment. Tool-call deltas are still assembled inside the loop;
     /// only the terminal `ModelOutput` shape is observable downstream.
     pub streaming: bool,
+    /// Optional cross-session recall store. When set, the loop captures every
+    /// turn and the `session_search` tool is registered. See `with_recall`.
+    pub recall: Option<Arc<dyn harness_core::RecallStore>>,
+    /// When true (and `recall` is set), a `RecallGuide` auto-injects top-k
+    /// past context at session start.
+    pub recall_auto_inject: bool,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -86,6 +92,8 @@ impl<M: Model> AgentLoop<M> {
             compactor: Arc::new(DefaultCompactor::new()),
             response_format: ResponseFormat::Free,
             streaming: false,
+            recall: None,
+            recall_auto_inject: false,
         }
     }
 
@@ -125,6 +133,22 @@ impl<M: Model> AgentLoop<M> {
     /// Pull in every `#[hook]`-registered hook.
     pub fn with_macro_hooks(mut self) -> Self {
         self.hooks = self.hooks.with_macro_hooks_take();
+        self
+    }
+
+    /// Enable cross-session recall: capture every turn into `store` and
+    /// register the `session_search` tool. Owner + session id are read from
+    /// `world.profile.extra["recall_owner"|"recall_session"]` at run time.
+    pub fn with_recall(mut self, store: Arc<dyn harness_core::RecallStore>) -> Self {
+        self.tools.insert(Arc::new(crate::SessionSearchTool::new(store.clone())));
+        self.recall = Some(store);
+        self
+    }
+
+    /// After `with_recall`, also auto-inject top-k relevant past context at
+    /// session start (off by default — tool-only is prompt-cache friendly).
+    pub fn auto_inject(mut self) -> Self {
+        self.recall_auto_inject = true;
         self
     }
 
@@ -304,7 +328,44 @@ impl<M: Model> AgentLoop<M> {
             world,
         );
 
-        for g in &self.guides {
+        // ── recall: resolve owner/session, ensure the session row ──
+        let (recall_owner, recall_session) = if self.recall.is_some() {
+            use std::sync::atomic::Ordering;
+            let owner = world
+                .profile
+                .extra
+                .get("recall_owner")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+            let session = world
+                .profile
+                .extra
+                .get("recall_session")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    format!("sess-{}-{}", world.clock.now_ms(), RECALL_SEQ.fetch_add(1, Ordering::SeqCst))
+                });
+            if let Some(store) = &self.recall {
+                let meta = harness_core::SessionMeta::new(&session, world.clock.now_ms());
+                if let Err(e) = store.ensure_session(&owner, &session, &meta).await {
+                    tracing::warn!(error = %e, "recall ensure_session failed");
+                }
+            }
+            (owner, session)
+        } else {
+            (String::new(), String::new())
+        };
+
+        let recall_guide: Option<Arc<dyn Guide>> = if self.recall_auto_inject {
+            self.recall.clone().map(|s| Arc::new(crate::RecallGuide::new(s)) as Arc<dyn Guide>)
+        } else {
+            None
+        };
+        let all_guides: Vec<&Arc<dyn Guide>> =
+            self.guides.iter().chain(recall_guide.iter()).collect();
+        for g in &all_guides {
             if g.scope().matches(&ctx.task) {
                 self.hooks.fire(&Event::PreGuide { guide: g.id() }, world);
                 g.apply(&mut ctx, world).await?;
@@ -316,6 +377,15 @@ impl<M: Model> AgentLoop<M> {
             role: TurnRole::User,
             blocks: vec![Block::Text(ctx.task.description.clone())],
         });
+
+        if self.recall.is_some() {
+            self.recall_append(
+                &recall_owner,
+                &recall_session,
+                harness_core::RecallMessage::new("user", ctx.task.description.clone(), world.clock.now_ms()),
+            )
+            .await;
+        }
 
         // Running totals — surface to caller even on BudgetExhausted.
         let mut tools_called: u32 = 0;
@@ -361,6 +431,21 @@ impl<M: Model> AgentLoop<M> {
                 last_text = Some(t.clone());
             }
             ctx.push_model_output(&out);
+
+            if self.recall.is_some() {
+                let calls = if out.tool_calls.is_empty() {
+                    None
+                } else {
+                    serde_json::to_string(&out.tool_calls).ok()
+                };
+                let mut m = harness_core::RecallMessage::new(
+                    "assistant",
+                    out.text.clone().unwrap_or_default(),
+                    world.clock.now_ms(),
+                );
+                m.tool_calls = calls;
+                self.recall_append(&recall_owner, &recall_session, m).await;
+            }
 
             if out.tool_calls.is_empty() {
                 self.hooks.fire(&Event::TaskCompleted, world);
@@ -422,6 +507,17 @@ impl<M: Model> AgentLoop<M> {
                         content: result.content.clone(),
                     }],
                 });
+
+                if self.recall.is_some() {
+                    let body = serde_json::to_string(&result.content).unwrap_or_default();
+                    self.recall_append(
+                        &recall_owner,
+                        &recall_session,
+                        harness_core::RecallMessage::new("tool", body, world.clock.now_ms())
+                            .with_tool_name(action.tool.clone()),
+                    )
+                    .await;
+                }
 
                 // run self-correct sensors
                 let mut all_signals = Vec::new();
@@ -627,6 +723,15 @@ impl<M: Model> AgentLoop<M> {
         })
     }
 
+    /// Best-effort append to the recall store. Never fails the turn.
+    async fn recall_append(&self, owner: &str, session: &str, msg: harness_core::RecallMessage) {
+        if let Some(store) = &self.recall {
+            if let Err(e) = store.append(owner, session, &msg).await {
+                tracing::warn!(error = %e, "recall append failed");
+            }
+        }
+    }
+
     /// One final model call with tools removed, asking it to write the
     /// best-effort conclusion from whatever it has already gathered.
     ///
@@ -708,6 +813,9 @@ pub fn is_default_safe_fix(patch: &harness_core::FixPatch) -> bool {
 /// Monotonic counter for `.harness-patch-*.diff` temp filenames — millisecond
 /// resolution alone collides under parallel agent runs.
 static PATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Monotonic counter for fallback recall session ids (no `uuid` dep).
+static RECALL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Apply auto-fix patches; return short descriptions of those that succeeded.
 ///
