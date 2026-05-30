@@ -181,7 +181,83 @@ What you get:
 The `examples/personal-assistant` and `examples/investor-bot` binaries
 expose this via `--memory <path>` + `--synth-model <id>` flags.
 
-### 7. Observe what the agent is doing
+### 7. Cross-session recall (search your own past conversations)
+
+One builder call captures every turn and gives the agent a `session_search`
+tool. Owner-scoped, so a multi-tenant app can't cross users.
+
+```rust
+use harness_context::FileRecall;           // JSONL default, zero new deps
+// or: use harness_recall_sqlite::SqliteRecall;  // FTS5 + CJK trigram, for scale
+use harness_core::RecallStore;
+use serde_json::json;
+use std::sync::Arc;
+
+let store: Arc<dyn RecallStore> = Arc::new(FileRecall::open("~/.my-agent/recall")?);
+
+let loop_ = AgentLoop::new(model).with_recall(store); // capture + session_search tool
+// .auto_inject() also surfaces top-k relevant past context at session start.
+
+// Multi-tenant: set owner/session per request so users can't read each other.
+world.profile.extra.insert("recall_owner".into(), json!(user_id));
+world.profile.extra.insert("recall_session".into(), json!(conversation_id));
+```
+
+### 8. Self-evolving learning loop (skills + memory that grow)
+
+After a session does real work, a background review subagent reads the
+transcript and writes/patches **skills** and **memory** — so the next
+session starts smarter.
+
+```rust
+use harness_loop::LearningConfig;
+use harness_tools_skills::SkillManageTool;   // skill_manage: create/edit/patch/delete SKILL.md
+use harness_tools_memory::RememberThisTool;
+use std::sync::Arc;
+
+let review_model: Arc<dyn harness::Model> = Arc::new(OpenAiCompat::with_key(
+    DEEPSEEK, "deepseek-v4-flash", key.clone(),
+));
+
+let loop_ = AgentLoop::new(model).with_learning_loop(
+    LearningConfig::new(review_model)
+        .with_tool(Arc::new(SkillManageTool::new("~/.my-agent/skills")))
+        .with_tool(Arc::new(RememberThisTool::new(memory.clone())))
+        .with_nudge_interval(10), // review after >= 10 tool calls
+);
+```
+
+The review fires at session end, is white-listed to only the tools you
+inject, and is best-effort — a review failure never affects the finished run.
+
+### 9. Scheduled agent jobs with delivery
+
+`harness-scheduler` runs jobs as agent turns on a schedule and delivers the
+output to a channel; the agent can also schedule jobs for itself.
+
+```rust
+use harness_scheduler::{
+    Scheduler, FileJobStore, StdoutChannel, EmailChannel, CronjobTool, JobStore,
+};
+use std::sync::Arc;
+
+let jobs: Arc<dyn JobStore> = Arc::new(FileJobStore::open("~/.my-agent/jobs.json")?);
+let model: Arc<dyn harness::Model> = Arc::new(OpenAiCompat::with_key(
+    DEEPSEEK, "deepseek-v4-flash", key.clone(),
+));
+
+Scheduler::new(jobs.clone(), model)
+    .with_channel(Arc::new(StdoutChannel::new()))
+    .with_channel(Arc::new(EmailChannel::from_env().unwrap())) // RESEND_API_KEY + DIGEST_FROM
+    .with_tool(Arc::new(CronjobTool::new(jobs.clone())))       // let the agent self-schedule
+    .spawn(); // ticks every minute; runs due jobs, delivers their output
+```
+
+A `Job` is `{ schedule, prompt, channel }`; schedules are `"daily 08:00"`,
+`"weekly mon 09:30"`, or `"every 15m"`. A job whose output is `[SILENT]`
+suppresses delivery.
+
+### 10. Observe what the agent is doing
 
 ```bash
 # Live stderr stream of every model call, tool call, and tool result:
@@ -196,7 +272,7 @@ harness trace /tmp/run.jsonl --verbose
 
 ```
 $ cargo test --workspace
-... 133 tests passing
+... 238 tests passing
 ```
 
 Three layers of verification:
@@ -223,6 +299,8 @@ of increasing surface area:
   REPL, brief mode.
 - `examples/investor-bot` — autonomous web research with multi-engine search
   fallback + retry.
+- `examples/deepseek-caps-e2e` — real-DeepSeek end-to-end of the v0.0.5
+  capabilities (recall + learning loop + scheduler). Reads `DEEPSEEK_API_KEY`.
 
 ## Status
 
