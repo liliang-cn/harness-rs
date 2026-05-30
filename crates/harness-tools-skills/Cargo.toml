@@ -1,0 +1,27 @@
+[package]
+name = "harness-rs-tools-skills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "LLM-facing skill-authoring tool for harness-rs agents: skill_manage (create/patch/edit/delete SKILL.md). Used by the learning loop."
+
+keywords     = ["agent", "ai", "llm", "harness", "skills"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_tools_skills"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core   = { workspace = true }
+harness-skills = { workspace = true }
+async-trait    = { workspace = true }
+serde_json     = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+harness-context = { workspace = true }
