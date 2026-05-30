@@ -98,23 +98,32 @@ pub trait Model: Send + Sync + 'static {
     fn info(&self) -> ModelInfo;
 }
 
-/// Lets a boxed/shared model (`Arc<dyn Model>`) be used anywhere a `Model` is
-/// required — e.g. as the concrete `M` in `AgentLoop<M>` / `Subagent<M>`. The
-/// `Model` trait is object-safe, so this just forwards to the inner value.
+/// A concrete newtype wrapping a boxed model, so an `Arc<dyn Model>` can be used
+/// where a concrete `M: Model` is required (e.g. `Subagent::new` / `AgentLoop<M>`).
+///
+/// We deliberately do NOT `impl Model for Arc<dyn Model>` directly. Doing so
+/// changes `.stream()` method resolution on EVERY `Arc<dyn Model>` value in the
+/// program (from a deref to `dyn Model` into the Arc impl's `async fn stream`
+/// RPITIT), and proving that boxed streaming future is `Send` inside a `Send`
+/// context (e.g. an axum handler driving the streaming loop) overflows the
+/// auto-trait solver (E0275). Wrapping in this concrete newtype gives callers
+/// `DynModel: Model` without touching resolution for bare `Arc<dyn Model>`.
+pub struct DynModel(pub std::sync::Arc<dyn Model>);
+
 #[async_trait]
-impl<T: Model + ?Sized> Model for std::sync::Arc<T> {
+impl Model for DynModel {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
-        (**self).complete(ctx).await
+        self.0.complete(ctx).await
     }
     async fn stream(
         &self,
         ctx: &Context,
     ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError>
     {
-        (**self).stream(ctx).await
+        self.0.stream(ctx).await
     }
     fn info(&self) -> ModelInfo {
-        (**self).info()
+        self.0.info()
     }
 }
 
@@ -153,10 +162,11 @@ mod arc_model_tests {
     fn assert_is_model<M: Model>(_m: &M) {}
 
     #[tokio::test]
-    async fn arc_dyn_model_is_a_model() {
+    async fn dyn_model_wrapper_is_a_model() {
         let m: Arc<dyn Model> = Arc::new(Dummy);
-        assert_is_model(&m); // compiles only if Arc<dyn Model>: Model
-        let out = m
+        let wrapped = DynModel(m);
+        assert_is_model(&wrapped); // compiles only if DynModel: Model
+        let out = wrapped
             .complete(&Context::new(crate::Task {
                 description: "x".into(),
                 source: None,

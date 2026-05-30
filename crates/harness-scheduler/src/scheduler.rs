@@ -79,7 +79,7 @@ impl Scheduler {
                 Task { description: job.prompt.clone(), source: None, deadline: None },
             ).with_max_iters(self.max_iters);
             for t in &self.tools { spec = spec.with_tool(t.clone()); }
-            let sub = Subagent::new(self.model.clone(), spec);
+            let sub = Subagent::new(harness_core::DynModel(self.model.clone()), spec);
             let output = match sub.run(&mut world).await {
                 Ok(report) => report.text.unwrap_or_default(),
                 Err(e) => { tracing::warn!(job = %job.name, error = %e, "scheduler: job run failed"); String::new() }
