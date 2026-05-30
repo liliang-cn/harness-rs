@@ -83,9 +83,19 @@ impl FileRecall {
 fn sanitize(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let cleaned = if cleaned.is_empty() { "_".to_string() } else { cleaned };
+    let cleaned = if cleaned.is_empty() {
+        "_".to_string()
+    } else {
+        cleaned
+    };
     if cleaned.chars().count() > 120 {
         cleaned.chars().take(120).collect()
     } else {
@@ -109,19 +119,30 @@ fn make_snippet(content: &str, q_tokens: &[String]) -> String {
         .filter_map(|t| lower.find(t.as_str()).map(|pos| (pos, t.len())))
         .min_by_key(|(pos, _)| *pos);
     match hit {
-        Some((pos, len)) if content.is_char_boundary(pos) && content.is_char_boundary(pos + len) => {
+        Some((pos, len))
+            if content.is_char_boundary(pos) && content.is_char_boundary(pos + len) =>
+        {
             let start = pos.saturating_sub(40);
             let end = (pos + len + 40).min(content.len());
-            let start = (0..=start).rev().find(|i| content.is_char_boundary(*i)).unwrap_or(0);
-            let end = (end..=content.len()).find(|i| content.is_char_boundary(*i)).unwrap_or(content.len());
+            let start = (0..=start)
+                .rev()
+                .find(|i| content.is_char_boundary(*i))
+                .unwrap_or(0);
+            let end = (end..=content.len())
+                .find(|i| content.is_char_boundary(*i))
+                .unwrap_or(content.len());
             let mut s = String::new();
-            if start > 0 { s.push_str("…"); }
+            if start > 0 {
+                s.push('…');
+            }
             s.push_str(&content[start..pos]);
             s.push_str(">>>");
             s.push_str(&content[pos..pos + len]);
             s.push_str("<<<");
             s.push_str(&content[pos + len..end]);
-            if end < content.len() { s.push_str("…"); }
+            if end < content.len() {
+                s.push('…');
+            }
             s
         }
         _ => content.chars().take(80).collect(),
@@ -136,7 +157,10 @@ impl RecallStore for FileRecall {
         session_id: &str,
         meta: &SessionMeta,
     ) -> Result<(), RecallError> {
-        let _g = self.write_lock.lock().map_err(|e| RecallError::Backend(e.to_string()))?;
+        let _g = self
+            .write_lock
+            .lock()
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
         std::fs::create_dir_all(self.owner_dir(owner))
             .map_err(|e| RecallError::Io(e.to_string()))?;
         if self.read_meta(owner, session_id).is_none() {
@@ -153,7 +177,10 @@ impl RecallStore for FileRecall {
         session_id: &str,
         msg: &RecallMessage,
     ) -> Result<i64, RecallError> {
-        let _g = self.write_lock.lock().map_err(|e| RecallError::Backend(e.to_string()))?;
+        let _g = self
+            .write_lock
+            .lock()
+            .map_err(|e| RecallError::Backend(e.to_string()))?;
         std::fs::create_dir_all(self.owner_dir(owner))
             .map_err(|e| RecallError::Io(e.to_string()))?;
         let line = serde_json::to_string(msg).map_err(|e| RecallError::Serde(e.to_string()))?;
@@ -197,7 +224,11 @@ impl RecallStore for FileRecall {
             if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let session_id = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let session_id = p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             let msgs = self.read_messages(owner, &session_id);
             if msgs.is_empty() {
                 continue;
@@ -206,12 +237,17 @@ impl RecallStore for FileRecall {
             let mut best: Option<(u32, &RecallMessage)> = None;
             for m in &msgs {
                 let hay = m.content.to_lowercase();
-                let score: u32 = q.iter().map(|t| if hay.contains(t.as_str()) { 1 } else { 0 }).sum();
+                let score: u32 = q
+                    .iter()
+                    .map(|t| if hay.contains(t.as_str()) { 1 } else { 0 })
+                    .sum();
                 if score > 0 && best.map(|(s, _)| score > s).unwrap_or(true) {
                     best = Some((score, m));
                 }
             }
-            let Some((score, anchor)) = best else { continue };
+            let Some((score, anchor)) = best else {
+                continue;
+            };
             let meta = self
                 .read_meta(owner, &session_id)
                 .unwrap_or_else(|| SessionMeta::new(&session_id, msgs[0].ts_ms));
@@ -222,7 +258,8 @@ impl RecallStore for FileRecall {
                 .cloned()
                 .collect();
             let bookend_start: Vec<RecallMessage> = msgs.iter().take(3).cloned().collect();
-            let bookend_end: Vec<RecallMessage> = msgs.iter().rev().take(3).rev().cloned().collect();
+            let bookend_end: Vec<RecallMessage> =
+                msgs.iter().rev().take(3).rev().cloned().collect();
             hits.push((
                 score,
                 started,
@@ -263,12 +300,10 @@ impl RecallStore for FileRecall {
                 let p = entry.path();
                 if p.extension().and_then(|e| e.to_str()) == Some("json")
                     && p.to_string_lossy().ends_with(".meta.json")
+                    && let Ok(s) = std::fs::read_to_string(&p)
+                    && let Ok(m) = serde_json::from_str::<SessionMeta>(&s)
                 {
-                    if let Ok(s) = std::fs::read_to_string(&p) {
-                        if let Ok(m) = serde_json::from_str::<SessionMeta>(&s) {
-                            metas.push(m);
-                        }
-                    }
+                    metas.push(m);
                 }
             }
         }
@@ -298,9 +333,23 @@ mod tests {
     async fn append_then_search_and_scroll() {
         let root = tmp_root();
         let r = FileRecall::open(&root).unwrap();
-        r.ensure_session("u1", "s1", &SessionMeta::new("s1", 100)).await.unwrap();
-        r.append("u1", "s1", &RecallMessage::new("user", "let us refactor the auth module", 100)).await.unwrap();
-        r.append("u1", "s1", &RecallMessage::new("assistant", "sure, starting auth refactor", 101)).await.unwrap();
+        r.ensure_session("u1", "s1", &SessionMeta::new("s1", 100))
+            .await
+            .unwrap();
+        r.append(
+            "u1",
+            "s1",
+            &RecallMessage::new("user", "let us refactor the auth module", 100),
+        )
+        .await
+        .unwrap();
+        r.append(
+            "u1",
+            "s1",
+            &RecallMessage::new("assistant", "sure, starting auth refactor", 101),
+        )
+        .await
+        .unwrap();
 
         let hits = r.search("u1", "auth refactor", 5).await.unwrap();
         assert_eq!(hits.len(), 1);
@@ -321,11 +370,17 @@ mod tests {
     async fn malformed_line_skipped() {
         let root = tmp_root();
         let r = FileRecall::open(&root).unwrap();
-        r.ensure_session("u1", "s1", &SessionMeta::new("s1", 1)).await.unwrap();
+        r.ensure_session("u1", "s1", &SessionMeta::new("s1", 1))
+            .await
+            .unwrap();
         // hand-write a bad line then a good one
         let path = r.session_path("u1", "s1");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "{bad\n{\"id\":0,\"role\":\"user\",\"content\":\"hello world\",\"ts_ms\":1}\n").unwrap();
+        std::fs::write(
+            &path,
+            "{bad\n{\"id\":0,\"role\":\"user\",\"content\":\"hello world\",\"ts_ms\":1}\n",
+        )
+        .unwrap();
         let hits = r.search("u1", "hello", 5).await.unwrap();
         assert_eq!(hits.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
@@ -336,8 +391,16 @@ mod tests {
         let root = tmp_root();
         let r = FileRecall::open(&root).unwrap();
         let owner = "用户".repeat(50); // >120 bytes, multi-byte
-        r.ensure_session(&owner, "s1", &SessionMeta::new("s1", 1)).await.unwrap();
-        r.append(&owner, "s1", &RecallMessage::new("user", "İstanbul café 支付服务 refactor", 1)).await.unwrap();
+        r.ensure_session(&owner, "s1", &SessionMeta::new("s1", 1))
+            .await
+            .unwrap();
+        r.append(
+            &owner,
+            "s1",
+            &RecallMessage::new("user", "İstanbul café 支付服务 refactor", 1),
+        )
+        .await
+        .unwrap();
         // search must not panic on the mixed-case/Unicode snippet path
         let _ = r.search(&owner, "refactor", 5).await.unwrap();
         let _ = r.search(&owner, "İstanbul", 5).await.unwrap();

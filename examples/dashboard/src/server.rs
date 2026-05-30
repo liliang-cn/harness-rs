@@ -1,6 +1,6 @@
 use crate::auth::{
-    AuthCtx, AuthError, Invite, User, hash_password, is_trial, new_session,
-    random_invite_code, random_user_id, validate_email, verify_password,
+    AuthCtx, AuthError, Invite, User, hash_password, is_trial, new_session, random_invite_code,
+    random_user_id, validate_email, verify_password,
 };
 use crate::db::{Db, today_year_month};
 use crate::portfolio::model::build_positions;
@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Vite-built admin SPA, embedded into the binary so deploys stay
 /// single-artifact. Built by `cd admin-ui && npm run build`.
@@ -139,7 +139,10 @@ impl AppState {
     /// Snapshot the config under a brief read-lock. Callers should NOT hold
     /// the guard across an `.await`.
     pub fn cfg(&self) -> AppConfig {
-        self.config.read().expect("AppConfig RwLock poisoned").clone()
+        self.config
+            .read()
+            .expect("AppConfig RwLock poisoned")
+            .clone()
     }
 
     /// Resolve a model id to the AnyModel adapter, picking the right
@@ -153,7 +156,9 @@ impl AppState {
             .find(|m| m.id == model_id)
             .ok_or_else(|| format!("unknown model `{model_id}`"))?;
         if !opt.available {
-            return Err(format!("model `{model_id}` is configured but missing API key"));
+            return Err(format!(
+                "model `{model_id}` is configured but missing API key"
+            ));
         }
         match opt.provider.as_str() {
             "deepseek" => {
@@ -161,11 +166,13 @@ impl AppState {
                     .deepseek_key
                     .clone()
                     .ok_or_else(|| "DEEPSEEK_API_KEY not set on server".to_string())?;
-                Ok(crate::AnyModel::OpenAi(harness_models::OpenAiCompat::with_key(
-                    harness_models::providers::DEEPSEEK.to_string(),
-                    model_id,
-                    key,
-                )))
+                Ok(crate::AnyModel::OpenAi(
+                    harness_models::OpenAiCompat::with_key(
+                        harness_models::providers::DEEPSEEK.to_string(),
+                        model_id,
+                        key,
+                    ),
+                ))
             }
             "gemini" => {
                 let key = cfg
@@ -268,24 +275,39 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         // ─ protected (AuthCtx extractor on each handler)
         .route("/api/logout", post(logout_handler))
         .route("/api/me", get(me_handler))
-        .route("/api/me/invites", get(list_invites_handler).post(create_invite_handler))
+        .route(
+            "/api/me/invites",
+            get(list_invites_handler).post(create_invite_handler),
+        )
         .route("/api/me/password", post(change_password_handler))
         .route("/api/me/model", post(set_model_handler))
         .route(
             "/api/me/memories",
             get(list_memories_handler).delete(delete_all_memories_handler),
         )
-        .route("/api/me/memories/:id", axum::routing::delete(delete_memory_handler))
+        .route(
+            "/api/me/memories/:id",
+            axum::routing::delete(delete_memory_handler),
+        )
         .route("/api/accounts", get(accounts_handler))
         .route("/api/transactions", get(transactions_handler))
         .route("/api/report", get(report_handler))
         .route("/api/budgets", get(budgets_handler))
         .route("/api/subscriptions", get(subscriptions_handler))
-        .route("/api/subscriptions/:id/cancel", post(subscription_cancel_handler))
+        .route(
+            "/api/subscriptions/:id/cancel",
+            post(subscription_cancel_handler),
+        )
         .route("/api/voice/transcribe", post(transcribe_handler))
-        .route("/api/me/export/transactions.csv", get(export_transactions_csv))
+        .route(
+            "/api/me/export/transactions.csv",
+            get(export_transactions_csv),
+        )
         .route("/api/me/export/trades.csv", get(export_trades_csv))
-        .route("/api/me/export/subscriptions.csv", get(export_subscriptions_csv))
+        .route(
+            "/api/me/export/subscriptions.csv",
+            get(export_subscriptions_csv),
+        )
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
         // Receipt / PDF uploads from the chat composer. The upload route gets
@@ -294,8 +316,7 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         // scoped to the caller's user_id.
         .route(
             "/api/chat/attachments",
-            post(crate::attachments::upload_handler)
-                .layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
+            post(crate::attachments::upload_handler).layer(DefaultBodyLimit::max(20 * 1024 * 1024)),
         )
         .route(
             "/api/chat/attachments/:id",
@@ -303,9 +324,18 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         )
         // Session-aware chat: each conversation is persisted in the DB so
         // the user can leave a session and return to continue.
-        .route("/api/chat/sessions", get(list_chat_sessions_handler).post(create_chat_session_handler))
-        .route("/api/chat/sessions/:id", get(get_chat_session_handler).delete(delete_chat_session_handler))
-        .route("/api/chat/sessions/:id/stream", post(session_stream_handler))
+        .route(
+            "/api/chat/sessions",
+            get(list_chat_sessions_handler).post(create_chat_session_handler),
+        )
+        .route(
+            "/api/chat/sessions/:id",
+            get(get_chat_session_handler).delete(delete_chat_session_handler),
+        )
+        .route(
+            "/api/chat/sessions/:id/stream",
+            post(session_stream_handler),
+        )
         .route("/api/brief", post(brief_handler))
         .route("/api/portfolio/assets", get(portfolio_assets_handler))
         .route("/api/portfolio/trades", get(portfolio_trades_handler))
@@ -318,25 +348,46 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         .route("/api/me/net-worth/series", get(net_worth_series_handler))
         .route("/api/me/net-worth/refresh", post(net_worth_refresh_handler))
         .route("/api/me/base-currency", post(set_base_currency_handler))
-        .route("/api/me/digest-settings", get(get_digest_settings_handler).patch(patch_digest_settings_handler))
+        .route(
+            "/api/me/digest-settings",
+            get(get_digest_settings_handler).patch(patch_digest_settings_handler),
+        )
         .route("/api/me/notifications", get(list_notifications_handler))
-        .route("/api/me/notifications/read", post(mark_notifications_read_handler))
+        .route(
+            "/api/me/notifications/read",
+            post(mark_notifications_read_handler),
+        )
         .route("/api/me/loans", get(list_loans_handler))
         .route("/api/me/loans/:id/retire", post(retire_loan_handler))
         .route("/api/portfolio/summary", get(portfolio_summary_handler))
-        .route("/api/portfolio/allocation", get(portfolio_allocation_handler))
-        .route("/api/portfolio/refresh-prices", post(portfolio_refresh_handler))
+        .route(
+            "/api/portfolio/allocation",
+            get(portfolio_allocation_handler),
+        )
+        .route(
+            "/api/portfolio/refresh-prices",
+            post(portfolio_refresh_handler),
+        )
         // ─ projects
-        .route("/api/projects", get(list_projects_handler).post(create_project_handler))
+        .route(
+            "/api/projects",
+            get(list_projects_handler).post(create_project_handler),
+        )
         .route(
             "/api/projects/:id",
             get(get_project_handler)
                 .patch(update_project_handler)
                 .delete(delete_project_handler),
         )
-        .route("/api/projects/:id/reviews", post(add_project_review_handler))
+        .route(
+            "/api/projects/:id/reviews",
+            post(add_project_review_handler),
+        )
         // ─ notes
-        .route("/api/notes", get(list_notes_handler).post(create_note_handler))
+        .route(
+            "/api/notes",
+            get(list_notes_handler).post(create_note_handler),
+        )
         .route(
             "/api/notes/:id",
             get(get_note_handler)
@@ -390,10 +441,7 @@ async fn serve_user_ui_asset(
             [
                 (header::CONTENT_TYPE, mime),
                 // Vite hashes filenames in /assets, long-cache.
-                (
-                    header::CACHE_CONTROL,
-                    "public, max-age=31536000, immutable",
-                ),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
             ],
             Body::from(file.contents()),
         )
@@ -540,8 +588,7 @@ async fn register_handler(Json(req): Json<RegisterReq>) -> Result<Json<Value>, A
     {
         return Err(ApiError::BadRequest(AuthError::EmailExists.to_string()));
     }
-    let pw_hash = hash_password(&req.password)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let pw_hash = hash_password(&req.password).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     // Bootstrap: very first registered user becomes admin (no invite needed).
     let total_users = db
         .count_users()
@@ -631,7 +678,9 @@ async fn login_handler(Json(req): Json<LoginReq>) -> Result<Json<Value>, ApiErro
             0,
             0,
         );
-        return Err(ApiError::Unauthorized(AuthError::BadCredentials.to_string()));
+        return Err(ApiError::Unauthorized(
+            AuthError::BadCredentials.to_string(),
+        ));
     }
     let s = new_session(&user.id);
     db.insert_session(&s)
@@ -874,7 +923,9 @@ async fn subscriptions_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
             crate::model::Frequency::Quarterly => s.amount / rust_decimal::Decimal::from(3),
             crate::model::Frequency::Yearly => s.amount / rust_decimal::Decimal::from(12),
         };
-        *monthly.entry(s.currency.clone()).or_insert(rust_decimal::Decimal::ZERO) += per_month;
+        *monthly
+            .entry(s.currency.clone())
+            .or_insert(rust_decimal::Decimal::ZERO) += per_month;
     }
     let monthly_str: serde_json::Map<String, Value> = monthly
         .into_iter()
@@ -896,7 +947,9 @@ async fn subscription_cancel_handler(
         .cancel_subscription(&auth.user.id, &id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     if n == 0 {
-        return Err(ApiError::BadRequest(format!("no active subscription `{id}`")));
+        return Err(ApiError::BadRequest(format!(
+            "no active subscription `{id}`"
+        )));
     }
     Ok(Json(json!({"cancelled": id})))
 }
@@ -967,8 +1020,8 @@ async fn transcribe_handler(
             text.chars().take(400).collect::<String>()
         )));
     }
-    let v: Value = serde_json::from_str(&text)
-        .map_err(|e| ApiError::Internal(format!("gemini json: {e}")))?;
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| ApiError::Internal(format!("gemini json: {e}")))?;
     let transcript = v
         .get("candidates")
         .and_then(|c| c.get(0))
@@ -1049,15 +1102,15 @@ async fn export_transactions_csv(auth: AuthCtx) -> Result<axum::response::Respon
     let accounts = db
         .list_accounts(&auth.user.id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let name_by_id: std::collections::HashMap<String, String> = accounts
-        .into_iter()
-        .map(|a| (a.id, a.name))
-        .collect();
+    let name_by_id: std::collections::HashMap<String, String> =
+        accounts.into_iter().map(|a| (a.id, a.name)).collect();
 
     // All time. SQLite handles RFC3339 string comparison sensibly between
     // these bounds.
     let from = chrono::Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap();
-    let to = chrono::Utc.with_ymd_and_hms(2999, 12, 31, 23, 59, 59).unwrap();
+    let to = chrono::Utc
+        .with_ymd_and_hms(2999, 12, 31, 23, 59, 59)
+        .unwrap();
     let txns = db
         .list_transactions(&auth.user.id, from, to, None, None)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1122,10 +1175,8 @@ async fn export_trades_csv(auth: AuthCtx) -> Result<axum::response::Response, Ap
     let assets = db
         .list_assets(&auth.user.id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let asset_by_id: std::collections::HashMap<String, crate::portfolio::model::Asset> = assets
-        .into_iter()
-        .map(|a| (a.id.clone(), a))
-        .collect();
+    let asset_by_id: std::collections::HashMap<String, crate::portfolio::model::Asset> =
+        assets.into_iter().map(|a| (a.id.clone(), a)).collect();
 
     let trades = db
         .all_trades(&auth.user.id)
@@ -1195,10 +1246,8 @@ async fn export_subscriptions_csv(auth: AuthCtx) -> Result<axum::response::Respo
     let accounts = db
         .list_accounts(&auth.user.id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let name_by_id: std::collections::HashMap<String, String> = accounts
-        .into_iter()
-        .map(|a| (a.id, a.name))
-        .collect();
+    let name_by_id: std::collections::HashMap<String, String> =
+        accounts.into_iter().map(|a| (a.id, a.name)).collect();
 
     // Include cancelled rows too — the user is asking for an export, not a
     // dashboard view.
@@ -1246,7 +1295,10 @@ async fn export_subscriptions_csv(auth: AuthCtx) -> Result<axum::response::Respo
             s.note.as_deref().unwrap_or(""),
             &s.status,
             &s.created_at.to_rfc3339(),
-            s.cancelled_at.map(|d| d.to_rfc3339()).as_deref().unwrap_or(""),
+            s.cancelled_at
+                .map(|d| d.to_rfc3339())
+                .as_deref()
+                .unwrap_or(""),
         ]));
     }
 
@@ -1294,11 +1346,8 @@ async fn chat_handler(
     if req.message.trim().is_empty() {
         return Err(ApiError::BadRequest("message must not be empty".into()));
     }
-    let history: Vec<(String, String)> = req
-        .history
-        .into_iter()
-        .map(|m| (m.role, m.text))
-        .collect();
+    let history: Vec<(String, String)> =
+        req.history.into_iter().map(|m| (m.role, m.text)).collect();
     let task_description = build_task_description_with_lang(
         &req.message,
         &history,
@@ -1313,7 +1362,10 @@ async fn chat_handler(
     all_tools.extend(make_task_tools(s.task_store.clone()));
     let mut loop_ = AgentLoop::new(model)
         .with_guide(Arc::new(ProfileGuide))
-        .with_hook(Arc::new(permission_hook_for_tier(&auth.user.tier, &all_tools)));
+        .with_hook(Arc::new(permission_hook_for_tier(
+            &auth.user.tier,
+            &all_tools,
+        )));
     if let Ok(g) = crate::SkillsCatalogueGuide::new() {
         loop_ = loop_.with_guide(Arc::new(g));
     }
@@ -1321,12 +1373,14 @@ async fn chat_handler(
         loop_ = loop_.with_tool(t);
     }
     let mut profile = s.profile.clone();
-    profile
-        .extra
-        .insert("user_id".into(), serde_json::Value::String(auth.user.id.clone()));
-    profile
-        .extra
-        .insert("tier".into(), serde_json::Value::String(auth.user.tier.clone()));
+    profile.extra.insert(
+        "user_id".into(),
+        serde_json::Value::String(auth.user.id.clone()),
+    );
+    profile.extra.insert(
+        "tier".into(),
+        serde_json::Value::String(auth.user.tier.clone()),
+    );
     if !req.attachment_ids.is_empty() {
         profile.extra.insert(
             "attachment_ids".into(),
@@ -1345,7 +1399,10 @@ async fn chat_handler(
         source: None,
         deadline: None,
     };
-    match loop_.run_with_max_iters(task, &mut world, s.max_iters).await {
+    match loop_
+        .run_with_max_iters(task, &mut world, s.max_iters)
+        .await
+    {
         Ok(Outcome::Done { text, iters, .. }) => Ok(Json(json!({
             "reply": text.unwrap_or_default(),
             "iters": iters,
@@ -1435,7 +1492,10 @@ async fn brief_handler(
     all_tools.extend(make_task_tools(s.task_store.clone()));
     let mut loop_ = AgentLoop::new(model)
         .with_guide(Arc::new(ProfileGuide))
-        .with_hook(Arc::new(permission_hook_for_tier(&auth.user.tier, &all_tools)));
+        .with_hook(Arc::new(permission_hook_for_tier(
+            &auth.user.tier,
+            &all_tools,
+        )));
     if let Ok(g) = crate::SkillsCatalogueGuide::new() {
         loop_ = loop_.with_guide(Arc::new(g));
     }
@@ -1443,12 +1503,14 @@ async fn brief_handler(
         loop_ = loop_.with_tool(t);
     }
     let mut profile = s.profile.clone();
-    profile
-        .extra
-        .insert("user_id".into(), serde_json::Value::String(auth.user.id.clone()));
-    profile
-        .extra
-        .insert("tier".into(), serde_json::Value::String(auth.user.tier.clone()));
+    profile.extra.insert(
+        "user_id".into(),
+        serde_json::Value::String(auth.user.id.clone()),
+    );
+    profile.extra.insert(
+        "tier".into(),
+        serde_json::Value::String(auth.user.tier.clone()),
+    );
     let mut world = with_profile(".", profile);
     let task = Task {
         description: BRIEF_TYPED_PROMPT.into(),
@@ -1472,10 +1534,7 @@ async fn brief_handler(
 ///   endpoints directly still work; this hook only gates LLM-driven calls.
 /// - **paid / admin / anything else** → `PermissionMode::Default` (no
 ///   additional gating beyond existing soft quotas + sandbox).
-fn permission_hook_for_tier(
-    tier: &str,
-    tools: &[Arc<dyn harness_core::Tool>],
-) -> PermissionHook {
+fn permission_hook_for_tier(tier: &str, tools: &[Arc<dyn harness_core::Tool>]) -> PermissionHook {
     if tier == "trial" {
         let mut rules = PermissionRules::new(PermissionMode::Plan).with_tools(tools);
         for name in [
@@ -1581,13 +1640,11 @@ impl Hook for ChannelHook {
                 }
             }
             Event::PostModel { out } => {
-                if let Some(text) = &out.text {
-                    if !text.is_empty() {
-                        return {
-                            let _ = self.tx.send(json!({"type":"thought","text": text}));
-                            HookOutcome::Allow
-                        };
-                    }
+                if let Some(text) = &out.text
+                    && !text.is_empty()
+                {
+                    let _ = self.tx.send(json!({"type":"thought","text": text}));
+                    return HookOutcome::Allow;
                 }
                 None
             }
@@ -1707,7 +1764,9 @@ async fn list_chat_sessions_handler(auth: AuthCtx) -> Result<Json<Value>, ApiErr
     let sessions = db
         .list_chat_sessions(&auth.user.id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "count": sessions.len(), "sessions": sessions })))
+    Ok(Json(
+        json!({ "count": sessions.len(), "sessions": sessions }),
+    ))
 }
 
 async fn get_chat_session_handler(
@@ -1842,7 +1901,11 @@ async fn session_stream_handler(
     let model_id = {
         let is_paid = user_tier != "trial";
         let cfg = s.cfg();
-        let ok = |m: &str| cfg.available_models.iter().any(|x| x.id == m && x.available);
+        let ok = |m: &str| {
+            cfg.available_models
+                .iter()
+                .any(|x| x.id == m && x.available)
+        };
         req.model
             .as_deref()
             .filter(|m| is_paid && ok(m))
@@ -1870,7 +1933,8 @@ async fn session_stream_handler(
             Ok(m) => m,
             Err(reason) => {
                 let _ = tx_for_done.send(json!({"type": "error", "message": reason}));
-                let _ = tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
+                let _ =
+                    tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
                 return;
             }
         };
@@ -1896,8 +1960,7 @@ async fn session_stream_handler(
         if let Ok(file_mem) = harness_context::FileMemory::open(&mem_path) {
             let file_arc = Arc::new(file_mem);
             let guarded: Arc<dyn harness_core::Memory> = Arc::new(
-                harness_context::GuardedMemory::new(file_arc.clone())
-                    .with_dedup_threshold(0.6),
+                harness_context::GuardedMemory::new(file_arc.clone()).with_dedup_threshold(0.6),
             );
             loop_ = loop_.with_guide(Arc::new(
                 harness_loop::MemoryGuide::new(guarded.clone())
@@ -1914,10 +1977,12 @@ async fn session_stream_handler(
             // remember_this lets the user explicitly say "记住 X" and
             // bypass synth's judgment; list/forget surface + clean up.
             loop_ = loop_
-                .with_tool(Arc::new(harness_tools_memory::RememberThisTool::with_source(
-                    guarded.clone(),
-                    format!("ai-ledger/user-{user_id_for_task}/explicit"),
-                )))
+                .with_tool(Arc::new(
+                    harness_tools_memory::RememberThisTool::with_source(
+                        guarded.clone(),
+                        format!("ai-ledger/user-{user_id_for_task}/explicit"),
+                    ),
+                ))
                 .with_tool(Arc::new(harness_tools_memory::ListMemoriesTool::new(
                     guarded.clone(),
                 )))
@@ -1949,8 +2014,13 @@ async fn session_stream_handler(
             artifacts: artifacts_acc.clone(),
         }));
         let mut profile = s.profile.clone();
-        profile.extra.insert("user_id".into(), serde_json::Value::String(user_id_for_task.clone()));
-        profile.extra.insert("tier".into(), serde_json::Value::String(user_tier.clone()));
+        profile.extra.insert(
+            "user_id".into(),
+            serde_json::Value::String(user_id_for_task.clone()),
+        );
+        profile
+            .extra
+            .insert("tier".into(), serde_json::Value::String(user_tier.clone()));
         if !attachment_ids.is_empty() {
             profile.extra.insert(
                 "attachment_ids".into(),
@@ -1970,14 +2040,23 @@ async fn session_stream_handler(
             deadline: None,
         };
         let _ = tx_for_done.send(json!({"type": "start"}));
-        match loop_.run_with_max_iters(task, &mut world, s.max_iters).await {
-            Ok(Outcome::Done { text, iters, usage, .. }) => {
+        match loop_
+            .run_with_max_iters(task, &mut world, s.max_iters)
+            .await
+        {
+            Ok(Outcome::Done {
+                text, iters, usage, ..
+            }) => {
                 let reply = text.unwrap_or_default();
                 // Persist the assistant reply + update session model_id.
                 if let Ok(db) = open_db() {
                     let artifacts_json = {
                         let v = artifacts_acc.lock().map(|g| g.clone()).unwrap_or_default();
-                        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
+                        if v.is_empty() {
+                            None
+                        } else {
+                            serde_json::to_string(&v).ok()
+                        }
                     };
                     let _ = db.append_chat_message(
                         &user_id_for_task,
@@ -2021,12 +2100,21 @@ async fn session_stream_handler(
                     "type": "done", "ok": true, "iters": iters, "reply": reply,
                 }));
             }
-            Ok(Outcome::BudgetExhausted { iters, last_text, usage, .. }) => {
+            Ok(Outcome::BudgetExhausted {
+                iters,
+                last_text,
+                usage,
+                ..
+            }) => {
                 let reply = last_text.unwrap_or_else(|| "(budget exhausted)".into());
                 if let Ok(db) = open_db() {
                     let artifacts_json = {
                         let v = artifacts_acc.lock().map(|g| g.clone()).unwrap_or_default();
-                        if v.is_empty() { None } else { serde_json::to_string(&v).ok() }
+                        if v.is_empty() {
+                            None
+                        } else {
+                            serde_json::to_string(&v).ok()
+                        }
                     };
                     let _ = db.append_chat_message(
                         &user_id_for_task,
@@ -2064,14 +2152,14 @@ async fn session_stream_handler(
                 let _ = tx_for_done.send(json!({
                     "type": "error", "message": format!("agent: {e}"),
                 }));
-                let _ = tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
+                let _ =
+                    tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
             }
         }
     });
 
-    let stream = UnboundedReceiverStream::new(rx).map(|v| {
-        Ok::<_, Infallible>(SseEvent::default().data(v.to_string()))
-    });
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(|v| Ok::<_, Infallible>(SseEvent::default().data(v.to_string())));
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -2108,7 +2196,8 @@ async fn chat_stream_handler(
             Ok(m) => m,
             Err(reason) => {
                 let _ = tx_for_done.send(json!({"type": "error", "message": reason}));
-                let _ = tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
+                let _ =
+                    tx_for_done.send(json!({"type": "done", "ok": false, "iters": 0, "reply": ""}));
                 return;
             }
         };
@@ -2155,8 +2244,13 @@ async fn chat_stream_handler(
             deadline: None,
         };
         let _ = tx_for_done.send(json!({"type": "start"}));
-        match loop_.run_with_max_iters(task, &mut world, s.max_iters).await {
-            Ok(Outcome::Done { text, iters, usage, .. }) => {
+        match loop_
+            .run_with_max_iters(task, &mut world, s.max_iters)
+            .await
+        {
+            Ok(Outcome::Done {
+                text, iters, usage, ..
+            }) => {
                 let _ = tx_for_done.send(json!({
                     "type": "done",
                     "ok": true,
@@ -2175,7 +2269,10 @@ async fn chat_stream_handler(
                 }
             }
             Ok(Outcome::BudgetExhausted {
-                iters, last_text, usage, ..
+                iters,
+                last_text,
+                usage,
+                ..
             }) => {
                 let _ = tx_for_done.send(json!({
                     "type": "done",
@@ -2274,13 +2371,17 @@ fn positions_with_prices(
             prices.insert(a.id.clone(), p);
         }
     }
-    Ok(build_positions(&assets, &trades, |aid| prices.get(aid).cloned()))
+    Ok(build_positions(&assets, &trades, |aid| {
+        prices.get(aid).cloned()
+    }))
 }
 
 async fn portfolio_positions_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
     let db = open_db()?;
     let positions = positions_with_prices(&db, &auth.user.id)?;
-    Ok(Json(json!({"count": positions.len(), "positions": positions})))
+    Ok(Json(
+        json!({"count": positions.len(), "positions": positions}),
+    ))
 }
 
 // ───── net-worth dashboard ─────
@@ -2290,7 +2391,10 @@ async fn portfolio_positions_handler(auth: AuthCtx) -> Result<Json<Value>, ApiEr
 /// dashboard never shows a blank.
 async fn net_worth_handler(auth: AuthCtx) -> Result<Json<Value>, ApiError> {
     let db = open_db()?;
-    let snap = match db.latest_net_worth_snapshot(&auth.user.id).map_err(api_err)? {
+    let snap = match db
+        .latest_net_worth_snapshot(&auth.user.id)
+        .map_err(api_err)?
+    {
         Some(s) => s,
         None => crate::net_worth::snapshot_now(&db, &auth.user.id, &auth.user.base_currency)
             .map_err(|e| ApiError::Internal(e.to_string()))?,
@@ -2317,7 +2421,9 @@ async fn net_worth_series_handler(
         .to_string();
     let from = q.from.unwrap_or(default_from);
     let to = q.to.unwrap_or(today);
-    let series = db.net_worth_series(&auth.user.id, &from, &to).map_err(api_err)?;
+    let series = db
+        .net_worth_series(&auth.user.id, &from, &to)
+        .map_err(api_err)?;
     Ok(Json(json!({
         "from": from,
         "to": to,
@@ -2354,10 +2460,13 @@ async fn set_base_currency_handler(
         ));
     }
     let db = open_db()?;
-    db.set_user_base_currency(&auth.user.id, &c).map_err(api_err)?;
+    db.set_user_base_currency(&auth.user.id, &c)
+        .map_err(api_err)?;
     let snap = crate::net_worth::snapshot_now(&db, &auth.user.id, &c)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({"ok": true, "base_currency": c, "snapshot": snap})))
+    Ok(Json(
+        json!({"ok": true, "base_currency": c, "snapshot": snap}),
+    ))
 }
 
 // ─── daily digest settings ───────────────────────────────────────────────
@@ -2584,7 +2693,11 @@ async fn portfolio_allocation_handler(auth: AuthCtx) -> Result<Json<Value>, ApiE
     let mut rows: Vec<Value> = by_class
         .into_iter()
         .map(|(class, value)| {
-            let pct = if total > 0.0 { (value / total) * 100.0 } else { 0.0 };
+            let pct = if total > 0.0 {
+                (value / total) * 100.0
+            } else {
+                0.0
+            };
             json!({"class": class, "value": value, "pct": pct})
         })
         .collect();
@@ -2710,7 +2823,9 @@ async fn get_project_handler(
     let reviews = db
         .list_project_reviews(&auth.user.id, &id, 100)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "project": project, "milestones": milestones, "reviews": reviews })))
+    Ok(Json(
+        json!({ "project": project, "milestones": milestones, "reviews": reviews }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2729,13 +2844,13 @@ async fn update_project_handler(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<UpdateProjectReq>,
 ) -> Result<Json<Value>, ApiError> {
-    if let Some(st) = req.status.as_deref() {
-        if !VALID_PROJECT_STATUSES.contains(&st) {
-            return Err(ApiError::BadRequest(format!(
-                "status must be one of: {}",
-                VALID_PROJECT_STATUSES.join(", ")
-            )));
-        }
+    if let Some(st) = req.status.as_deref()
+        && !VALID_PROJECT_STATUSES.contains(&st)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "status must be one of: {}",
+            VALID_PROJECT_STATUSES.join(", ")
+        )));
     }
     let db = open_db()?;
     let n = db
@@ -2967,7 +3082,10 @@ async fn export_note_md_handler(
     let ascii_fallback = format!("note-{}.md", note.id);
     Ok((
         [
-            (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/markdown; charset=utf-8".to_string(),
+            ),
             (
                 header::CONTENT_DISPOSITION,
                 format!(
@@ -2983,9 +3101,7 @@ async fn export_note_md_handler(
 }
 
 /// Export every note the caller owns as a .zip archive.
-async fn export_all_zip_handler(
-    auth: AuthCtx,
-) -> Result<axum::response::Response, ApiError> {
+async fn export_all_zip_handler(auth: AuthCtx) -> Result<axum::response::Response, ApiError> {
     use axum::http::header;
     use axum::response::IntoResponse;
     use std::io::Write;
@@ -3134,10 +3250,18 @@ async fn search_notes_handler(
 }
 
 fn build_note_md_filename(title: &str, id: &str) -> String {
-    let bad: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t'];
+    let bad: &[char] = &[
+        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t',
+    ];
     let clean: String = title
         .chars()
-        .map(|c| if bad.contains(&c) || (c as u32) < 0x20 { '-' } else { c })
+        .map(|c| {
+            if bad.contains(&c) || (c as u32) < 0x20 {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
     let stem = clean.trim().trim_matches('-');
     let mut stem: String = stem.chars().take(40).collect();

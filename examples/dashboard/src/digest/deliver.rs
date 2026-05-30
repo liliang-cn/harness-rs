@@ -1,6 +1,7 @@
 //! Two delivery adapters for a `Digest`:
 //!   - `deliver_in_app` inserts a `notifications` row.
 //!   - `deliver_email` renders HTML and POSTs to Resend.
+//!
 //! Channel selection ("in_app" | "email" | "both") is the caller's job.
 
 use crate::db::Db;
@@ -42,7 +43,10 @@ pub fn render_email_html(d: &Digest) -> String {
     if let Some(m) = &d.market {
         s.push_str("<h3 style=\"margin:16px 0 6px\">市场</h3><ul style=\"margin:6px 0;padding-left:18px;color:#444\">");
         for q in [&m.gold, &m.btc, &m.index] {
-            s.push_str(&format!("<li><b>{}</b> {} — {}</li>", q.name, q.price, q.conclusion));
+            s.push_str(&format!(
+                "<li><b>{}</b> {} — {}</li>",
+                q.name, q.price, q.conclusion
+            ));
         }
         s.push_str("</ul>");
         s.push_str(&format!("<p style=\"color:#444\">{}</p>", m.summary));
@@ -119,12 +123,36 @@ mod tests {
     fn sample() -> Digest {
         Digest {
             date: "2026-05-28".into(),
-            spending: SpendingSection { total: 42.0, currency: "CNY".into(), by_category: vec![("餐饮".into(), 42.0)] },
-            wealth: WealthSection { net_worth: 1000.0, net_delta: 10.0, cash: 500.0, investments: 600.0, investments_delta: 5.0, debt: 100.0, currency: "CNY".into() },
+            spending: SpendingSection {
+                total: 42.0,
+                currency: "CNY".into(),
+                by_category: vec![("餐饮".into(), 42.0)],
+            },
+            wealth: WealthSection {
+                net_worth: 1000.0,
+                net_delta: 10.0,
+                cash: 500.0,
+                investments: 600.0,
+                investments_delta: 5.0,
+                debt: 100.0,
+                currency: "CNY".into(),
+            },
             market: Some(MarketBrief {
-                gold: Quote { name: "黄金".into(), price: "2360".into(), conclusion: "走高".into() },
-                btc: Quote { name: "比特币".into(), price: "67000".into(), conclusion: "回落".into() },
-                index: Quote { name: "纳斯达克".into(), price: "17500".into(), conclusion: "领涨".into() },
+                gold: Quote {
+                    name: "黄金".into(),
+                    price: "2360".into(),
+                    conclusion: "走高".into(),
+                },
+                btc: Quote {
+                    name: "比特币".into(),
+                    price: "67000".into(),
+                    conclusion: "回落".into(),
+                },
+                index: Quote {
+                    name: "纳斯达克".into(),
+                    price: "17500".into(),
+                    conclusion: "领涨".into(),
+                },
                 summary: "整体回暖".into(),
             }),
         }

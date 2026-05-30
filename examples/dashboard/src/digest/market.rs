@@ -39,21 +39,33 @@ pub fn parse_market_response(text: &str) -> Option<MarketBrief> {
                 let price = cols.next().unwrap_or("").trim().to_string();
                 let concl = cols.next().unwrap_or("").trim().to_string();
                 if !price.is_empty() {
-                    gold = Some(Quote { name: "黄金".into(), price, conclusion: concl });
+                    gold = Some(Quote {
+                        name: "黄金".into(),
+                        price,
+                        conclusion: concl,
+                    });
                 }
             }
             "比特币" => {
                 let price = cols.next().unwrap_or("").trim().to_string();
                 let concl = cols.next().unwrap_or("").trim().to_string();
                 if !price.is_empty() {
-                    btc = Some(Quote { name: "比特币".into(), price, conclusion: concl });
+                    btc = Some(Quote {
+                        name: "比特币".into(),
+                        price,
+                        conclusion: concl,
+                    });
                 }
             }
             "纳斯达克" => {
                 let price = cols.next().unwrap_or("").trim().to_string();
                 let concl = cols.next().unwrap_or("").trim().to_string();
                 if !price.is_empty() {
-                    index = Some(Quote { name: "纳斯达克".into(), price, conclusion: concl });
+                    index = Some(Quote {
+                        name: "纳斯达克".into(),
+                        price,
+                        conclusion: concl,
+                    });
                 }
             }
             "总结" => {
@@ -78,10 +90,10 @@ pub fn parse_market_response(text: &str) -> Option<MarketBrief> {
 /// still sends without the market section).
 pub async fn ensure_market_brief(db: &Db, client: &reqwest::Client) -> Option<MarketBrief> {
     let day = Utc::now().format("%Y-%m-%d").to_string();
-    if let Ok(Some(v)) = db.get_market_brief(&day) {
-        if let Ok(b) = serde_json::from_value::<MarketBrief>(v) {
-            return Some(b);
-        }
+    if let Ok(Some(v)) = db.get_market_brief(&day)
+        && let Ok(b) = serde_json::from_value::<MarketBrief>(v)
+    {
+        return Some(b);
     }
     match generate_market_brief(client).await {
         Some(brief) => {
@@ -101,8 +113,11 @@ pub async fn ensure_market_brief(db: &Db, client: &reqwest::Client) -> Option<Ma
 /// in `portfolio/quotes.rs::gemini_grounded_price` (google_search tool,
 /// thinkingBudget 0). Returns `None` on any network/parse error.
 async fn generate_market_brief(client: &reqwest::Client) -> Option<MarketBrief> {
-    let api_key = std::env::var("GEMINI_API_KEY").ok().filter(|k| !k.is_empty())?;
-    let model = std::env::var("HARNESS_QUOTE_MODEL").unwrap_or_else(|_| "gemini-3.5-flash".to_string());
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())?;
+    let model =
+        std::env::var("HARNESS_QUOTE_MODEL").unwrap_or_else(|_| "gemini-3.5-flash".to_string());
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         urlencoding(&model),
@@ -175,7 +190,8 @@ mod tests {
 
     #[test]
     fn tolerates_blank_and_extra_lines() {
-        let text = "\n这是模型的废话\n黄金|2360|稳\n比特币|67000|稳\n纳斯达克|17500|稳\n总结|稳。\n再见";
+        let text =
+            "\n这是模型的废话\n黄金|2360|稳\n比特币|67000|稳\n纳斯达克|17500|稳\n总结|稳。\n再见";
         assert!(parse_market_response(text).is_some());
     }
 }

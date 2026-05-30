@@ -42,11 +42,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Top-level policy mode. See crate docs for semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum PermissionMode {
     /// No additional gating beyond the loop's other hooks. Useful as a
     /// disabled / passthrough baseline.
+    #[default]
     Default,
     /// Conservative: allow read-only / idempotent / network tools; deny
     /// destructive ones unless explicitly listed in `allow_tools`. Tools
@@ -55,12 +56,6 @@ pub enum PermissionMode {
     /// Permissive: allow every tool except those in `deny_tools`. Use this
     /// for trusted admin invocations or unattended scheduled runs.
     AutoApprove,
-}
-
-impl Default for PermissionMode {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 /// Declarative rules consumed by `PermissionHook`.
@@ -189,33 +184,57 @@ mod tests {
     fn auto_approve_allows_everything_except_deny_list() {
         let rules = PermissionRules::new(PermissionMode::AutoApprove).deny("nuke_db");
         let hook = PermissionHook::new(rules);
-        assert!(matches!(hook.decide(&mk_action("anything")), HookOutcome::Allow));
-        assert!(matches!(hook.decide(&mk_action("nuke_db")), HookOutcome::Deny { .. }));
+        assert!(matches!(
+            hook.decide(&mk_action("anything")),
+            HookOutcome::Allow
+        ));
+        assert!(matches!(
+            hook.decide(&mk_action("nuke_db")),
+            HookOutcome::Deny { .. }
+        ));
     }
 
     #[test]
     fn plan_denies_destructive_unless_allowlisted() {
         let mut rules = PermissionRules::new(PermissionMode::Plan);
-        rules.risk_map.insert("delete_thing".into(), ToolRisk::Destructive);
-        rules.risk_map.insert("read_thing".into(), ToolRisk::ReadOnly);
+        rules
+            .risk_map
+            .insert("delete_thing".into(), ToolRisk::Destructive);
+        rules
+            .risk_map
+            .insert("read_thing".into(), ToolRisk::ReadOnly);
         let hook = PermissionHook::new(rules);
-        assert!(matches!(hook.decide(&mk_action("delete_thing")), HookOutcome::Deny { .. }));
-        assert!(matches!(hook.decide(&mk_action("read_thing")), HookOutcome::Allow));
+        assert!(matches!(
+            hook.decide(&mk_action("delete_thing")),
+            HookOutcome::Deny { .. }
+        ));
+        assert!(matches!(
+            hook.decide(&mk_action("read_thing")),
+            HookOutcome::Allow
+        ));
     }
 
     #[test]
     fn plan_allowlist_overrides_destructive_deny() {
         let mut rules = PermissionRules::new(PermissionMode::Plan).allow("delete_thing");
-        rules.risk_map.insert("delete_thing".into(), ToolRisk::Destructive);
+        rules
+            .risk_map
+            .insert("delete_thing".into(), ToolRisk::Destructive);
         let hook = PermissionHook::new(rules);
-        assert!(matches!(hook.decide(&mk_action("delete_thing")), HookOutcome::Allow));
+        assert!(matches!(
+            hook.decide(&mk_action("delete_thing")),
+            HookOutcome::Allow
+        ));
     }
 
     #[test]
     fn plan_denies_unknown_risk_by_default() {
         let rules = PermissionRules::new(PermissionMode::Plan);
         let hook = PermissionHook::new(rules);
-        assert!(matches!(hook.decide(&mk_action("unknown_tool")), HookOutcome::Deny { .. }));
+        assert!(matches!(
+            hook.decide(&mk_action("unknown_tool")),
+            HookOutcome::Deny { .. }
+        ));
     }
 
     #[test]
@@ -224,6 +243,9 @@ mod tests {
             .deny("dangerous")
             .allow("dangerous");
         let hook = PermissionHook::new(rules);
-        assert!(matches!(hook.decide(&mk_action("dangerous")), HookOutcome::Deny { .. }));
+        assert!(matches!(
+            hook.decide(&mk_action("dangerous")),
+            HookOutcome::Deny { .. }
+        ));
     }
 }

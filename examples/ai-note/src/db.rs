@@ -614,7 +614,11 @@ impl Db {
     /// Load all embedded notes for a user, returning the parsed vector.
     /// Used by the semantic search path; for a personal note app the per-user
     /// corpus is small enough (<10k) that linear scan is fine.
-    pub fn list_embeddings(&self, user_id: &str, space: Option<&str>) -> SqlResult<Vec<NoteEmbedding>> {
+    pub fn list_embeddings(
+        &self,
+        user_id: &str,
+        space: Option<&str>,
+    ) -> SqlResult<Vec<NoteEmbedding>> {
         let mut sql = String::from(
             "SELECT id, title, body, tags, space, embedding, embedding_dim,
                     created_at, updated_at
@@ -639,7 +643,12 @@ impl Db {
             }
             let tags_s: Option<String> = r.get(3)?;
             let tags = tags_s
-                .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+                .map(|s| {
+                    s.split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
             let space: String = r.get(4)?;
             let c: String = r.get(7)?;
@@ -662,13 +671,20 @@ impl Db {
 
     pub fn count_notes(&self, user_id: &str, space: Option<&str>) -> SqlResult<u32> {
         let (sql, has_sp) = match space {
-            Some(_) => ("SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND space = ?2", true),
+            Some(_) => (
+                "SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND space = ?2",
+                true,
+            ),
             None => ("SELECT COUNT(*) FROM notes WHERE user_id = ?1", false),
         };
         let n = if has_sp {
-            self.conn.query_row(sql, params![user_id, space.unwrap()], |r| r.get::<_, i64>(0))?
+            self.conn
+                .query_row(sql, params![user_id, space.unwrap()], |r| {
+                    r.get::<_, i64>(0)
+                })?
         } else {
-            self.conn.query_row(sql, params![user_id], |r| r.get::<_, i64>(0))?
+            self.conn
+                .query_row(sql, params![user_id], |r| r.get::<_, i64>(0))?
         };
         Ok(n as u32)
     }
@@ -798,11 +814,26 @@ impl Db {
     /// notes row, so just nuking notes is enough — no separate file cleanup.
     pub fn delete_user_cascade(&self, user_id: &str) -> SqlResult<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM notes          WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM chat_messages  WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM chat_sessions  WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM sessions       WHERE user_id = ?1", params![user_id])?;
-        tx.execute("DELETE FROM invites        WHERE created_by = ?1", params![user_id])?;
+        tx.execute(
+            "DELETE FROM notes          WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_messages  WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_sessions  WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions       WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        tx.execute(
+            "DELETE FROM invites        WHERE created_by = ?1",
+            params![user_id],
+        )?;
         tx.execute(
             "UPDATE audit_events SET user_id = NULL WHERE user_id = ?1",
             params![user_id],
@@ -815,10 +846,10 @@ impl Db {
     // ───── admin: provider_config KV ─────
 
     pub fn provider_config_all(&self) -> SqlResult<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT key, value FROM provider_config")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM provider_config")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.collect()
     }
 
@@ -884,7 +915,8 @@ impl Db {
             "SELECT id, title, space, model_id, message_count, created_at, updated_at
              FROM chat_sessions WHERE user_id = ?1 AND id = ?2",
         )?;
-        stmt.query_row(params![user_id, id], row_to_session).optional()
+        stmt.query_row(params![user_id, id], row_to_session)
+            .optional()
     }
 
     pub fn delete_chat_session(&self, user_id: &str, id: &str) -> SqlResult<u32> {
@@ -947,7 +979,15 @@ impl Db {
         self.conn.execute(
             "INSERT INTO chat_messages(id, session_id, user_id, role, text, iters, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, session_id, user_id, role, text, iters.map(|n| n as i64), now],
+            params![
+                id,
+                session_id,
+                user_id,
+                role,
+                text,
+                iters.map(|n| n as i64),
+                now
+            ],
         )?;
         self.conn.execute(
             "UPDATE chat_sessions
@@ -995,16 +1035,30 @@ impl Db {
                                parent_id, target_date, review_interval_days,
                                next_review_at, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![id, user_id, space, kind, title, detail, parent_id,
-                    target_date, review_interval_days, next_review_at, now_s],
+            params![
+                id,
+                user_id,
+                space,
+                kind,
+                title,
+                detail,
+                parent_id,
+                target_date,
+                review_interval_days,
+                next_review_at,
+                now_s
+            ],
         )?;
-        self.get_goal(user_id, &id).map(|o| o.expect("goal vanished after insert"))
+        self.get_goal(user_id, &id)
+            .map(|o| o.expect("goal vanished after insert"))
     }
 
     pub fn get_goal(&self, user_id: &str, id: &str) -> SqlResult<Option<Goal>> {
         let sql = format!("SELECT {GOAL_COLS} FROM goals WHERE user_id = ?1 AND id = ?2");
-        self.conn.prepare(&sql)?
-            .query_row(params![user_id, id], row_to_goal).optional()
+        self.conn
+            .prepare(&sql)?
+            .query_row(params![user_id, id], row_to_goal)
+            .optional()
     }
 
     /// List goals in a space. `status` filters when Some. `only_due` keeps only
@@ -1048,13 +1102,15 @@ impl Db {
     }
 
     pub fn count_due_goals(&self, user_id: &str, space: &str) -> SqlResult<u32> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM goals
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM goals
              WHERE user_id = ?1 AND space = ?2 AND status = 'active'
                AND next_review_at IS NOT NULL AND next_review_at <= ?3",
-            params![user_id, space, Utc::now().to_rfc3339()],
-            |r| r.get::<_, i64>(0),
-        ).map(|n| n as u32)
+                params![user_id, space, Utc::now().to_rfc3339()],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as u32)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1078,8 +1134,16 @@ impl Db {
                review_interval_days = COALESCE(?7, review_interval_days),
                updated_at = ?8
              WHERE user_id = ?1 AND id = ?2",
-            params![user_id, id, status, title, detail, target_date,
-                    review_interval_days, now],
+            params![
+                user_id,
+                id,
+                status,
+                title,
+                detail,
+                target_date,
+                review_interval_days,
+                now
+            ],
         )?;
         Ok(n as u32)
     }
@@ -1087,12 +1151,18 @@ impl Db {
     /// Delete a goal plus its direct subgoals and all its reviews.
     pub fn delete_goal(&self, user_id: &str, id: &str) -> SqlResult<u32> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM goal_reviews WHERE user_id = ?1 AND goal_id = ?2",
-                   params![user_id, id])?;
-        tx.execute("DELETE FROM goals WHERE user_id = ?1 AND parent_id = ?2",
-                   params![user_id, id])?;
-        let n = tx.execute("DELETE FROM goals WHERE user_id = ?1 AND id = ?2",
-                   params![user_id, id])?;
+        tx.execute(
+            "DELETE FROM goal_reviews WHERE user_id = ?1 AND goal_id = ?2",
+            params![user_id, id],
+        )?;
+        tx.execute(
+            "DELETE FROM goals WHERE user_id = ?1 AND parent_id = ?2",
+            params![user_id, id],
+        )?;
+        let n = tx.execute(
+            "DELETE FROM goals WHERE user_id = ?1 AND id = ?2",
+            params![user_id, id],
+        )?;
         tx.commit()?;
         Ok(n as u32)
     }
@@ -1117,10 +1187,15 @@ impl Db {
         )?;
         // Advance next_review_at: use override, else the goal's interval.
         let interval: Option<i64> = override_days.or_else(|| {
-            self.conn.query_row(
-                "SELECT review_interval_days FROM goals WHERE user_id = ?1 AND id = ?2",
-                params![user_id, goal_id], |r| r.get(0),
-            ).optional().ok().flatten()
+            self.conn
+                .query_row(
+                    "SELECT review_interval_days FROM goals WHERE user_id = ?1 AND id = ?2",
+                    params![user_id, goal_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
         });
         if let Some(d) = interval {
             let next = (now + chrono::Duration::days(d)).to_rfc3339();
@@ -1131,13 +1206,20 @@ impl Db {
             )?;
         }
         Ok(GoalReview {
-            id, goal_id: goal_id.to_string(),
-            progress: progress.to_string(), next_steps: next_steps.to_string(),
+            id,
+            goal_id: goal_id.to_string(),
+            progress: progress.to_string(),
+            next_steps: next_steps.to_string(),
             created_at: now_s,
         })
     }
 
-    pub fn list_reviews(&self, user_id: &str, goal_id: &str, limit: u32) -> SqlResult<Vec<GoalReview>> {
+    pub fn list_reviews(
+        &self,
+        user_id: &str,
+        goal_id: &str,
+        limit: u32,
+    ) -> SqlResult<Vec<GoalReview>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, goal_id, progress, next_steps, created_at
              FROM goal_reviews WHERE user_id = ?1 AND goal_id = ?2
@@ -1145,18 +1227,21 @@ impl Db {
         )?;
         let rows = stmt.query_map(params![user_id, goal_id, limit as i64], |r| {
             Ok(GoalReview {
-                id: r.get(0)?, goal_id: r.get(1)?,
-                progress: r.get(2)?, next_steps: r.get(3)?, created_at: r.get(4)?,
+                id: r.get(0)?,
+                goal_id: r.get(1)?,
+                progress: r.get(2)?,
+                next_steps: r.get(3)?,
+                created_at: r.get(4)?,
             })
         })?;
         rows.collect()
     }
-
 }
 
 #[derive(Debug, Clone)]
 pub struct PendingEmbed {
     pub id: String,
+    #[allow(dead_code)] // retained for embedding pipeline; field populated but not yet consumed
     pub user_id: String,
     pub title: String,
     pub body: String,
@@ -1237,14 +1322,18 @@ fn row_to_goal(r: &rusqlite::Row<'_>) -> SqlResult<Goal> {
     })
 }
 
-const GOAL_COLS: &str =
-    "id, space, kind, title, detail, status, parent_id, target_date, \
+const GOAL_COLS: &str = "id, space, kind, title, detail, status, parent_id, target_date, \
      review_interval_days, next_review_at, created_at, updated_at";
 
 fn row_to_note(r: &rusqlite::Row<'_>) -> SqlResult<Note> {
     let tags_s: Option<String> = r.get(3)?;
     let tags = tags_s
-        .map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        .map(|s| {
+            s.split(',')
+                .filter(|x| !x.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let space: String = r.get(4)?;
     let c: String = r.get(5)?;
@@ -1312,9 +1401,12 @@ mod tests {
     #[test]
     fn chat_sessions_scoped_and_counted() {
         let db = tmp_db();
-        db.create_chat_session("u1", "s1", Some("deepseek-v4-flash"), "work").unwrap();
-        db.append_chat_message("u1", "s1", "user", "hello work", None).unwrap();
-        db.append_chat_message("u1", "s1", "asst", "hi", Some(1)).unwrap();
+        db.create_chat_session("u1", "s1", Some("deepseek-v4-flash"), "work")
+            .unwrap();
+        db.append_chat_message("u1", "s1", "user", "hello work", None)
+            .unwrap();
+        db.append_chat_message("u1", "s1", "asst", "hi", Some(1))
+            .unwrap();
         let work = db.list_chat_sessions("u1", "work").unwrap();
         assert_eq!(work.len(), 1);
         assert_eq!(work[0].message_count, 2);
@@ -1327,28 +1419,66 @@ mod tests {
     fn goals_create_list_due_and_review() {
         let db = tmp_db();
         // a cadenced work goal — next_review_at seeded to now+30d (NOT due yet)
-        let g = db.create_goal("u1", "work", "goal", "架构专家", "", None,
-                               Some("2026-09-30"), Some(30)).unwrap();
+        let g = db
+            .create_goal(
+                "u1",
+                "work",
+                "goal",
+                "架构专家",
+                "",
+                None,
+                Some("2026-09-30"),
+                Some(30),
+            )
+            .unwrap();
         assert_eq!(g.space, "work");
         assert!(g.next_review_at.is_some());
         // a rule — no cadence, never due
-        db.create_goal("u1", "life", "rule", "股票不要操作", "", None, None, None).unwrap();
+        db.create_goal("u1", "life", "rule", "股票不要操作", "", None, None, None)
+            .unwrap();
 
         // space scoping + status filter
-        assert_eq!(db.list_goals("u1", "work", Some("active"), false).unwrap().len(), 1);
-        assert_eq!(db.list_goals("u1", "life", Some("active"), false).unwrap().len(), 1);
+        assert_eq!(
+            db.list_goals("u1", "work", Some("active"), false)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.list_goals("u1", "life", Some("active"), false)
+                .unwrap()
+                .len(),
+            1
+        );
         // nothing due yet (30d out)
-        assert_eq!(db.list_goals("u1", "work", Some("active"), true).unwrap().len(), 0);
+        assert_eq!(
+            db.list_goals("u1", "work", Some("active"), true)
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(db.count_due_goals("u1", "work").unwrap(), 0);
 
         // decompose: a subgoal under g
-        let sub = db.create_goal("u1", "work", "goal", "打牢分布式基础", "",
-                                 Some(&g.id), None, None).unwrap();
+        let sub = db
+            .create_goal(
+                "u1",
+                "work",
+                "goal",
+                "打牢分布式基础",
+                "",
+                Some(&g.id),
+                None,
+                None,
+            )
+            .unwrap();
         assert_eq!(db.list_subgoals("u1", &g.id).unwrap().len(), 1);
         assert_eq!(sub.parent_id.as_deref(), Some(g.id.as_str()));
 
         // review advances cadence; adding a review keeps it from being due
-        let r = db.add_review("u1", &g.id, "学了 raft", "下月做一次演练", None).unwrap();
+        let r = db
+            .add_review("u1", &g.id, "学了 raft", "下月做一次演练", None)
+            .unwrap();
         assert_eq!(r.goal_id, g.id);
         assert_eq!(db.list_reviews("u1", &g.id, 10).unwrap().len(), 1);
 
@@ -1362,13 +1492,22 @@ mod tests {
     #[test]
     fn goals_due_when_review_past() {
         let db = tmp_db();
-        let g = db.create_goal("u1", "work", "goal", "x", "", None, None, Some(7)).unwrap();
+        let g = db
+            .create_goal("u1", "work", "goal", "x", "", None, None, Some(7))
+            .unwrap();
         // force next_review_at into the past
-        db.conn.execute(
-            "UPDATE goals SET next_review_at = ?2 WHERE id = ?1",
-            rusqlite::params![g.id, "2000-01-01T00:00:00+00:00"],
-        ).unwrap();
-        assert_eq!(db.list_goals("u1", "work", Some("active"), true).unwrap().len(), 1);
+        db.conn
+            .execute(
+                "UPDATE goals SET next_review_at = ?2 WHERE id = ?1",
+                rusqlite::params![g.id, "2000-01-01T00:00:00+00:00"],
+            )
+            .unwrap();
+        assert_eq!(
+            db.list_goals("u1", "work", Some("active"), true)
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(db.count_due_goals("u1", "work").unwrap(), 1);
     }
 }

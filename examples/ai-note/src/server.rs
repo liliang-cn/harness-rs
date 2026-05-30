@@ -4,10 +4,12 @@
 //! - public  : /api/info  /api/register  /api/login
 //! - me      : /api/me*  /api/me/invites  /api/me/password
 //! - notes   : /api/notes (GET list + POST create), /api/notes/:id (GET PATCH DELETE),
-//!             /api/notes/search?q=&limit=
+//!   /api/notes/search?q=&limit=
 //! - chat    : /api/chat (one-shot agent loop, returns final reply + tool trace)
 
-use crate::auth::{AuthCtx, AuthError, hash_password, new_session, verify_password, validate_email};
+use crate::auth::{
+    AuthCtx, AuthError, hash_password, new_session, validate_email, verify_password,
+};
 use crate::db::Db;
 use axum::{
     Json, Router,
@@ -103,12 +105,16 @@ impl AppState {
             .ok_or_else(|| anyhow::anyhow!("model `{model_id}` not allowed"))?;
         match provider {
             "gemini" => {
-                let key = cfg.gemini_key.clone()
+                let key = cfg
+                    .gemini_key
+                    .clone()
                     .ok_or_else(|| anyhow::anyhow!("no gemini key configured"))?;
                 Ok(Arc::new(GeminiNative::with_key(model_id, key)))
             }
             _ => {
-                let key = cfg.deepseek_key.clone()
+                let key = cfg
+                    .deepseek_key
+                    .clone()
                     .ok_or_else(|| anyhow::anyhow!("no deepseek key configured"))?;
                 Ok(Arc::new(OpenAiCompat::with_key(
                     providers::DEEPSEEK.to_string(),
@@ -228,13 +234,11 @@ impl Hook for ChannelHook {
                 }))
             }
             Event::PostModel { out } => {
-                if let Some(text) = &out.text {
-                    if !text.is_empty() {
-                        return {
-                            let _ = self.tx.send(json!({"type":"thought","text": text}));
-                            HookOutcome::Allow
-                        };
-                    }
+                if let Some(text) = &out.text
+                    && !text.is_empty()
+                {
+                    let _ = self.tx.send(json!({"type":"thought","text": text}));
+                    return HookOutcome::Allow;
                 }
                 None
             }
@@ -420,19 +424,35 @@ pub async fn serve(state: AppState, addr: std::net::SocketAddr) -> anyhow::Resul
         )
         .route(
             "/api/notes/:id",
-            get(get_note_handler).patch(update_note_handler).delete(delete_note_handler),
+            get(get_note_handler)
+                .patch(update_note_handler)
+                .delete(delete_note_handler),
         )
         .route("/api/notes/:id/export.md", get(export_note_md_handler))
         .route("/api/notes/export.zip", get(export_all_zip_handler))
         .route("/api/notes/search", get(search_handler))
         .route("/api/chat", post(chat_handler))
-        .route("/api/chat/sessions", get(list_chat_sessions_handler).post(create_chat_session_handler))
-        .route("/api/chat/sessions/:id", get(get_chat_session_handler).delete(delete_chat_session_handler))
-        .route("/api/chat/sessions/:id/stream", post(session_stream_handler))
-        .route("/api/goals", get(list_goals_handler).post(create_goal_handler))
+        .route(
+            "/api/chat/sessions",
+            get(list_chat_sessions_handler).post(create_chat_session_handler),
+        )
+        .route(
+            "/api/chat/sessions/:id",
+            get(get_chat_session_handler).delete(delete_chat_session_handler),
+        )
+        .route(
+            "/api/chat/sessions/:id/stream",
+            post(session_stream_handler),
+        )
+        .route(
+            "/api/goals",
+            get(list_goals_handler).post(create_goal_handler),
+        )
         .route(
             "/api/goals/:id",
-            get(get_goal_handler).patch(update_goal_handler).delete(delete_goal_handler),
+            get(get_goal_handler)
+                .patch(update_goal_handler)
+                .delete(delete_goal_handler),
         )
         .route("/api/goals/:id/reviews", post(add_review_handler));
 
@@ -458,7 +478,10 @@ async fn serve_user_index() -> impl axum::response::IntoResponse {
         .get_file("index.html")
         .and_then(|f| f.contents_utf8())
         .unwrap_or("<h1>user UI not built</h1>");
-    ([(header::CACHE_CONTROL, "no-cache, must-revalidate")], Html(body))
+    (
+        [(header::CACHE_CONTROL, "no-cache, must-revalidate")],
+        Html(body),
+    )
 }
 
 /// Serves `/assets/*` — Vite-hashed bundles. The `*path` capture is the part
@@ -611,11 +634,18 @@ async fn register_handler(
     }
     let pw_hash = hash_password(&req.password).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     // Bootstrap: first user is admin (no invite needed).
-    let total = db.count_users().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let total = db
+        .count_users()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let (tier, invited_by, code_used) = if total == 0 {
         ("admin".to_string(), None, None)
     } else {
-        match req.invite_code.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match req
+            .invite_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(code) => {
                 let inv = db
                     .get_invite(code)
@@ -694,7 +724,9 @@ async fn login_handler(
             0,
             0,
         );
-        return Err(ApiError::Unauthorized(AuthError::BadCredentials.to_string()));
+        return Err(ApiError::Unauthorized(
+            AuthError::BadCredentials.to_string(),
+        ));
     }
     let session = new_session(&user.id);
     db.insert_session(&session)
@@ -703,11 +735,9 @@ async fn login_handler(
     Ok(Json(json!({ "token": session.token, "user": &user })))
 }
 
-async fn logout_handler(
-    State(s): State<AppState>,
-    auth: AuthCtx,
-) -> Result<Json<Value>, ApiError> {
-    let _ = open_db_state(&s).map(|db| db.insert_audit(Some(&auth.user.id), "logout", None, None, 0, 0));
+async fn logout_handler(State(s): State<AppState>, auth: AuthCtx) -> Result<Json<Value>, ApiError> {
+    let _ = open_db_state(&s)
+        .map(|db| db.insert_audit(Some(&auth.user.id), "logout", None, None, 0, 0));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -784,7 +814,9 @@ async fn change_password_handler(
         0,
         0,
     );
-    Ok(Json(json!({ "ok": true, "other_sessions_dropped": dropped })))
+    Ok(Json(
+        json!({ "ok": true, "other_sessions_dropped": dropped }),
+    ))
 }
 
 // ───── model picker ─────
@@ -804,10 +836,10 @@ async fn set_model_handler(
             "trial 用户不能切换模型 — 升级到 paid 后可选".into(),
         ));
     }
-    if let Some(m) = &req.model {
-        if !is_allowed_model(m) {
-            return Err(ApiError::BadRequest(format!("model `{m}` not allowed")));
-        }
+    if let Some(m) = &req.model
+        && !is_allowed_model(m)
+    {
+        return Err(ApiError::BadRequest(format!("model `{m}` not allowed")));
     }
     let db = open_db_state(&s)?;
     db.update_user_model(&auth.user.id, req.model.as_deref())
@@ -830,7 +862,11 @@ async fn list_notes_handler(
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
     let notes = db
-        .list_recent_notes(&auth.user.id, q.space.as_deref(), q.limit.unwrap_or(50).min(500))
+        .list_recent_notes(
+            &auth.user.id,
+            q.space.as_deref(),
+            q.limit.unwrap_or(50).min(500),
+        )
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "count": notes.len(), "notes": notes })))
 }
@@ -855,7 +891,10 @@ async fn create_note_handler(
         return Err(ApiError::BadRequest("body is empty".into()));
     }
     if req.space != "work" && req.space != "life" {
-        return Err(ApiError::BadRequest(format!("space must be 'work' or 'life', got '{}'", req.space)));
+        return Err(ApiError::BadRequest(format!(
+            "space must be 'work' or 'life', got '{}'",
+            req.space
+        )));
     }
     let db = open_db_state(&s)?;
     // Trial cap. Edit/delete uncapped; only inserts count.
@@ -982,7 +1021,10 @@ async fn export_note_md_handler(
     let ascii_fallback = format!("note-{}.md", note.id);
     Ok((
         [
-            (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/markdown; charset=utf-8".to_string(),
+            ),
             (
                 header::CONTENT_DISPOSITION,
                 format!(
@@ -1030,7 +1072,11 @@ async fn export_all_zip_handler(
         .unix_permissions(0o644);
 
     let mut idx = String::from("# Notes Index\n\n");
-    idx.push_str(&format!("Exported {} notes for {}\n\n", notes.len(), auth.user.email));
+    idx.push_str(&format!(
+        "Exported {} notes for {}\n\n",
+        notes.len(),
+        auth.user.email
+    ));
     idx.push_str("| Date | Title | Tags | File |\n|---|---|---|---|\n");
 
     let mut used_names = std::collections::HashSet::<String>::new();
@@ -1085,7 +1131,11 @@ async fn export_all_zip_handler(
         zip.write_all(body.as_bytes())
             .map_err(|e| ApiError::Internal(format!("zip write: {e}")))?;
 
-        let tags_disp = if note.tags.is_empty() { "—".into() } else { note.tags.join(", ") };
+        let tags_disp = if note.tags.is_empty() {
+            "—".into()
+        } else {
+            note.tags.join(", ")
+        };
         let date = note.created_at.format("%Y-%m-%d").to_string();
         // Escape pipe so it doesn't break the markdown table.
         let title_esc = title_line.replace('|', "\\|");
@@ -1127,10 +1177,18 @@ async fn export_all_zip_handler(
 /// other shell-hostile bytes. Always ends with `-<id>.md` so siblings stay
 /// distinct even with duplicate titles.
 fn build_md_filename(title: &str, id: &str) -> String {
-    let bad: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t'];
+    let bad: &[char] = &[
+        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t',
+    ];
     let clean: String = title
         .chars()
-        .map(|c| if bad.contains(&c) || (c as u32) < 0x20 { '-' } else { c })
+        .map(|c| {
+            if bad.contains(&c) || (c as u32) < 0x20 {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
     let stem = clean.trim().trim_matches('-');
     let mut stem: String = stem.chars().take(40).collect();
@@ -1182,9 +1240,16 @@ async fn search_handler(
     Query(qs): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let top_k = qs.limit.unwrap_or(8).min(50) as usize;
-    let hits = crate::search::semantic_search(&s.db_path, &auth.user.id, &s.embedder, &qs.q, top_k, qs.space.as_deref())
-        .await
-        .map_err(|e| ApiError::Internal(format!("search: {e}")))?;
+    let hits = crate::search::semantic_search(
+        &s.db_path,
+        &auth.user.id,
+        &s.embedder,
+        &qs.q,
+        top_k,
+        qs.space.as_deref(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("search: {e}")))?;
     Ok(Json(json!({ "count": hits.len(), "hits": hits })))
 }
 
@@ -1226,7 +1291,9 @@ async fn chat_handler(
         serde_json::Value::String(auth.user.tier.clone()),
     );
     // Default space for one-shot chat path (Task 5 wires per-session space).
-    profile.extra.insert("space".into(), serde_json::Value::String("life".into()));
+    profile
+        .extra
+        .insert("space".into(), serde_json::Value::String("life".into()));
     // Plant the user's tz so `current_time` resolves "今天" / "今天" / "this week"
     // in their local clock. Defaults to system tz if unset.
     if let Some(tz) = &s.user_tz {
@@ -1258,8 +1325,15 @@ async fn chat_handler(
         .await
         .map_err(|e| ApiError::Internal(format!("agent: {e}")))?;
     let (reply, iters, ok, usage) = match outcome {
-        Outcome::Done { text, iters, usage, .. } => (text.unwrap_or_default(), iters, true, usage),
-        Outcome::BudgetExhausted { iters, last_text, usage, .. } => (
+        Outcome::Done {
+            text, iters, usage, ..
+        } => (text.unwrap_or_default(), iters, true, usage),
+        Outcome::BudgetExhausted {
+            iters,
+            last_text,
+            usage,
+            ..
+        } => (
             last_text.unwrap_or_else(|| "(budget exhausted)".into()),
             iters,
             false,
@@ -1294,7 +1368,8 @@ async fn create_chat_session_handler(
 ) -> Result<Json<Value>, ApiError> {
     if req.space != "work" && req.space != "life" {
         return Err(ApiError::BadRequest(format!(
-            "space must be 'work' or 'life', got '{}'", req.space
+            "space must be 'work' or 'life', got '{}'",
+            req.space
         )));
     }
     let id = random_session_id();
@@ -1324,7 +1399,9 @@ async fn list_chat_sessions_handler(
     let sessions = db
         .list_chat_sessions(&auth.user.id, &q.space)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "count": sessions.len(), "sessions": sessions })))
+    Ok(Json(
+        json!({ "count": sessions.len(), "sessions": sessions }),
+    ))
 }
 
 async fn get_chat_session_handler(
@@ -1390,7 +1467,10 @@ async fn session_stream_handler(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let history: Vec<ChatTurn> = history_msgs
         .iter()
-        .map(|m| ChatTurn { role: m.role.clone(), text: m.text.clone() })
+        .map(|m| ChatTurn {
+            role: m.role.clone(),
+            text: m.text.clone(),
+        })
         .collect();
 
     db.append_chat_message(&auth.user.id, &session_id, "user", &req.message, None)
@@ -1421,11 +1501,21 @@ async fn session_stream_handler(
             }
         };
         let mut profile = harness_core::UserProfile::default();
-        profile.extra.insert("user_id".into(), Value::String(uid.clone()));
-        profile.extra.insert("db_path".into(), Value::String(db_path));
-        profile.extra.insert("tier".into(), Value::String(user_tier));
-        profile.extra.insert("space".into(), Value::String(space_for_task));
-        profile.extra.insert("__embedder_slot".into(), Value::Bool(true));
+        profile
+            .extra
+            .insert("user_id".into(), Value::String(uid.clone()));
+        profile
+            .extra
+            .insert("db_path".into(), Value::String(db_path));
+        profile
+            .extra
+            .insert("tier".into(), Value::String(user_tier));
+        profile
+            .extra
+            .insert("space".into(), Value::String(space_for_task));
+        profile
+            .extra
+            .insert("__embedder_slot".into(), Value::Bool(true));
         if let Some(tz) = user_tz {
             profile.tz = Some(tz);
         }
@@ -1440,8 +1530,7 @@ async fn session_stream_handler(
         if let Ok(file_mem) = harness_context::FileMemory::open(&mem_path) {
             let file_arc = Arc::new(file_mem);
             let guarded: Arc<dyn harness_core::Memory> = Arc::new(
-                harness_context::GuardedMemory::new(file_arc.clone())
-                    .with_dedup_threshold(0.6),
+                harness_context::GuardedMemory::new(file_arc.clone()).with_dedup_threshold(0.6),
             );
             loop_ = loop_.with_guide(Arc::new(
                 harness_loop::MemoryGuide::new(guarded.clone())
@@ -1450,10 +1539,12 @@ async fn session_stream_handler(
                     .with_excluded_tags(["synth-raw", "transient"]),
             ));
             loop_ = loop_
-                .with_tool(Arc::new(harness_tools_memory::RememberThisTool::with_source(
-                    guarded.clone(),
-                    format!("ai-note/user-{uid}/explicit"),
-                )))
+                .with_tool(Arc::new(
+                    harness_tools_memory::RememberThisTool::with_source(
+                        guarded.clone(),
+                        format!("ai-note/user-{uid}/explicit"),
+                    ),
+                ))
                 .with_tool(Arc::new(harness_tools_memory::ListMemoriesTool::new(
                     guarded.clone(),
                 )))
@@ -1478,30 +1569,47 @@ async fn session_stream_handler(
         }
         loop_ = loop_.with_hook(Arc::new(ChannelHook { tx: tx.clone() }));
 
-        let task = Task { description: task_desc, source: None, deadline: None };
+        let task = Task {
+            description: task_desc,
+            source: None,
+            deadline: None,
+        };
         let _ = tx_done.send(json!({"type":"start"}));
         match loop_.run_with_max_iters(task, &mut world, max_iters).await {
-            Ok(Outcome::Done { text, iters, usage, .. }) => {
+            Ok(Outcome::Done {
+                text, iters, usage, ..
+            }) => {
                 let reply = text.unwrap_or_default();
                 if let Ok(db) = open_db_state(&s) {
                     let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
                     let _ = db.update_chat_session_model(&uid, &sid, &mid);
                     let _ = db.insert_audit(
-                        Some(&uid), "chat_message", Some(&sid),
+                        Some(&uid),
+                        "chat_message",
+                        Some(&sid),
                         Some(&json!({"iters": iters, "model": &mid}).to_string()),
-                        usage.input_tokens as i64, usage.output_tokens as i64,
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
                     );
                 }
                 let _ = tx_done.send(json!({"type":"done","ok":true,"iters":iters,"reply":reply}));
             }
-            Ok(Outcome::BudgetExhausted { iters, last_text, usage, .. }) => {
+            Ok(Outcome::BudgetExhausted {
+                iters,
+                last_text,
+                usage,
+                ..
+            }) => {
                 let reply = last_text.unwrap_or_else(|| "(budget exhausted)".into());
                 if let Ok(db) = open_db_state(&s) {
                     let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
                     let _ = db.insert_audit(
-                        Some(&uid), "chat_message", Some(&sid),
+                        Some(&uid),
+                        "chat_message",
+                        Some(&sid),
                         Some(&json!({"iters": iters, "warning":"budget_exhausted"}).to_string()),
-                        usage.input_tokens as i64, usage.output_tokens as i64,
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
                     );
                 }
                 let _ = tx_done.send(json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"budget_exhausted"}));
@@ -1644,9 +1752,11 @@ async fn list_goals_handler(
         Some("due") => (Some("active"), true),
         _ => (Some("active"), false),
     };
-    let goals = db.list_goals(&auth.user.id, &q.space, status, only_due)
+    let goals = db
+        .list_goals(&auth.user.id, &q.space, status, only_due)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let due = db.count_due_goals(&auth.user.id, &q.space)
+    let due = db
+        .count_due_goals(&auth.user.id, &q.space)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "goals": goals, "due_count": due })))
 }
@@ -1664,7 +1774,9 @@ struct CreateGoalReq {
     target_date: Option<String>,
     review_interval_days: Option<i64>,
 }
-fn default_kind() -> String { "goal".into() }
+fn default_kind() -> String {
+    "goal".into()
+}
 
 async fn create_goal_handler(
     State(s): State<AppState>,
@@ -1675,16 +1787,26 @@ async fn create_goal_handler(
         return Err(ApiError::BadRequest("title is empty".into()));
     }
     if req.space != "work" && req.space != "life" {
-        return Err(ApiError::BadRequest("space must be 'work' or 'life'".into()));
+        return Err(ApiError::BadRequest(
+            "space must be 'work' or 'life'".into(),
+        ));
     }
     if req.kind != "goal" && req.kind != "rule" {
         return Err(ApiError::BadRequest("kind must be 'goal' or 'rule'".into()));
     }
     let db = open_db_state(&s)?;
-    let goal = db.create_goal(
-        &auth.user.id, &req.space, &req.kind, &req.title, &req.detail,
-        req.parent_id.as_deref(), req.target_date.as_deref(), req.review_interval_days,
-    ).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let goal = db
+        .create_goal(
+            &auth.user.id,
+            &req.space,
+            &req.kind,
+            &req.title,
+            &req.detail,
+            req.parent_id.as_deref(),
+            req.target_date.as_deref(),
+            req.review_interval_days,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "goal": goal })))
 }
 
@@ -1694,14 +1816,19 @@ async fn get_goal_handler(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
-    let goal = db.get_goal(&auth.user.id, &id)
+    let goal = db
+        .get_goal(&auth.user.id, &id)
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::BadRequest("goal not found".into()))?;
-    let subgoals = db.list_subgoals(&auth.user.id, &id)
+    let subgoals = db
+        .list_subgoals(&auth.user.id, &id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let reviews = db.list_reviews(&auth.user.id, &id, 100)
+    let reviews = db
+        .list_reviews(&auth.user.id, &id, 100)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({ "goal": goal, "subgoals": subgoals, "reviews": reviews })))
+    Ok(Json(
+        json!({ "goal": goal, "subgoals": subgoals, "reviews": reviews }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1720,11 +1847,20 @@ async fn update_goal_handler(
     Json(req): Json<UpdateGoalReq>,
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
-    let n = db.update_goal(
-        &auth.user.id, &id, req.status.as_deref(), req.title.as_deref(),
-        req.detail.as_deref(), req.target_date.as_deref(), req.review_interval_days,
-    ).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if n == 0 { return Err(ApiError::BadRequest("goal not found".into())); }
+    let n = db
+        .update_goal(
+            &auth.user.id,
+            &id,
+            req.status.as_deref(),
+            req.title.as_deref(),
+            req.detail.as_deref(),
+            req.target_date.as_deref(),
+            req.review_interval_days,
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if n == 0 {
+        return Err(ApiError::BadRequest("goal not found".into()));
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1734,9 +1870,12 @@ async fn delete_goal_handler(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let db = open_db_state(&s)?;
-    let n = db.delete_goal(&auth.user.id, &id)
+    let n = db
+        .delete_goal(&auth.user.id, &id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if n == 0 { return Err(ApiError::BadRequest("goal not found".into())); }
+    if n == 0 {
+        return Err(ApiError::BadRequest("goal not found".into()));
+    }
     Ok(Json(json!({ "deleted": id })))
 }
 
@@ -1761,8 +1900,14 @@ async fn add_review_handler(
     db.get_goal(&auth.user.id, &id)
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::BadRequest("goal not found".into()))?;
-    let review = db.add_review(&auth.user.id, &id, &req.progress, &req.next_steps,
-                               req.next_review_in_days)
+    let review = db
+        .add_review(
+            &auth.user.id,
+            &id,
+            &req.progress,
+            &req.next_steps,
+            req.next_review_in_days,
+        )
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "review": review })))
 }

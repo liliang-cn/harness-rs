@@ -71,12 +71,14 @@ pub fn random_token() -> String {
     hex::encode(bytes)
 }
 
+#[allow(dead_code)] // public helper; not yet wired to an HTTP route
 pub fn random_invite_code() -> String {
     let mut bytes = [0u8; 8];
     ArgonOsRng.fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
 
+#[allow(dead_code)] // public helper; not yet wired to an HTTP route
 pub fn random_user_id() -> String {
     let mut bytes = [0u8; 8];
     ArgonOsRng.fill_bytes(&mut bytes);
@@ -84,6 +86,7 @@ pub fn random_user_id() -> String {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // BadSession variant reserved for future auth middleware
 pub enum AuthError {
     #[error("password hashing failed: {0}")]
     Hash(String),
@@ -169,8 +172,7 @@ where
                 .ok_or_else(|| reject(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
 
             let _ = state; // hold the ref alive
-            let app: crate::server::AppState =
-                axum::extract::FromRef::from_ref(state);
+            let app: crate::server::AppState = axum::extract::FromRef::from_ref(state);
             let user = app
                 .resolve_session(&token)
                 .map_err(|e| reject(StatusCode::UNAUTHORIZED, &e))?;
@@ -180,18 +182,19 @@ where
 }
 
 fn reject(code: StatusCode, msg: &str) -> (StatusCode, axum::Json<serde_json::Value>) {
-    (
-        code,
-        axum::Json(serde_json::json!({ "error": msg })),
-    )
+    (code, axum::Json(serde_json::json!({ "error": msg })))
 }
 
 // ─── trial-tier quotas ───
 
+#[allow(dead_code)] // quota constants reserved for future paywall enforcement
 pub const TRIAL_MAX_TRANSACTIONS: u32 = 50;
+#[allow(dead_code)]
 pub const TRIAL_MAX_TRADES: u32 = 20;
+#[allow(dead_code)]
 pub const TRIAL_MAX_ASSETS: u32 = 3;
 
+#[allow(dead_code)] // tier check reserved for future paywall enforcement
 pub fn is_trial(tier: &str) -> bool {
     tier == "trial"
 }

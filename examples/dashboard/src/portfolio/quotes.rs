@@ -66,7 +66,9 @@ pub async fn fetch_price(
                     Ok(q) => Ok(q),
                     Err(e_t) => {
                         let path = crate::tools::ledger_path();
-                        match fetch_via_gemini_cached(client, asset, &path, gemini_quote_ttl()).await {
+                        match fetch_via_gemini_cached(client, asset, &path, gemini_quote_ttl())
+                            .await
+                        {
                             Ok(q) => Ok(q),
                             Err(e_g) => Err(QuoteError::Network(format!(
                                 "yahoo: {e_y}; tencent: {e_t}; gemini: {e_g}"
@@ -92,7 +94,9 @@ pub async fn fetch_price(
                     Ok(q) => Ok(q),
                     Err(e_t) => {
                         let path = crate::tools::ledger_path();
-                        match fetch_via_gemini_cached(client, asset, &path, gemini_quote_ttl()).await {
+                        match fetch_via_gemini_cached(client, asset, &path, gemini_quote_ttl())
+                            .await
+                        {
                             Ok(q) => Ok(q),
                             Err(e_g) => Err(QuoteError::Network(format!(
                                 "yahoo: {e_y}; tencent: {e_t}; gemini: {e_g}"
@@ -133,10 +137,7 @@ struct YahooError {
     description: String,
 }
 
-async fn fetch_yahoo(
-    client: &reqwest::Client,
-    asset: &Asset,
-) -> Result<PriceQuote, QuoteError> {
+async fn fetch_yahoo(client: &reqwest::Client, asset: &Asset) -> Result<PriceQuote, QuoteError> {
     let symbol = &asset.symbol;
     let url = format!(
         "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=1d",
@@ -172,8 +173,8 @@ async fn fetch_yahoo(
         .currency
         .clone()
         .unwrap_or_else(|| asset.currency.clone());
-    let price_dec =
-        Decimal::from_str(&format!("{:.6}", price)).map_err(|e| QuoteError::Parse(e.to_string()))?;
+    let price_dec = Decimal::from_str(&format!("{:.6}", price))
+        .map_err(|e| QuoteError::Parse(e.to_string()))?;
     Ok(PriceQuote {
         asset_id: asset.id.clone(),
         price: price_dec,
@@ -214,7 +215,10 @@ async fn fetch_tencent_us(
         .trim_end_matches(';')
         .trim_end_matches('"');
     if payload.is_empty() || payload == "1" {
-        return Err(QuoteError::NoData(format!("tencent has no data for us{}", asset.symbol)));
+        return Err(QuoteError::NoData(format!(
+            "tencent has no data for us{}",
+            asset.symbol
+        )));
     }
     let parts: Vec<&str> = payload.split('~').collect();
     if parts.len() < 4 {
@@ -252,10 +256,7 @@ async fn fetch_tencent_commodity(
     client: &reqwest::Client,
     asset: &Asset,
 ) -> Result<PriceQuote, QuoteError> {
-    let base = asset
-        .symbol
-        .strip_suffix("=F")
-        .unwrap_or(&asset.symbol);
+    let base = asset.symbol.strip_suffix("=F").unwrap_or(&asset.symbol);
     let url = format!("http://qt.gtimg.cn/q=hf_{}", urlencode(base));
     let bytes = client
         .get(&url)
@@ -277,7 +278,9 @@ async fn fetch_tencent_commodity(
         .trim_end_matches(';')
         .trim_end_matches('"');
     if payload.is_empty() || payload == "1" {
-        return Err(QuoteError::NoData(format!("tencent has no commodity data for hf_{base}")));
+        return Err(QuoteError::NoData(format!(
+            "tencent has no commodity data for hf_{base}"
+        )));
     }
     let parts: Vec<&str> = payload.split(',').collect();
     if parts.is_empty() {
@@ -287,7 +290,9 @@ async fn fetch_tencent_commodity(
     let price = Decimal::from_str(price_str)
         .map_err(|e| QuoteError::Parse(format!("price `{price_str}`: {e}")))?;
     if price <= Decimal::ZERO {
-        return Err(QuoteError::NoData(format!("tencent zero price for hf_{base}")));
+        return Err(QuoteError::NoData(format!(
+            "tencent zero price for hf_{base}"
+        )));
     }
     Ok(PriceQuote {
         asset_id: asset.id.clone(),
@@ -304,10 +309,12 @@ async fn fetch_coingecko(
     client: &reqwest::Client,
     asset: &Asset,
 ) -> Result<PriceQuote, QuoteError> {
-    let coin_id = asset
-        .provider_id
-        .as_deref()
-        .ok_or_else(|| QuoteError::NoData(format!("crypto {} missing provider_id (CoinGecko coin id)", asset.symbol)))?;
+    let coin_id = asset.provider_id.as_deref().ok_or_else(|| {
+        QuoteError::NoData(format!(
+            "crypto {} missing provider_id (CoinGecko coin id)",
+            asset.symbol
+        ))
+    })?;
     let vs = asset.currency.to_lowercase();
     let url = format!(
         "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies={}",
@@ -331,8 +338,8 @@ async fn fetch_coingecko(
         .and_then(|o| o.get(&vs))
         .and_then(|v| v.as_f64())
         .ok_or_else(|| QuoteError::NoData(format!("CoinGecko {coin_id}/{vs}")))?;
-    let price_dec =
-        Decimal::from_str(&format!("{:.10}", price)).map_err(|e| QuoteError::Parse(e.to_string()))?;
+    let price_dec = Decimal::from_str(&format!("{:.10}", price))
+        .map_err(|e| QuoteError::Parse(e.to_string()))?;
     Ok(PriceQuote {
         asset_id: asset.id.clone(),
         price: price_dec,
@@ -364,8 +371,7 @@ pub async fn fetch_cny_gold_cached(
     // holds a `RefCell` statement cache), so it must be dropped BEFORE any
     // .await or the tokio multi-thread runtime refuses to schedule us.
     {
-        let db = Db::open(db_path)
-            .map_err(|e| QuoteError::Network(format!("db open: {e}")))?;
+        let db = Db::open(db_path).map_err(|e| QuoteError::Network(format!("db open: {e}")))?;
         if let Ok(Some(c)) = db.get_cached_quote(CNY_GOLD_CACHE_KEY) {
             let age_sec = Utc::now().signed_duration_since(c.fetched_at).num_seconds();
             if age_sec >= 0 && (age_sec as u64) < ttl.as_secs() {
@@ -399,20 +405,19 @@ pub async fn fetch_cny_gold_cached(
 /// `HARNESS_MODEL_PROVIDER=gemini` — otherwise the harness key may be a
 /// DeepSeek/OpenAI key and would 401 against Google.
 fn gemini_api_key() -> Result<String, QuoteError> {
-    if let Ok(k) = std::env::var("GEMINI_API_KEY") {
-        if !k.is_empty() {
-            return Ok(k);
-        }
+    if let Ok(k) = std::env::var("GEMINI_API_KEY")
+        && !k.is_empty()
+    {
+        return Ok(k);
     }
     let provider = std::env::var("HARNESS_MODEL_PROVIDER")
         .unwrap_or_default()
         .to_lowercase();
-    if provider == "gemini" {
-        if let Ok(k) = std::env::var("HARNESS_API_KEY") {
-            if !k.is_empty() {
-                return Ok(k);
-            }
-        }
+    if provider == "gemini"
+        && let Ok(k) = std::env::var("HARNESS_API_KEY")
+        && !k.is_empty()
+    {
+        return Ok(k);
     }
     Err(QuoteError::Network(
         "set GEMINI_API_KEY (or HARNESS_API_KEY when HARNESS_MODEL_PROVIDER=gemini)".into(),
@@ -543,8 +548,8 @@ fn gemini_asset_prompt(asset: &Asset) -> String {
 fn gemini_sanity_range(asset: &Asset) -> (Decimal, Decimal) {
     match asset.asset_class {
         AssetClass::Stock | AssetClass::Etf => (Decimal::new(1, 2), Decimal::new(1_000_000, 0)), // $0.01 – $1M
-        AssetClass::Commodity => (Decimal::new(1, 0), Decimal::new(100_000, 0)),                  // 1 – 100k
-        AssetClass::Crypto => (Decimal::new(1, 8), Decimal::new(10_000_000, 0)),                  // 0.00000001 – 10M
+        AssetClass::Commodity => (Decimal::new(1, 0), Decimal::new(100_000, 0)), // 1 – 100k
+        AssetClass::Crypto => (Decimal::new(1, 8), Decimal::new(10_000_000, 0)), // 0.00000001 – 10M
         AssetClass::Other => (Decimal::new(1, 4), Decimal::new(10_000_000, 0)),
     }
 }
@@ -579,8 +584,7 @@ pub async fn fetch_via_gemini_cached(
 ) -> Result<PriceQuote, QuoteError> {
     let key = gemini_cache_key(asset);
     {
-        let db = Db::open(db_path)
-            .map_err(|e| QuoteError::Network(format!("db open: {e}")))?;
+        let db = Db::open(db_path).map_err(|e| QuoteError::Network(format!("db open: {e}")))?;
         if let Ok(Some(c)) = db.get_cached_quote(&key) {
             let age_sec = Utc::now().signed_duration_since(c.fetched_at).num_seconds();
             if age_sec >= 0 && (age_sec as u64) < ttl.as_secs() {
@@ -649,10 +653,9 @@ fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }

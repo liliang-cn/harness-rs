@@ -279,6 +279,7 @@ mod tests {
             policy: Default::default(),
             metadata: BTreeMap::new(),
             tools: vec![],
+            response_format: harness_core::ResponseFormat::Free,
         }
     }
 

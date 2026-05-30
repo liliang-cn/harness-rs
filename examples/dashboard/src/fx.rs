@@ -15,7 +15,7 @@ use crate::db::Db;
 use chrono::Utc;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Currencies we proactively cache every day. Anything outside this set
@@ -53,7 +53,7 @@ pub fn convert(db: &Db, amount: f64, from: &str, to: &str) -> rusqlite::Result<O
 /// currency and persist them. Idempotent — safe to call mid-day or
 /// multiple times. Used both at startup (warm cache) and by the daily
 /// cron.
-pub async fn refresh_for_base(db_path: &PathBuf, base: &str) -> anyhow::Result<usize> {
+pub async fn refresh_for_base(db_path: &Path, base: &str) -> anyhow::Result<usize> {
     // Frankfurter (ECB rates) — drops only the requested base from the
     // symbol list so we don't get back a redundant 1.0.
     let symbols: Vec<&&str> = TRACKED_CURRENCIES
@@ -65,9 +65,7 @@ pub async fn refresh_for_base(db_path: &PathBuf, base: &str) -> anyhow::Result<u
         base,
         symbols.iter().map(|s| **s).collect::<Vec<_>>().join(",")
     );
-    let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
-        .build()?;
+    let client = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build()?;
     let resp = client.get(&url).send().await?;
     let status = resp.status();
     if !status.is_success() {

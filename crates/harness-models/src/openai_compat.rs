@@ -112,10 +112,7 @@ fn build_response_format(
     let supports_json_schema = base_url.contains("api.openai.com");
     match fmt {
         ResponseFormat::Free => (None, None),
-        ResponseFormat::JsonObject => (
-            Some(serde_json::json!({"type": "json_object"})),
-            None,
-        ),
+        ResponseFormat::JsonObject => (Some(serde_json::json!({"type": "json_object"})), None),
         ResponseFormat::JsonSchema { name, schema } => {
             if supports_json_schema {
                 (
@@ -137,10 +134,7 @@ fn build_response_format(
                     "Respond ONLY with a single JSON object matching this schema (no markdown fences, no prose):\n{}",
                     serde_json::to_string(schema).unwrap_or_else(|_| "{}".into())
                 );
-                (
-                    Some(serde_json::json!({"type": "json_object"})),
-                    Some(hint),
-                )
+                (Some(serde_json::json!({"type": "json_object"})), Some(hint))
             }
         }
         // ResponseFormat is `#[non_exhaustive]`; future variants get safest
@@ -387,7 +381,9 @@ impl Model for OpenAiCompat {
             max_tokens: Some(ctx.policy.max_output_tokens),
             tools,
             stream: true,
-            stream_options: Some(StreamOptions { include_usage: true }),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             response_format,
         };
         let url = format!(
@@ -900,6 +896,7 @@ mod tests {
             policy: Policy::default(),
             metadata: BTreeMap::new(),
             tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
         };
         let msgs = build_messages(&ctx);
         assert_eq!(msgs.len(), 2);
