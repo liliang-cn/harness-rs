@@ -772,9 +772,9 @@ impl<M: Model> AgentLoop<M> {
         for t in &cfg.tools {
             spec = spec.with_tool(t.clone());
         }
-        let sub = crate::Subagent::new(cfg.review_model.clone(), spec);
+        let sub = crate::Subagent::new(harness_core::DynModel(cfg.review_model.clone()), spec);
         // Box::pin breaks the recursive async-future cycle: AgentLoop<M> →
-        // run_learning_review → Subagent<Arc<dyn Model>>::run →
+        // run_learning_review → Subagent<DynModel>::run →
         // AgentLoop<Arc<dyn Model>>::run_built_context. Without pinning the
         // compiler rejects the infinite-sized future.
         if let Err(e) = Box::pin(sub.run(world)).await {
