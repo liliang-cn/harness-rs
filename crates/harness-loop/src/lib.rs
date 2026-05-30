@@ -8,6 +8,7 @@
 //!   applied directly to the world, blocking signals are fed back to the model.
 //! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
 
+pub mod learning;
 pub mod memory_layer;
 pub mod profile_guide;
 pub mod recall_layer;
@@ -15,6 +16,7 @@ pub mod registry;
 pub mod replay;
 pub mod subagent;
 
+pub use learning::*;
 pub use memory_layer::*;
 pub use profile_guide::*;
 pub use recall_layer::*;
@@ -79,6 +81,7 @@ pub struct AgentLoop<M: Model> {
     /// When true (and `recall` is set), a `RecallGuide` auto-injects top-k
     /// past context at session start.
     pub recall_auto_inject: bool,
+    pub learning: Option<LearningConfig>,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -94,6 +97,7 @@ impl<M: Model> AgentLoop<M> {
             streaming: false,
             recall: None,
             recall_auto_inject: false,
+            learning: None,
         }
     }
 
@@ -149,6 +153,14 @@ impl<M: Model> AgentLoop<M> {
     /// session start (off by default — tool-only is prompt-cache friendly).
     pub fn auto_inject(mut self) -> Self {
         self.recall_auto_inject = true;
+        self
+    }
+
+    /// Enable the self-evolving learning loop: after a session that made
+    /// `>= cfg.nudge_interval` tool calls, fork a review subagent (white-listed to
+    /// `cfg.tools`) to update skills + memory from the transcript. Best-effort.
+    pub fn with_learning_loop(mut self, cfg: LearningConfig) -> Self {
+        self.learning = Some(cfg);
         self
     }
 
@@ -741,6 +753,27 @@ impl<M: Model> AgentLoop<M> {
             if let Err(e) = store.append(owner, session, &msg).await {
                 tracing::warn!(error = %e, "recall append failed");
             }
+        }
+    }
+
+    /// Best-effort post-session review. Never affects the finished run.
+    #[allow(dead_code)]
+    async fn run_learning_review(&self, ctx: &Context, world: &mut World, tools_called: u32) {
+        let Some(cfg) = &self.learning else { return };
+        if tools_called < cfg.nudge_interval { return; }
+        let transcript = crate::render_transcript(&ctx.history, 12_000);
+        let task = harness_core::Task {
+            description: format!("{}\n\n## Conversation transcript\n{}", cfg.review_prompt, transcript),
+            source: None,
+            deadline: None,
+        };
+        let mut spec = crate::SubagentSpec::new("learning-review", task).with_max_iters(cfg.max_iters);
+        for t in &cfg.tools {
+            spec = spec.with_tool(t.clone());
+        }
+        let sub = crate::Subagent::new(cfg.review_model.clone(), spec);
+        if let Err(e) = sub.run(world).await {
+            tracing::warn!(error = %e, "learning review failed");
         }
     }
 
