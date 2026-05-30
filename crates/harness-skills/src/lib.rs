@@ -20,12 +20,14 @@ pub mod lint;
 pub mod loader;
 pub mod registry;
 pub mod validate;
+pub mod write;
 
 pub use export::*;
 pub use lint::*;
 pub use loader::*;
 pub use registry::*;
 pub use validate::*;
+pub use write::*;
 
 use harness_core::{Resource, Skill, SkillError, SkillManifest};
 use std::borrow::Cow;
