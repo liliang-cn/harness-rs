@@ -86,8 +86,8 @@ fn sanitize(s: &str) -> String {
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let cleaned = if cleaned.is_empty() { "_".to_string() } else { cleaned };
-    if cleaned.len() > 120 {
-        cleaned[..120].to_string()
+    if cleaned.chars().count() > 120 {
+        cleaned.chars().take(120).collect()
     } else {
         cleaned
     }
@@ -109,12 +109,11 @@ fn make_snippet(content: &str, q_tokens: &[String]) -> String {
         .filter_map(|t| lower.find(t.as_str()).map(|pos| (pos, t.len())))
         .min_by_key(|(pos, _)| *pos);
     match hit {
-        Some((pos, len)) => {
+        Some((pos, len)) if content.is_char_boundary(pos) && content.is_char_boundary(pos + len) => {
             let start = pos.saturating_sub(40);
             let end = (pos + len + 40).min(content.len());
-            // Snap to char boundaries.
-            let start = (start..=pos).rev().find(|i| content.is_char_boundary(*i)).unwrap_or(pos);
-            let end = (pos + len..=end).find(|i| content.is_char_boundary(*i)).unwrap_or(content.len());
+            let start = (0..=start).rev().find(|i| content.is_char_boundary(*i)).unwrap_or(0);
+            let end = (end..=content.len()).find(|i| content.is_char_boundary(*i)).unwrap_or(content.len());
             let mut s = String::new();
             if start > 0 { s.push_str("…"); }
             s.push_str(&content[start..pos]);
@@ -125,7 +124,7 @@ fn make_snippet(content: &str, q_tokens: &[String]) -> String {
             if end < content.len() { s.push_str("…"); }
             s
         }
-        None => content.chars().take(80).collect(),
+        _ => content.chars().take(80).collect(),
     }
 }
 
@@ -166,12 +165,13 @@ impl RecallStore for FileRecall {
             .open(&path)
             .map_err(|e| RecallError::Io(e.to_string()))?;
         writeln!(f, "{line}").map_err(|e| RecallError::Io(e.to_string()))?;
-        // Count lines for the new id + bump meta.
-        let id = self.read_messages(owner, session_id).len() as i64;
+        // Derive the new message's id from its actual assigned line number.
+        let msgs = self.read_messages(owner, session_id);
+        let id = msgs.last().map(|m| m.id).unwrap_or(1);
         let mut meta = self
             .read_meta(owner, session_id)
             .unwrap_or_else(|| SessionMeta::new(session_id, msg.ts_ms));
-        meta.message_count = id;
+        meta.message_count = msgs.len() as i64;
         let _ = self.write_meta(owner, &meta);
         Ok(id)
     }
@@ -328,6 +328,19 @@ mod tests {
         std::fs::write(&path, "{bad\n{\"id\":0,\"role\":\"user\",\"content\":\"hello world\",\"ts_ms\":1}\n").unwrap();
         let hits = r.search("u1", "hello", 5).await.unwrap();
         assert_eq!(hits.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn cjk_owner_and_unicode_content_do_not_panic() {
+        let root = tmp_root();
+        let r = FileRecall::open(&root).unwrap();
+        let owner = "用户".repeat(50); // >120 bytes, multi-byte
+        r.ensure_session(&owner, "s1", &SessionMeta::new("s1", 1)).await.unwrap();
+        r.append(&owner, "s1", &RecallMessage::new("user", "İstanbul café 支付服务 refactor", 1)).await.unwrap();
+        // search must not panic on the mixed-case/Unicode snippet path
+        let _ = r.search(&owner, "refactor", 5).await.unwrap();
+        let _ = r.search(&owner, "İstanbul", 5).await.unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 }
