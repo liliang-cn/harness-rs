@@ -59,7 +59,10 @@ struct EmbedRequest<'a> {
     content: Content<'a>,
     /// Gemini truncates/PCA's the model's native dim down to this size.
     /// Required for `gemini-embedding-001`; ignored by older models.
-    #[serde(rename = "outputDimensionality", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "outputDimensionality",
+        skip_serializing_if = "Option::is_none"
+    )]
     output_dim: Option<usize>,
 }
 

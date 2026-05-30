@@ -291,11 +291,7 @@ impl Tool for ListMemoriesTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let k = args
-            .get("k")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10)
-            .min(50) as usize;
+        let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(10).min(50) as usize;
         let hits = self
             .memory
             .recall(&query, k)

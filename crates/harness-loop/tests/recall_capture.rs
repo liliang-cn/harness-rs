@@ -1,14 +1,14 @@
 //! with_recall captures user/assistant/tool messages under owner+session from profile.extra.
 
 use async_trait::async_trait;
-use harness_context::{default_world, FileRecall};
+use harness_context::{FileRecall, default_world};
 use harness_core::{
     Context, Model, ModelError, ModelInfo, ModelOutput, RecallStore, StopReason, Task, ToolCall,
     ToolError, ToolResult, ToolRisk, ToolSchema, Usage, World,
 };
 use harness_loop::AgentLoop;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 struct MockModel {
     turn: AtomicU32,
@@ -73,7 +73,11 @@ impl harness_core::Tool for Noop {
     fn risk(&self) -> ToolRisk {
         ToolRisk::ReadOnly
     }
-    async fn invoke(&self, _args: serde_json::Value, _world: &mut World) -> Result<ToolResult, ToolError> {
+    async fn invoke(
+        &self,
+        _args: serde_json::Value,
+        _world: &mut World,
+    ) -> Result<ToolResult, ToolError> {
         Ok(ToolResult {
             ok: true,
             content: serde_json::json!({}),

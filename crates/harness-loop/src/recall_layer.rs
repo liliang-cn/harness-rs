@@ -12,7 +12,7 @@ use harness_core::{
     Block, Context, Execution, Guide, GuideError, GuideId, GuideScope, RecallStore, Tool,
     ToolError, ToolResult, ToolRisk, ToolSchema, World,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, OnceLock};
 
 /// Read the recall owner from the world profile (fallback "default").
@@ -85,18 +85,14 @@ impl Tool for SessionSearchTool {
             .filter(|s| !s.is_empty())
         {
             match self.store.search(&owner, q, limit).await {
-                Ok(hits) => json!({"mode": "discover", "query": q, "count": hits.len(), "results": hits}),
+                Ok(hits) => {
+                    json!({"mode": "discover", "query": q, "count": hits.len(), "results": hits})
+                }
                 Err(e) => return Ok(err_result(e)),
             }
         } else if let Some(sid) = args.get("session_id").and_then(|v| v.as_str()) {
-            let around = args
-                .get("around")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let window = args
-                .get("window")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5) as usize;
+            let around = args.get("around").and_then(|v| v.as_i64()).unwrap_or(0);
+            let window = args.get("window").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             match self.store.scroll(&owner, sid, around, window).await {
                 Ok(msgs) => json!({"mode": "scroll", "session_id": sid, "messages": msgs}),
                 Err(e) => return Ok(err_result(e)),
@@ -180,7 +176,7 @@ impl Guide for RecallGuide {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_context::{default_world, FileRecall};
+    use harness_context::{FileRecall, default_world};
     use harness_core::{RecallMessage, SessionMeta};
 
     fn tmp_root() -> std::path::PathBuf {

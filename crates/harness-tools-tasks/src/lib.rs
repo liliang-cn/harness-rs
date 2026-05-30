@@ -127,8 +127,11 @@ impl JsonFileStore {
 
     async fn load(&self) -> Result<Vec<Task>, TaskStoreError> {
         match tokio::fs::read(&self.path).await {
-            Ok(bytes) if !bytes.is_empty() => serde_json::from_slice::<Vec<Task>>(&bytes)
-                .map_err(|e| TaskStoreError::Invalid(format!("parse {}: {e}", self.path.display()))),
+            Ok(bytes) if !bytes.is_empty() => {
+                serde_json::from_slice::<Vec<Task>>(&bytes).map_err(|e| {
+                    TaskStoreError::Invalid(format!("parse {}: {e}", self.path.display()))
+                })
+            }
             Ok(_) => Ok(Vec::new()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(TaskStoreError::Io(e.to_string())),
@@ -181,7 +184,11 @@ impl TaskStore for JsonFileStore {
         let all = self.load().await?;
         Ok(all
             .into_iter()
-            .filter(|t| f.user_id.as_deref().is_none_or(|u| t.user_id.as_deref() == Some(u)))
+            .filter(|t| {
+                f.user_id
+                    .as_deref()
+                    .is_none_or(|u| t.user_id.as_deref() == Some(u))
+            })
             .filter(|t| f.status.is_none_or(|s| t.status == s))
             .collect())
     }

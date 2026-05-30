@@ -147,12 +147,18 @@ impl MemoryGuide {
         for e in &hits {
             // Tag filters first — cheaper than re-scoring.
             if !self.required_tags.is_empty()
-                && !self.required_tags.iter().all(|t| e.tags.iter().any(|x| x == t))
+                && !self
+                    .required_tags
+                    .iter()
+                    .all(|t| e.tags.iter().any(|x| x == t))
             {
                 continue;
             }
             if !self.excluded_tags.is_empty()
-                && self.excluded_tags.iter().any(|t| e.tags.iter().any(|x| x == t))
+                && self
+                    .excluded_tags
+                    .iter()
+                    .any(|t| e.tags.iter().any(|x| x == t))
             {
                 continue;
             }
@@ -179,9 +185,8 @@ impl MemoryGuide {
     }
 
     fn remove_previous_recall_block(ctx: &mut Context) {
-        ctx.guides.retain(|b| {
-            !matches!(b, Block::Text(t) if t.starts_with(MEMORY_RECALL_MARKER))
-        });
+        ctx.guides
+            .retain(|b| !matches!(b, Block::Text(t) if t.starts_with(MEMORY_RECALL_MARKER)));
     }
 }
 
@@ -244,11 +249,7 @@ impl Guide for MemoryGuide {
         }
         Ok(())
     }
-    async fn apply_before_iter(
-        &self,
-        ctx: &mut Context,
-        _w: &World,
-    ) -> Result<(), GuideError> {
+    async fn apply_before_iter(&self, ctx: &mut Context, _w: &World) -> Result<(), GuideError> {
         // Query = latest user message; fall back to task.description on
         // turn 0 (before any user turn lands in history — though the loop
         // pushes the task as a user turn before iter 0 so this is rare).

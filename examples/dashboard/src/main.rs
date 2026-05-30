@@ -173,7 +173,10 @@ impl harness_core::Model for AnyModel {
         &self,
         ctx: &harness_core::Context,
     ) -> Result<
-        futures::stream::BoxStream<'static, Result<harness_core::ModelDelta, harness_core::ModelError>>,
+        futures::stream::BoxStream<
+            'static,
+            Result<harness_core::ModelDelta, harness_core::ModelError>,
+        >,
         harness_core::ModelError,
     > {
         match self {
@@ -547,7 +550,10 @@ async fn run_auto_charge_subs() -> anyhow::Result<()> {
         println!("→ auto-charge-subs: no subscriptions due as of {today}");
         return Ok(());
     }
-    println!("→ auto-charge-subs: {} subscription(s) due as of {today}", due.len());
+    println!(
+        "→ auto-charge-subs: {} subscription(s) due as of {today}",
+        due.len()
+    );
     let mut charged = 0u32;
     let mut skipped = 0u32;
     for (user_id, sub) in due {
@@ -598,7 +604,10 @@ async fn run_auto_charge_subs() -> anyhow::Result<()> {
             let _ = db
                 .conn_update_subscription_next_date(&user_id, &sub.id, next)
                 .map_err(|e| {
-                    eprintln!("  ✗ user={user_id} sub={}: date-advance failed: {e}", sub.id);
+                    eprintln!(
+                        "  ✗ user={user_id} sub={}: date-advance failed: {e}",
+                        sub.id
+                    );
                 });
         }
         println!(
@@ -682,8 +691,11 @@ pub(crate) fn build_task_description_with_lang(
 async fn main() -> anyhow::Result<()> {
     // Minimal tracing setup — picks up RUST_LOG, logs to stderr (journal-friendly).
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,reqwest=warn,hyper=warn")))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,reqwest=warn,hyper=warn")
+            }),
+        )
         .with_target(false)
         .try_init();
     let cli = Cli::parse();
@@ -789,10 +801,7 @@ async fn main() -> anyhow::Result<()> {
         // Default model: prefer HARNESS_MODEL if it's both known and
         // available; otherwise pick the first available.
         let want = model_id.to_string();
-        let default_model_id = if available_models
-            .iter()
-            .any(|m| m.id == want && m.available)
-        {
+        let default_model_id = if available_models.iter().any(|m| m.id == want && m.available) {
             want
         } else {
             available_models
@@ -946,8 +955,8 @@ async fn run_once(
         loop_ = loop_.with_hook(Arc::new(harness_loop::LiveProgressHook::new()));
     }
     if let Some(p) = record {
-        let rec = harness_loop::SessionRecorder::new(&p)
-            .map_err(|e| anyhow::anyhow!("recorder: {e}"))?;
+        let rec =
+            harness_loop::SessionRecorder::new(&p).map_err(|e| anyhow::anyhow!("recorder: {e}"))?;
         loop_ = loop_.with_hook(Arc::new(rec));
     }
     let mut world = with_profile(".", profile);
@@ -1023,9 +1032,9 @@ async fn run_repl(
 
         let model = build_model(base_url, model_id, api_key.clone());
         let mut loop_ = AgentLoop::new(model).with_guide(Arc::new(ProfileGuide));
-    if let Ok(g) = SkillsCatalogueGuide::new() {
-        loop_ = loop_.with_guide(Arc::new(g));
-    }
+        if let Ok(g) = SkillsCatalogueGuide::new() {
+            loop_ = loop_.with_guide(Arc::new(g));
+        }
         for t in tools.iter().cloned() {
             loop_ = loop_.with_tool(t);
         }

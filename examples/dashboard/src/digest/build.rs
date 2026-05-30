@@ -23,7 +23,10 @@ pub fn yesterday_bounds(now_utc: DateTime<Utc>, tz: Tz) -> (DateTime<Utc>, DateT
         .from_local_datetime(&local_today.and_hms_opt(0, 0, 0).unwrap())
         .earliest()
         .unwrap();
-    (start_local.with_timezone(&Utc), end_local.with_timezone(&Utc))
+    (
+        start_local.with_timezone(&Utc),
+        end_local.with_timezone(&Utc),
+    )
 }
 
 /// Aggregate expense transactions into a SpendingSection. Income/transfer are
@@ -43,24 +46,38 @@ pub fn spending_from_txns(txns: &[Transaction], currency: &str) -> SpendingSecti
     let mut by_category: Vec<(String, f64)> = by_cat.into_iter().collect();
     by_category.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     by_category.truncate(5);
-    SpendingSection { total, currency: currency.to_string(), by_category }
+    SpendingSection {
+        total,
+        currency: currency.to_string(),
+        by_category,
+    }
 }
 
 /// WealthSection from the two latest net-worth snapshots. With <2 snapshots,
 /// deltas are 0. With none, everything is 0 (new user).
 pub fn wealth_from_snapshots(db: &Db, user_id: &str, base_currency: &str) -> WealthSection {
     let today = Utc::now().format("%Y-%m-%d").to_string();
-    let from = (Utc::now() - Duration::days(14)).format("%Y-%m-%d").to_string();
-    let series = db.net_worth_series(user_id, &from, &today).unwrap_or_default();
+    let from = (Utc::now() - Duration::days(14))
+        .format("%Y-%m-%d")
+        .to_string();
+    let series = db
+        .net_worth_series(user_id, &from, &today)
+        .unwrap_or_default();
     let latest = series.last();
-    let prev = if series.len() >= 2 { series.get(series.len() - 2) } else { None };
+    let prev = if series.len() >= 2 {
+        series.get(series.len() - 2)
+    } else {
+        None
+    };
     match latest {
         Some(l) => WealthSection {
             net_worth: l.net_amt,
             net_delta: prev.map(|p| l.net_amt - p.net_amt).unwrap_or(0.0),
             cash: l.cash_amt,
             investments: l.investments_amt,
-            investments_delta: prev.map(|p| l.investments_amt - p.investments_amt).unwrap_or(0.0),
+            investments_delta: prev
+                .map(|p| l.investments_amt - p.investments_amt)
+                .unwrap_or(0.0),
             debt: l.debt_amt,
             currency: l.base_currency.clone(),
         },
@@ -93,7 +110,12 @@ pub fn build_digest(
     let date = (now_utc.with_timezone(&tz).date_naive() - Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-    Ok(Digest { date, spending, wealth, market })
+    Ok(Digest {
+        date,
+        spending,
+        wealth,
+        market,
+    })
 }
 
 #[cfg(test)]

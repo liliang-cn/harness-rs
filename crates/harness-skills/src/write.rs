@@ -24,8 +24,12 @@ pub fn write_skill_md(dir: &Path, name: &str, content: &str) -> Result<PathBuf, 
         Ok(()) => Ok(path),
         Err(e) => {
             match prior {
-                Some(bytes) => { let _ = std::fs::write(&path, bytes); }
-                None => { let _ = std::fs::remove_dir_all(&skill_dir); }
+                Some(bytes) => {
+                    let _ = std::fs::write(&path, bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_dir_all(&skill_dir);
+                }
             }
             Err(e)
         }
@@ -49,7 +53,10 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("harness-skillwrite-{}-{n}", std::process::id()))
     }
 
@@ -71,7 +78,10 @@ mod tests {
         let bad = "no frontmatter here";
         let err = write_skill_md(&dir, "broken", bad);
         assert!(err.is_err(), "invalid skill must error");
-        assert!(!dir.join("broken").join("SKILL.md").exists(), "no file left behind");
+        assert!(
+            !dir.join("broken").join("SKILL.md").exists(),
+            "no file left behind"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -101,7 +101,9 @@ impl GuardedMemory {
         if self.blocked_substrings.iter().any(|s| lower.contains(s)) {
             return true;
         }
-        self.sensitivity_patterns.iter().any(|r| r.is_match(content))
+        self.sensitivity_patterns
+            .iter()
+            .any(|r| r.is_match(content))
     }
 
     async fn is_duplicate(&self, entry: &MemoryEntry) -> bool {
@@ -199,11 +201,7 @@ mod tests {
     }
     #[async_trait]
     impl Memory for VecMemory {
-        async fn recall(
-            &self,
-            query: &str,
-            k: usize,
-        ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        async fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryEntry>, MemoryError> {
             // Mimic FileMemory: substring-contains scoring against lowercased
             // content + tags. Plain Jaccard exact-token wouldn't substring-
             // match CJK content (where the whole string is one big token).
@@ -237,9 +235,11 @@ mod tests {
     async fn sensitive_credit_card_is_dropped() {
         let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
         let mem = GuardedMemory::new(inner.clone());
-        mem.write(MemoryEntry::new("user's card is 4111111111111111 expiry 12/30"))
-            .await
-            .unwrap();
+        mem.write(MemoryEntry::new(
+            "user's card is 4111111111111111 expiry 12/30",
+        ))
+        .await
+        .unwrap();
         let all = inner.recall("card", 10).await.unwrap();
         assert!(all.is_empty(), "credit-card-like content should be dropped");
     }
@@ -259,20 +259,31 @@ mod tests {
     async fn monetary_amounts_are_dropped() {
         let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
         let mem = GuardedMemory::new(inner.clone());
-        mem.write(MemoryEntry::new("用户记录了一笔 ¥199 火锅消费")).await.unwrap();
-        mem.write(MemoryEntry::new("user spent USD 250 on Claude Code")).await.unwrap();
+        mem.write(MemoryEntry::new("用户记录了一笔 ¥199 火锅消费"))
+            .await
+            .unwrap();
+        mem.write(MemoryEntry::new("user spent USD 250 on Claude Code"))
+            .await
+            .unwrap();
         let all = inner.recall("user", 10).await.unwrap();
-        assert!(all.is_empty(), "monetary patterns should be filtered: {all:?}");
+        assert!(
+            all.is_empty(),
+            "monetary patterns should be filtered: {all:?}"
+        );
     }
 
     #[tokio::test]
     async fn durable_preferences_pass_through() {
         let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
         let mem = GuardedMemory::new(inner.clone());
-        mem.write(MemoryEntry::new("用户偏好使用微信支付餐饮类支出")).await.unwrap();
-        mem.write(MemoryEntry::new("user prefers concise replies in Slack style"))
+        mem.write(MemoryEntry::new("用户偏好使用微信支付餐饮类支出"))
             .await
             .unwrap();
+        mem.write(MemoryEntry::new(
+            "user prefers concise replies in Slack style",
+        ))
+        .await
+        .unwrap();
         let all = inner.recall("用户", 10).await.unwrap();
         assert_eq!(all.len(), 1, "preference about 用户 should be kept");
     }
@@ -287,11 +298,17 @@ mod tests {
         .await
         .unwrap();
         // Near-duplicate phrasing → tokens overlap ≥ 0.6 → should be dropped.
-        mem.write(MemoryEntry::new("user prefers concise replies in Slack tone"))
-            .await
-            .unwrap();
+        mem.write(MemoryEntry::new(
+            "user prefers concise replies in Slack tone",
+        ))
+        .await
+        .unwrap();
         let all = inner.recall("user", 10).await.unwrap();
-        assert_eq!(all.len(), 1, "near-duplicate should not double-store: {all:?}");
+        assert_eq!(
+            all.len(),
+            1,
+            "near-duplicate should not double-store: {all:?}"
+        );
     }
 
     #[tokio::test]

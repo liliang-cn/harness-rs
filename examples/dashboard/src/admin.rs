@@ -26,25 +26,19 @@ fn require_admin(auth: &AuthCtx) -> Result<(), ApiError> {
 /// Mount all `/api/admin/*` routes on the given router.
 pub fn register_routes(r: Router<AppState>) -> Router<AppState> {
     r.route("/api/admin/users", get(list_users))
-        .route("/api/admin/users/:id", get(get_user).patch(patch_user).delete(delete_user))
         .route(
-            "/api/admin/users/:id/reset-password",
-            post(reset_password),
+            "/api/admin/users/:id",
+            get(get_user).patch(patch_user).delete(delete_user),
         )
+        .route("/api/admin/users/:id/reset-password", post(reset_password))
         .route("/api/admin/audit", get(list_audit))
         .route("/api/admin/logs", get(get_logs))
-        .route(
-            "/api/admin/config",
-            get(get_config).patch(patch_config),
-        )
+        .route("/api/admin/config", get(get_config).patch(patch_config))
 }
 
 // ───── handlers ─────
 
-async fn list_users(
-    State(s): State<AppState>,
-    auth: AuthCtx,
-) -> Result<Json<Value>, ApiError> {
+async fn list_users(State(s): State<AppState>, auth: AuthCtx) -> Result<Json<Value>, ApiError> {
     require_admin(&auth)?;
     let db = open_db()?;
     let users = db
@@ -69,7 +63,9 @@ async fn list_users(
             v
         })
         .collect();
-    Ok(Json(json!({ "users": enriched, "priced_at_model": model_id })))
+    Ok(Json(
+        json!({ "users": enriched, "priced_at_model": model_id }),
+    ))
 }
 
 async fn get_user(
@@ -385,8 +381,14 @@ async fn patch_config(
                 .cloned()
                 .unwrap_or_else(|| w.default_model_id.clone()),
             available_models: w.available_models.clone(),
-            deepseek_key: stored.get("deepseek_api_key").cloned().or_else(|| w.deepseek_key.clone()),
-            gemini_key: stored.get("gemini_api_key").cloned().or_else(|| w.gemini_key.clone()),
+            deepseek_key: stored
+                .get("deepseek_api_key")
+                .cloned()
+                .or_else(|| w.deepseek_key.clone()),
+            gemini_key: stored
+                .get("gemini_api_key")
+                .cloned()
+                .or_else(|| w.gemini_key.clone()),
             pricing,
         };
         *w = new_cfg;
@@ -427,7 +429,9 @@ fn gen_temp_password() -> String {
         ^ (std::process::id() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut out = String::with_capacity(12);
     for _ in 0..12 {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        x = x
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         out.push(alphabet[((x >> 32) as usize) % alphabet.len()] as char);
     }
     out

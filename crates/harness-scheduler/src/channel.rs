@@ -10,7 +10,8 @@ use std::sync::Arc;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ChannelError {
-    #[error("channel send: {0}")] Send(String),
+    #[error("channel send: {0}")]
+    Send(String),
 }
 
 #[async_trait]
@@ -23,12 +24,22 @@ pub trait Channel: Send + Sync {
 
 /// Prints the output to stdout.
 pub struct StdoutChannel;
-impl StdoutChannel { pub fn new() -> Self { Self } }
-impl Default for StdoutChannel { fn default() -> Self { Self::new() } }
+impl StdoutChannel {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl Default for StdoutChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Channel for StdoutChannel {
-    fn key(&self) -> &str { "stdout" }
+    fn key(&self) -> &str {
+        "stdout"
+    }
     async fn send(&self, output: &str, job: &Job) -> Result<(), ChannelError> {
         println!("\n=== {} ===\n{}\n", job.name, output);
         Ok(())
@@ -49,24 +60,37 @@ pub fn resend_body(from: &str, to: &str, subject: &str, text: &str) -> serde_jso
 
 impl EmailChannel {
     pub fn new(api_key: impl Into<String>, from: impl Into<String>) -> Self {
-        Self { api_key: api_key.into(), from: from.into(), client: reqwest::Client::new() }
+        Self {
+            api_key: api_key.into(),
+            from: from.into(),
+            client: reqwest::Client::new(),
+        }
     }
     /// Construct from env: `RESEND_API_KEY` + `DIGEST_FROM` (falls back to a
     /// Resend test sender). Returns None if `RESEND_API_KEY` is absent.
     pub fn from_env() -> Option<Self> {
-        let key = std::env::var("RESEND_API_KEY").ok().filter(|k| !k.is_empty())?;
-        let from = std::env::var("DIGEST_FROM").unwrap_or_else(|_| "Scheduler <onboarding@resend.dev>".into());
+        let key = std::env::var("RESEND_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())?;
+        let from = std::env::var("DIGEST_FROM")
+            .unwrap_or_else(|_| "Scheduler <onboarding@resend.dev>".into());
         Some(Self::new(key, from))
     }
 }
 
 #[async_trait]
 impl Channel for EmailChannel {
-    fn key(&self) -> &str { "email" }
+    fn key(&self) -> &str {
+        "email"
+    }
     async fn send(&self, output: &str, job: &Job) -> Result<(), ChannelError> {
-        let to = job.target.as_deref().ok_or_else(|| ChannelError::Send("email job has no target recipient".into()))?;
+        let to = job
+            .target
+            .as_deref()
+            .ok_or_else(|| ChannelError::Send("email job has no target recipient".into()))?;
         let body = resend_body(&self.from, to, &job.name, output);
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.resend.com/emails")
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -91,11 +115,15 @@ pub struct ChannelRegistry {
 }
 
 impl ChannelRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     pub fn register(&mut self, c: Arc<dyn Channel>) {
         self.map.insert(c.key().to_string(), c);
     }
-    pub fn get(&self, key: &str) -> Option<&Arc<dyn Channel>> { self.map.get(key) }
+    pub fn get(&self, key: &str) -> Option<&Arc<dyn Channel>> {
+        self.map.get(key)
+    }
 }
 
 #[cfg(test)]

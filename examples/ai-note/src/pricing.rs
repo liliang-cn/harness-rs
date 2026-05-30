@@ -24,16 +24,43 @@ pub type RateCard = std::collections::HashMap<String, ModelRate>;
 
 /// Fallback when the rate card lacks the requested model — roughly
 /// equivalent to deepseek-v4-flash so the number is never wildly off.
-pub const FALLBACK_RATE: ModelRate = ModelRate { input: 0.10, output: 0.60 };
+pub const FALLBACK_RATE: ModelRate = ModelRate {
+    input: 0.10,
+    output: 0.60,
+};
 
 /// Default rate card seeded on first launch. Admin can edit afterwards
 /// via PATCH /api/admin/config.
 pub fn default_rate_card() -> RateCard {
     let mut m = RateCard::new();
-    m.insert("deepseek-v4-flash".into(), ModelRate { input: 0.10,  output: 0.60 });
-    m.insert("deepseek-v4-pro".into(),   ModelRate { input: 0.55,  output: 2.20 });
-    m.insert("gemini-3.5-flash".into(),  ModelRate { input: 0.075, output: 0.30 });
-    m.insert("gemini-3.5-pro".into(),    ModelRate { input: 1.25,  output: 5.00 });
+    m.insert(
+        "deepseek-v4-flash".into(),
+        ModelRate {
+            input: 0.10,
+            output: 0.60,
+        },
+    );
+    m.insert(
+        "deepseek-v4-pro".into(),
+        ModelRate {
+            input: 0.55,
+            output: 2.20,
+        },
+    );
+    m.insert(
+        "gemini-3.5-flash".into(),
+        ModelRate {
+            input: 0.075,
+            output: 0.30,
+        },
+    );
+    m.insert(
+        "gemini-3.5-pro".into(),
+        ModelRate {
+            input: 1.25,
+            output: 5.00,
+        },
+    );
     m
 }
 
@@ -56,7 +83,10 @@ mod tests {
 
     #[test]
     fn zero_in_zero_out() {
-        assert_eq!(cost_usd(&default_rate_card(), "deepseek-v4-flash", 0, 0), 0.0);
+        assert_eq!(
+            cost_usd(&default_rate_card(), "deepseek-v4-flash", 0, 0),
+            0.0
+        );
     }
 
     #[test]
@@ -69,7 +99,12 @@ mod tests {
     #[test]
     fn unknown_model_falls_back() {
         // 1M in × 0.10 + 1M out × 0.60 = 0.70
-        let c = cost_usd(&default_rate_card(), "totally-fake-model", 1_000_000, 1_000_000);
+        let c = cost_usd(
+            &default_rate_card(),
+            "totally-fake-model",
+            1_000_000,
+            1_000_000,
+        );
         assert!((c - 0.70).abs() < 1e-6);
     }
 

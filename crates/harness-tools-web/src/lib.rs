@@ -60,13 +60,13 @@ struct SearchHit {
     }"#
 )]
 async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolError::InvalidArgs {
-            name: "web_search".into(),
-            reason: "query required".into(),
-        })?;
+    let query =
+        args.get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs {
+                name: "web_search".into(),
+                reason: "query required".into(),
+            })?;
     let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())

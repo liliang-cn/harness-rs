@@ -9,9 +9,9 @@ pub enum AccountKind {
     Debit,
     Credit,
     Wallet,
-    Loan,        // you owe — car loan, personal loan
-    Mortgage,    // you owe — has amortization
-    Receivable,  // someone owes you (lent to friend, pending refund)
+    Loan,       // you owe — car loan, personal loan
+    Mortgage,   // you owe — has amortization
+    Receivable, // someone owes you (lent to friend, pending refund)
     Other,
 }
 

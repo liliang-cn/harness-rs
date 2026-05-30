@@ -143,7 +143,11 @@ async fn add_subscription(args: Value, w: &mut World) -> Result<ToolResult, Tool
             .count_user_subscriptions(&uid)
             .map_err(|e| ToolError::Exec(e.to_string()))?;
         if n >= TRIAL_MAX_SUBSCRIPTIONS {
-            return Ok(trial_limit_result("subscriptions", n, TRIAL_MAX_SUBSCRIPTIONS));
+            return Ok(trial_limit_result(
+                "subscriptions",
+                n,
+                TRIAL_MAX_SUBSCRIPTIONS,
+            ));
         }
     }
 
@@ -251,10 +255,7 @@ async fn cancel_subscription(args: Value, w: &mut World) -> Result<ToolResult, T
         "required": ["subscription_id"]
     }"#
 )]
-async fn record_subscription_charge(
-    args: Value,
-    w: &mut World,
-) -> Result<ToolResult, ToolError> {
+async fn record_subscription_charge(args: Value, w: &mut World) -> Result<ToolResult, ToolError> {
     let sub_id = need_str(&args, "subscription_id")?.to_string();
     let db = open_db()?;
     let uid = uid_of(w)?;
