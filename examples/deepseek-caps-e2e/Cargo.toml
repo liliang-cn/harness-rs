@@ -1,0 +1,26 @@
+[package]
+name = "deepseek-caps-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "End-to-end smoke test: recall + learning-loop + scheduler against real DeepSeek"
+
+[[bin]]
+name = "deepseek-caps-e2e"
+path = "src/main.rs"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-context = { workspace = true }
+harness-models  = { workspace = true }
+harness-tools-skills = { workspace = true }
+harness-tools-memory = { workspace = true }
+harness-scheduler    = { workspace = true }
+tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow     = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
