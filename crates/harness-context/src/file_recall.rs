@@ -96,8 +96,18 @@ fn sanitize(s: &str) -> String {
     } else {
         cleaned
     };
-    if cleaned.chars().count() > 120 {
-        cleaned.chars().take(120).collect()
+    // Filesystem path components are limited to ~255 BYTES (Linux ENAMETOOLONG),
+    // not characters — a multibyte (e.g. CJK) name can blow past that. A short
+    // name passes through; an over-long one is replaced by a readable prefix plus
+    // a deterministic hash of the ORIGINAL string, so distinct names never collide
+    // (a collision on an `owner` would be a cross-tenant leak — truncation alone is
+    // unsafe). `DefaultHasher` uses fixed keys, so this is stable across runs.
+    if cleaned.len() > 200 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        s.hash(&mut h);
+        let prefix: String = cleaned.chars().take(40).collect();
+        format!("{prefix}-{:016x}", h.finish())
     } else {
         cleaned
     }
