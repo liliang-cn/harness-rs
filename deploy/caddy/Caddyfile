@@ -2,7 +2,6 @@
 #
 # Topology after flipping:
 #   internet :443 → caddy → 127.0.0.1:6755   ai-note
-#                        → 127.0.0.1:6743   ai-ledger
 #                        → 127.0.0.1:????   trade        (fill in)
 #
 # Caddy auto-fetches Let's Encrypt certs on first reload via the HTTP-01
@@ -50,11 +49,6 @@
 # ── ai-note ──────────────────────────────────────────────────────
 note.superleo.app {
     import site 127.0.0.1:6755
-}
-
-# ── ai-ledger ────────────────────────────────────────────────────
-ledger.superleo.app {
-    import site 127.0.0.1:6743
 }
 
 # ── trade (placeholder — fill in upstream port + uncomment) ──────
