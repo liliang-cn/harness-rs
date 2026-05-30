@@ -31,7 +31,6 @@ members = [
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",
-    "examples/dashboard",
     "examples/ai-note",
     "examples/deepseek-caps-e2e",
 ]
