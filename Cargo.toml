@@ -24,6 +24,7 @@ members = [
     "crates/harness-templates",
     "crates/harness-mcp",
     "crates/harness-daemon",
+    "crates/harness-scheduler",
     "crates/harness-recall-sqlite",
     "crates/harness-cli",
     "examples/crate-keeper",
@@ -69,6 +70,8 @@ harness-models     = { package = "harness-rs-models",     path = "crates/harness
 harness-templates  = { package = "harness-rs-templates",  path = "crates/harness-templates",  version = "0.0.4" }
 harness-mcp        = { package = "harness-rs-mcp",        path = "crates/harness-mcp",        version = "0.0.4" }
 harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.4" }
+harness-daemon     = { package = "harness-rs-daemon",     path = "crates/harness-daemon",     version = "0.0.4" }
+harness-scheduler  = { package = "harness-rs-scheduler",  path = "crates/harness-scheduler",  version = "0.0.4" }
 
 # external
 async-trait = "0.1"
