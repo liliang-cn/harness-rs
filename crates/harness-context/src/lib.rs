@@ -4,10 +4,12 @@
 //! traits; this crate provides the concrete implementations the framework
 //! actually runs on.
 
+pub mod file_recall;
 pub mod memory_file;
 pub mod memory_guard;
 pub mod runtime;
 
+pub use file_recall::*;
 pub use memory_file::*;
 pub use memory_guard::*;
 pub use runtime::*;
