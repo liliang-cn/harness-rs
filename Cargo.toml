@@ -17,6 +17,7 @@ members = [
     "crates/harness-tools-web",
     "crates/harness-tools-tasks",
     "crates/harness-tools-memory",
+    "crates/harness-tools-skills",
     "crates/harness-sensors-rust",
     "crates/harness-sensors-common",
     "crates/harness-models",
@@ -61,6 +62,7 @@ harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness
 harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.4" }
 harness-tools-tasks= { package = "harness-rs-tools-tasks",path = "crates/harness-tools-tasks",version = "0.0.4" }
 harness-tools-memory= { package = "harness-rs-tools-memory",path = "crates/harness-tools-memory",version = "0.0.4" }
+harness-tools-skills= { package = "harness-rs-tools-skills",path = "crates/harness-tools-skills",version = "0.0.4" }
 harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.4" }
 harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.4" }
 harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.4" }
