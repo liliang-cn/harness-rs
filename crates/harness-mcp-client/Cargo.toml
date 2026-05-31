@@ -18,6 +18,8 @@ path = "src/bin/mcp-echo-server.rs"
 
 [dependencies]
 harness-core = { workspace = true }
+harness-mcp = { workspace = true }
+harness-context = { workspace = true }
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-io"] }
 async-trait = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
@@ -26,7 +28,5 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-harness-mcp = { workspace = true }
-harness-context = { workspace = true }
 harness-loop = { workspace = true }
 harness-models = { workspace = true }
