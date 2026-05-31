@@ -601,9 +601,9 @@ loop path (PreToolUse/PostToolUse, session record, context).
 ```rust
 use harness_mcp_client::McpClient;
 
-let mcp = McpClient::connect_stdio("cortexdb", &["mcp"]).await?;
+let mcp = McpClient::connect_stdio("cortexdb-mcp-stdio", &[]).await?;
 let mut loop_ = harness_loop::AgentLoop::new(model);
-for t in mcp.tools_with_read_only(&["graphrag_search"]) {
+for t in mcp.tools_with_read_only(&["knowledge_search", "search_text"]) {
     loop_ = loop_.with_tool(t);
 }
 // keep `mcp` alive for the duration of the run.
@@ -633,6 +633,6 @@ git commit -m "docs(mcp-client): README + wiring example"
 
 ## After this crate
 
-- `cortexdb mcp` becomes the first real consumer: `McpClient::connect_stdio("cortexdb", &["mcp"])` → ingest/import/search tools in any agent.
+- CortexDB is the first real consumer (VERIFIED 2026-05-31): build `cmd/cortexdb-mcp-stdio` (reads `CORTEXDB_PATH`), then `McpClient::connect_stdio("cortexdb-mcp-stdio", &[])` exposes 47 RAG/GraphRAG tools (ingest_document, knowledge_save/search, search_text, search_graphrag_lexical, knowledge_graph_*, knowledge_memory_*, upsert_entities/relations, …). A save→search round-trip works end-to-end through the proxy.
 - Then the liteparse front-door (PDF/office → text → CortexDB ingest) and the optional `KnowledgeGuide` (auto-inject graphrag_search results into `ctx.guides`).
 - Later: HTTP/SSE transports behind features; surfacing server-reported usage into the loop's aggregate `Usage`.

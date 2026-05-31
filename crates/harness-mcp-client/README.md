@@ -13,9 +13,11 @@ Built on the official [`rmcp`](https://crates.io/crates/rmcp) SDK. Complements
 use harness_mcp_client::McpClient;
 use harness_loop::AgentLoop;
 
-let mcp = McpClient::connect_stdio("cortexdb", &["mcp"]).await?;
+// CortexDB ships a stdio MCP server binary `cortexdb-mcp-stdio` (DB path via the
+// CORTEXDB_PATH env var; verified to expose 47 RAG/GraphRAG tools).
+let mcp = McpClient::connect_stdio("cortexdb-mcp-stdio", &[]).await?;
 let mut loop_ = AgentLoop::new(model);
-for t in mcp.tools_with_read_only(&["graphrag_search"]) {
+for t in mcp.tools_with_read_only(&["knowledge_search", "search_text"]) {
     loop_ = loop_.with_tool(t);
 }
 // keep `mcp` alive for the duration of the run (it owns the child session).
