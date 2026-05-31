@@ -19,15 +19,16 @@ pub(crate) fn build_schema(tool: &rmcp::model::Tool) -> ToolSchema {
 ///
 /// - Object  → `Some(map)` (the normal case)
 /// - Null    → `None` (no-arg call)
-/// - Anything else → `Err(InvalidArgs)` (would be silently dropped before this fix)
+/// - Anything else → `Err(InvalidArgs)` with `name` set to `tool_name`
 pub(crate) fn to_arguments(
+    tool_name: &str,
     args: &serde_json::Value,
 ) -> Result<Option<JsonObject>, ToolError> {
     match args {
         serde_json::Value::Object(map) => Ok(Some(map.clone())),
         serde_json::Value::Null => Ok(None),
         other => Err(ToolError::InvalidArgs {
-            name: "mcp".into(),
+            name: tool_name.into(),
             reason: format!(
                 "tool arguments must be a JSON object, got {}",
                 kind_of(other)
@@ -59,10 +60,18 @@ pub(crate) fn map_call_result(res: CallToolResult) -> ToolResult {
     for block in &res.content {
         match &block.raw {
             RawContent::Text(t) => texts.push(t.text.clone()),
-            RawContent::Image(_) => omitted.push("image"),
-            RawContent::Resource(_) => omitted.push("resource"),
-            RawContent::Audio(_) => omitted.push("audio"),
-            RawContent::ResourceLink(_) => omitted.push("resource_link"),
+            RawContent::Image(_) => {
+                if !omitted.contains(&"image") { omitted.push("image"); }
+            }
+            RawContent::Resource(_) => {
+                if !omitted.contains(&"resource") { omitted.push("resource"); }
+            }
+            RawContent::Audio(_) => {
+                if !omitted.contains(&"audio") { omitted.push("audio"); }
+            }
+            RawContent::ResourceLink(_) => {
+                if !omitted.contains(&"resource_link") { omitted.push("resource_link"); }
+            }
         }
     }
 
@@ -125,13 +134,7 @@ impl Tool for McpProxyTool {
         _world: &mut World,
     ) -> Result<ToolResult, ToolError> {
         let mut params = CallToolRequestParams::new(self.schema.name.clone());
-        params.arguments = to_arguments(&args).map_err(|mut e| {
-            // Inject the real tool name into the error.
-            if let ToolError::InvalidArgs { ref mut name, .. } = e {
-                *name = self.schema.name.clone();
-            }
-            e
-        })?;
+        params.arguments = to_arguments(&self.schema.name, &args)?;
 
         let res = self
             .peer
@@ -196,7 +199,7 @@ mod tests {
     #[test]
     fn to_arguments_object_returns_some_map() {
         let v = json!({"key": "value", "n": 42});
-        let result = to_arguments(&v).unwrap();
+        let result = to_arguments("my_tool", &v).unwrap();
         assert!(result.is_some());
         let map = result.unwrap();
         assert_eq!(map["key"], json!("value"));
@@ -205,15 +208,16 @@ mod tests {
 
     #[test]
     fn to_arguments_null_returns_none() {
-        let result = to_arguments(&serde_json::Value::Null).unwrap();
+        let result = to_arguments("my_tool", &serde_json::Value::Null).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn to_arguments_string_is_rejected() {
-        let err = to_arguments(&json!("hello")).unwrap_err();
+        let err = to_arguments("search", &json!("hello")).unwrap_err();
         match err {
-            ToolError::InvalidArgs { reason, .. } => {
+            ToolError::InvalidArgs { name, reason } => {
+                assert_eq!(name, "search", "error name should equal the tool name");
                 assert!(reason.contains("object"), "reason should mention 'object': {reason}");
                 assert!(reason.contains("string"), "reason should mention the actual kind: {reason}");
             }
@@ -223,9 +227,10 @@ mod tests {
 
     #[test]
     fn to_arguments_array_is_rejected() {
-        let err = to_arguments(&json!([1, 2, 3])).unwrap_err();
+        let err = to_arguments("list_files", &json!([1, 2, 3])).unwrap_err();
         match err {
-            ToolError::InvalidArgs { reason, .. } => {
+            ToolError::InvalidArgs { name, reason } => {
+                assert_eq!(name, "list_files", "error name should equal the tool name");
                 assert!(reason.contains("object"), "reason should mention 'object': {reason}");
                 assert!(reason.contains("array"), "reason should mention the actual kind: {reason}");
             }
@@ -235,9 +240,10 @@ mod tests {
 
     #[test]
     fn to_arguments_number_is_rejected() {
-        let err = to_arguments(&json!(7)).unwrap_err();
+        let err = to_arguments("calc", &json!(7)).unwrap_err();
         match err {
-            ToolError::InvalidArgs { reason, .. } => {
+            ToolError::InvalidArgs { name, reason } => {
+                assert_eq!(name, "calc", "error name should equal the tool name");
                 assert!(reason.contains("object"), "reason should mention 'object': {reason}");
             }
             other => panic!("expected InvalidArgs, got {other:?}"),
@@ -291,6 +297,29 @@ mod tests {
             r.content.get("omitted_content").is_some(),
             "expected omitted_content field, got: {}",
             r.content
+        );
+    }
+
+    #[test]
+    fn map_result_duplicate_non_text_kinds_deduped() {
+        // Two image blocks + one resource block → omitted_content should be
+        // ["image", "resource"], not ["image", "image", "resource"].
+        let res: CallToolResult = serde_json::from_value(json!({
+            "content": [
+                {"type": "image", "data": "aaa", "mimeType": "image/png"},
+                {"type": "image", "data": "bbb", "mimeType": "image/jpeg"},
+                {"type": "resource", "resource": {"uri": "file:///x", "mimeType": "text/plain", "text": "hi"}}
+            ],
+            "isError": false
+        }))
+        .unwrap();
+
+        let r = map_call_result(res);
+        let omitted = r.content["omitted_content"].as_array().expect("omitted_content should be an array");
+        assert_eq!(
+            omitted,
+            &[json!("image"), json!("resource")],
+            "duplicate kinds must be collapsed to first-seen order"
         );
     }
 
