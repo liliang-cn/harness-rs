@@ -23,6 +23,7 @@ members = [
     "crates/harness-models",
     "crates/harness-templates",
     "crates/harness-mcp",
+    "crates/harness-mcp-client",
     "crates/harness-daemon",
     "crates/harness-scheduler",
     "crates/harness-recall-sqlite",

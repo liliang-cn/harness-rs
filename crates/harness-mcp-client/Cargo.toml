@@ -1,0 +1,40 @@
+[package]
+name = "harness-rs-mcp-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP client for harness-rs: expose a remote MCP server's tools as harness tools"
+
+keywords     = ["mcp", "agent", "ai", "llm", "tools"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "README.md"
+
+[lib]
+name = "harness_mcp_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mcp-echo-server"
+path = "src/bin/mcp-echo-server.rs"
+required-features = ["test-server"]
+
+[features]
+test-server = ["dep:harness-mcp", "dep:harness-context"]
+
+[dependencies]
+harness-core = { workspace = true }
+harness-mcp = { workspace = true, optional = true }
+harness-context = { workspace = true, optional = true }
+rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-io"] }
+async-trait = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+harness-loop = { workspace = true }
+harness-models = { workspace = true }
