@@ -3,6 +3,84 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.7
+
+MCP client — consume external MCP servers from an `AgentLoop`. Pure addition
+on top of 0.0.6.
+
+### Added — MCP client
+
+- **New crate `harness-rs-mcp-client`** — a generic MCP (Model Context Protocol)
+  client built on the official `rmcp` 1.7 SDK. `McpClient::connect_stdio(program,
+  args)` spawns an MCP server as a child process over stdio, lists its tools, and
+  exposes each as a harness `Arc<dyn Tool>` (`.tools()` /
+  `.tools_with_read_only(names)` / `.tool_names()`). MCP results flow back through
+  the standard `AgentLoop` path (`PreToolUse` / `PostToolUse`, session record,
+  context) — not a side channel. Complements `harness-rs-mcp` (the server side).
+  Verified end-to-end against CortexDB's MCP server (47 RAG/GraphRAG tools;
+  `knowledge_save` → `knowledge_search` round-trip).
+- Remote tools default to `Destructive` risk; `tools_with_read_only` marks named
+  tools `ReadOnly`. Non-object tool args are rejected with `InvalidArgs`; non-text
+  content blocks (image/resource/audio) are surfaced via `tracing::warn!` + an
+  `omitted_content` key instead of being silently dropped.
+
+### Added — CI
+
+- CI runs the `harness-rs-mcp-client` integration tests and clippy under its
+  `test-server` feature (which gates a test-only echo MCP stdio server).
+
+## 0.0.6
+
+FileRecall robustness + release automation. No breaking source changes.
+
+### Fixed
+
+- **`harness-context` FileRecall** — filename sanitization now caps by **bytes**
+  (not chars) and hashes over-long names, fixing `ENAMETOOLONG` on Linux for
+  long / non-ASCII session keys.
+
+### Added — release
+
+- **Release workflow** — pushing a `v*` tag verifies the tag matches the
+  workspace version, runs the test gate, then publishes every `harness-rs-*`
+  crate to crates.io in dependency order via `cargo ws publish`.
+- README tour sections for recall / learning-loop / scheduler.
+
+## 0.0.5
+
+Three capabilities — cross-session **recall**, a self-evolving **learning loop**,
+and in-process **scheduling** — plus new crates. Additive on top of 0.0.4.
+
+### Added — recall (cross-session search)
+
+- **`RecallStore` trait** with two backends: `harness_context::FileRecall` (JSONL)
+  and the new optional crate **`harness-rs-recall-sqlite`** (SQLite FTS5 + trigram
+  tokenizer for CJK, BM25 ranking). `AgentLoop::with_recall` / `.auto_inject`, an
+  owner-scoped `SessionSearchTool` (three query shapes), and an opt-in
+  `RecallGuide`. A shared contract test suite covers both backends including
+  owner isolation.
+
+### Added — learning loop (self-evolving skills + memory)
+
+- **`AgentLoop::with_learning_loop(LearningConfig)`** — forks a review subagent at
+  `SessionEnd` (threshold-gated, best-effort) that patches skills/memory from the
+  transcript. New crate **`harness-rs-tools-skills`** with the `skill_manage` tool
+  (create/edit/patch/delete `SKILL.md`); `harness-skills` gains `write_skill_md` /
+  `delete_skill` (validate-on-write).
+
+### Added — scheduling
+
+- **New crate `harness-rs-scheduler`** — `Job` + `JobStore` / `FileJobStore`, a
+  `Scheduler` that ticks and runs a job as a subagent turn, a `Channel` trait with
+  `StdoutChannel` + `EmailChannel` (Resend), and a `cronjob` tool for agent
+  self-scheduling (schedule-string validated).
+
+### Changed
+
+- **`harness-core`** — `Arc<dyn Model>` is now used via the `DynModel` newtype
+  (replacing the blanket `impl Model for Arc<dyn Model>`, which overflowed the
+  `Send` auto-trait solver in some async contexts).
+
 ## 0.0.4
 
 Observability and open long-term memory. No breaking source changes; pure
