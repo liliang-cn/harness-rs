@@ -1,8 +1,8 @@
 use crate::proxy::McpProxyTool;
 use harness_core::{Tool, ToolRisk};
+use rmcp::ServiceExt;
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
-use rmcp::ServiceExt;
 use std::sync::Arc;
 use tokio::process::Command;
 
