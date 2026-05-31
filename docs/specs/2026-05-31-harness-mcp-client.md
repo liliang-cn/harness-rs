@@ -78,7 +78,8 @@ impl McpClient {
 Wiring (consumer side):
 
 ```rust
-let mcp = McpClient::connect_stdio("cortexdb", &["mcp"]).await?;
+// CortexDB's stdio MCP server is the `cortexdb-mcp-stdio` binary (DB via CORTEXDB_PATH).
+let mcp = McpClient::connect_stdio("cortexdb-mcp-stdio", &[]).await?;
 let mut loop_ = AgentLoop::new(model);
 for t in mcp.tools_with_read_only(&["graphrag_search"]) {
     loop_ = loop_.with_tool(t);
