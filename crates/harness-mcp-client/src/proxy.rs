@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use harness_core::{ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use harness_core::tool::Tool;
+use harness_core::{ToolError, ToolResult, ToolRisk, ToolSchema, World};
+use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParams, CallToolResult, RawContent};
 use rmcp::service::Peer;
-use rmcp::RoleClient;
 
 type JsonObject = serde_json::Map<String, serde_json::Value>;
 
@@ -61,16 +61,24 @@ pub(crate) fn map_call_result(res: CallToolResult) -> ToolResult {
         match &block.raw {
             RawContent::Text(t) => texts.push(t.text.clone()),
             RawContent::Image(_) => {
-                if !omitted.contains(&"image") { omitted.push("image"); }
+                if !omitted.contains(&"image") {
+                    omitted.push("image");
+                }
             }
             RawContent::Resource(_) => {
-                if !omitted.contains(&"resource") { omitted.push("resource"); }
+                if !omitted.contains(&"resource") {
+                    omitted.push("resource");
+                }
             }
             RawContent::Audio(_) => {
-                if !omitted.contains(&"audio") { omitted.push("audio"); }
+                if !omitted.contains(&"audio") {
+                    omitted.push("audio");
+                }
             }
             RawContent::ResourceLink(_) => {
-                if !omitted.contains(&"resource_link") { omitted.push("resource_link"); }
+                if !omitted.contains(&"resource_link") {
+                    omitted.push("resource_link");
+                }
             }
         }
     }
@@ -92,11 +100,7 @@ pub(crate) fn map_call_result(res: CallToolResult) -> ToolResult {
         serde_json::json!({"text": ""})
     };
 
-    let trace = if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    };
+    let trace = if text.is_empty() { None } else { Some(text) };
 
     ToolResult { ok, content, trace }
 }
@@ -136,11 +140,10 @@ impl Tool for McpProxyTool {
         let mut params = CallToolRequestParams::new(self.schema.name.clone());
         params.arguments = to_arguments(&self.schema.name, &args)?;
 
-        let res = self
-            .peer
-            .call_tool(params)
-            .await
-            .map_err(|e| ToolError::Exec(format!("mcp tool `{}` failed: {e}", self.schema.name)))?;
+        let res =
+            self.peer.call_tool(params).await.map_err(|e| {
+                ToolError::Exec(format!("mcp tool `{}` failed: {e}", self.schema.name))
+            })?;
 
         Ok(map_call_result(res))
     }
@@ -168,11 +171,9 @@ mod tests {
 
         match description {
             Some(desc) => rmcp::model::Tool::new("graphrag_search", desc, Arc::new(input_schema)),
-            None => rmcp::model::Tool::new_with_raw(
-                "graphrag_search",
-                None,
-                Arc::new(input_schema),
-            ),
+            None => {
+                rmcp::model::Tool::new_with_raw("graphrag_search", None, Arc::new(input_schema))
+            }
         }
     }
 
@@ -218,8 +219,14 @@ mod tests {
         match err {
             ToolError::InvalidArgs { name, reason } => {
                 assert_eq!(name, "search", "error name should equal the tool name");
-                assert!(reason.contains("object"), "reason should mention 'object': {reason}");
-                assert!(reason.contains("string"), "reason should mention the actual kind: {reason}");
+                assert!(
+                    reason.contains("object"),
+                    "reason should mention 'object': {reason}"
+                );
+                assert!(
+                    reason.contains("string"),
+                    "reason should mention the actual kind: {reason}"
+                );
             }
             other => panic!("expected InvalidArgs, got {other:?}"),
         }
@@ -231,8 +238,14 @@ mod tests {
         match err {
             ToolError::InvalidArgs { name, reason } => {
                 assert_eq!(name, "list_files", "error name should equal the tool name");
-                assert!(reason.contains("object"), "reason should mention 'object': {reason}");
-                assert!(reason.contains("array"), "reason should mention the actual kind: {reason}");
+                assert!(
+                    reason.contains("object"),
+                    "reason should mention 'object': {reason}"
+                );
+                assert!(
+                    reason.contains("array"),
+                    "reason should mention the actual kind: {reason}"
+                );
             }
             other => panic!("expected InvalidArgs, got {other:?}"),
         }
@@ -244,7 +257,10 @@ mod tests {
         match err {
             ToolError::InvalidArgs { name, reason } => {
                 assert_eq!(name, "calc", "error name should equal the tool name");
-                assert!(reason.contains("object"), "reason should mention 'object': {reason}");
+                assert!(
+                    reason.contains("object"),
+                    "reason should mention 'object': {reason}"
+                );
             }
             other => panic!("expected InvalidArgs, got {other:?}"),
         }
@@ -315,7 +331,9 @@ mod tests {
         .unwrap();
 
         let r = map_call_result(res);
-        let omitted = r.content["omitted_content"].as_array().expect("omitted_content should be an array");
+        let omitted = r.content["omitted_content"]
+            .as_array()
+            .expect("omitted_content should be an array");
         assert_eq!(
             omitted,
             &[json!("image"), json!("resource")],
@@ -325,10 +343,8 @@ mod tests {
 
     #[test]
     fn map_result_multi_text_joined() {
-        let res = CallToolResult::success(vec![
-            Content::text("line one"),
-            Content::text("line two"),
-        ]);
+        let res =
+            CallToolResult::success(vec![Content::text("line one"), Content::text("line two")]);
         let r = map_call_result(res);
         assert_eq!(r.content["text"], json!("line one\nline two"));
     }

@@ -21,5 +21,8 @@ async fn connects_lists_and_calls_echo() {
 
     assert!(res.ok);
     let body = serde_json::to_string(&res.content).unwrap();
-    assert!(body.contains("hello mcp"), "result did not echo payload: {body}");
+    assert!(
+        body.contains("hello mcp"),
+        "result did not echo payload: {body}"
+    );
 }

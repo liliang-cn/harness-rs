@@ -2,7 +2,7 @@
 //! tests via CARGO_BIN_EXE_mcp-echo-server.
 use async_trait::async_trait;
 use harness_core::{Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 struct EchoTool {
@@ -27,9 +27,15 @@ impl EchoTool {
 
 #[async_trait]
 impl Tool for EchoTool {
-    fn name(&self) -> &str { &self.schema.name }
-    fn schema(&self) -> &ToolSchema { &self.schema }
-    fn risk(&self) -> ToolRisk { ToolRisk::ReadOnly }
+    fn name(&self) -> &str {
+        &self.schema.name
+    }
+    fn schema(&self) -> &ToolSchema {
+        &self.schema
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
     async fn invoke(&self, args: Value, _world: &mut World) -> Result<ToolResult, ToolError> {
         let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
         Ok(ToolResult {
