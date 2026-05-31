@@ -8,6 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "MCP client for harness-rs: expose a remote MCP server's tools as harness tools"
 
+keywords     = ["mcp", "agent", "ai", "llm", "tools"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "README.md"
+
 [lib]
 name = "harness_mcp_client"
 path = "src/lib.rs"
