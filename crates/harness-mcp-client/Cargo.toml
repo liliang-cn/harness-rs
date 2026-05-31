@@ -15,11 +15,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "mcp-echo-server"
 path = "src/bin/mcp-echo-server.rs"
+required-features = ["test-server"]
+
+[features]
+test-server = ["dep:harness-mcp", "dep:harness-context"]
 
 [dependencies]
 harness-core = { workspace = true }
-harness-mcp = { workspace = true }
-harness-context = { workspace = true }
+harness-mcp = { workspace = true, optional = true }
+harness-context = { workspace = true, optional = true }
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-io"] }
 async-trait = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
