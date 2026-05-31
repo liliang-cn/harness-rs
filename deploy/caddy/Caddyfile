@@ -55,3 +55,25 @@ note.superleo.app {
 # trade.superleo.app {
 #     import site 127.0.0.1:PORT
 # }
+
+# ── me (personal portfolio — STATIC, no upstream app) ────────────
+# Not a reverse proxy: Caddy serves the single self-contained index.html
+# straight off disk. Drop the page at /var/www/me/index.html (same file as
+# the liliang-cn.github.io homepage / liliang-cn-site project).
+# CSP intentionally allows 'unsafe-inline' because the page inlines its own
+# CSS + the theme-toggle script; external origins are just Google Fonts and
+# the GitHub avatar (favicon / og:image).
+me.superleo.app {
+    root * /var/www/me
+    encode zstd gzip
+
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://github.com https://*.githubusercontent.com data:; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
+    }
+
+    file_server
+}
