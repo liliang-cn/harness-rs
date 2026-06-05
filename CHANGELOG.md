@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.8
+
+Local-model ergonomics — an Ollama embeddings adapter and a configurable HTTP
+timeout. Pure addition on top of 0.0.7.
+
+### Added — Ollama embeddings
+
+- **`OllamaEmbed`** (`harness-rs-models`) — implements `harness_core::Embedder`
+  against a local Ollama server's OpenAI-compatible `/v1/embeddings` endpoint.
+  Defaults to Google's `embeddinggemma` (768-dim); `OllamaEmbed::with_model`
+  overrides the model/dim. Pairs with `OpenAiCompat::with_key(providers::OLLAMA,
+  ..)` for a fully-offline chat + vector-search stack. Opt-in: the chat adapters
+  do not reference it.
+
+### Changed — OpenAI-compat timeout
+
+- `OpenAiCompat`'s per-request HTTP timeout (previously a hardcoded 120s) is now
+  configurable via `HARNESS_HTTP_TIMEOUT_SECS`, for slow local backends whose
+  first-token latency on large models can exceed two minutes. Default unchanged
+  at 120s.
+
 ## 0.0.7
 
 MCP client — consume external MCP servers from an `AgentLoop`. Pure addition

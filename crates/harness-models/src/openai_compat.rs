@@ -16,10 +16,22 @@ pub struct OpenAiCompat {
     context_window: u32,
 }
 
+/// Per-request HTTP timeout. Defaults to 120s; override via
+/// `HARNESS_HTTP_TIMEOUT_SECS` for slow local backends (e.g. large Ollama
+/// models whose first-token latency can exceed two minutes).
+fn http_timeout() -> Duration {
+    let secs = std::env::var("HARNESS_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(120);
+    Duration::from_secs(secs)
+}
+
 impl OpenAiCompat {
     pub fn new(cfg: LlmConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
+            .timeout(http_timeout())
             .build()
             .expect("reqwest client builds");
         Self {
