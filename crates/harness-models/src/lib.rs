@@ -12,6 +12,7 @@
 pub mod anthropic;
 pub mod config;
 pub mod embed_gemini;
+pub mod embed_ollama;
 pub mod gemini;
 pub mod mock;
 pub mod openai_compat;
@@ -21,6 +22,9 @@ pub mod retry;
 pub use anthropic::*;
 pub use config::*;
 pub use embed_gemini::*;
+// `embed_ollama` shares `DEFAULT_MODEL` / `DEFAULT_DIM` names with
+// `embed_gemini`; re-export only the adapter type to avoid a glob clash.
+pub use embed_ollama::OllamaEmbed;
 pub use gemini::*;
 pub use mock::*;
 pub use openai_compat::*;
