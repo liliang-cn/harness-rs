@@ -28,6 +28,33 @@ fn http_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Optional JSON object merged into every request body, from
+/// `HARNESS_OPENAI_EXTRA_BODY`. Lets callers pass provider-specific knobs the
+/// typed request doesn't model — e.g. disable Qwen3 thinking on Ollama with
+/// `HARNESS_OPENAI_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":false}}'`.
+/// Invalid / non-object JSON is ignored.
+fn extra_body() -> Option<serde_json::Map<String, serde_json::Value>> {
+    let raw = std::env::var("HARNESS_OPENAI_EXTRA_BODY").ok()?;
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Object(m)) => Some(m),
+        _ => {
+            tracing::warn!("HARNESS_OPENAI_EXTRA_BODY is not a JSON object; ignoring");
+            None
+        }
+    }
+}
+
+/// Serialize a request and fold in `extra_body()` (extra keys win).
+fn request_body<T: Serialize>(req: &T) -> serde_json::Value {
+    let mut v = serde_json::to_value(req).unwrap_or_else(|_| serde_json::json!({}));
+    if let (Some(obj), Some(extra)) = (v.as_object_mut(), extra_body()) {
+        for (k, val) in extra {
+            obj.insert(k, val);
+        }
+    }
+    v
+}
+
 impl OpenAiCompat {
     pub fn new(cfg: LlmConfig) -> Self {
         let client = reqwest::Client::builder()
@@ -158,7 +185,8 @@ fn build_response_format(
 /// `ChatMessage` is intentionally **lenient** — providers add fields
 /// (DeepSeek's `reasoning_content`, OpenAI's `refusal`, etc.). We capture
 /// `reasoning_content` because DeepSeek thinking mode demands it be echoed
-/// back; anything else we don't recognise is ignored.
+/// back; Ollama exposes the same thing under `reasoning`. Anything else we
+/// don't recognise is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatMessage {
     role: String,
@@ -170,6 +198,26 @@ struct ChatMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     reasoning_content: Option<String>,
+    /// Ollama's thinking-mode channel. Deserialize-only (we never send it
+    /// back; the echo, when needed, rides `reasoning_content`).
+    #[serde(skip_serializing, default)]
+    reasoning: Option<String>,
+}
+
+/// OpenAI-compat requires a tool call's `arguments` to be a JSON-object–shaped
+/// string. No-arg calls can surface as `""`, `null`, or a non-object value;
+/// strict backends (Ollama) reject those with `HTTP 400 invalid tool call
+/// arguments`. Normalise anything that isn't a valid JSON object to `"{}"`.
+fn normalize_tool_args(args: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let s = match args {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    match serde_json::from_str::<Value>(&s) {
+        Ok(Value::Object(_)) => s,
+        _ => "{}".to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,12 +316,13 @@ impl Model for OpenAiCompat {
             self.cfg.base_url.trim_end_matches('/')
         );
         tracing::debug!(?req, "openai-compat request");
+        let body = request_body(&req);
         let bytes = crate::retry::with_retry("openai-compat:complete", || async {
             let resp = self
                 .client
                 .post(&url)
                 .bearer_auth(&self.cfg.api_key)
-                .json(&req)
+                .json(&body)
                 .send()
                 .await
                 .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
@@ -339,8 +388,24 @@ impl Model for OpenAiCompat {
             }
         };
 
+        // DeepSeek puts thinking in `reasoning_content`; Ollama in `reasoning`.
+        let reasoning = first.message.reasoning_content.or(first.message.reasoning);
+
+        // Thinking models (e.g. Qwen3 via Ollama) sometimes emit the entire
+        // answer into the reasoning channel and return empty `content`. When
+        // there's no content and no tool call, surface the reasoning so the
+        // turn isn't blank.
+        let mut text = first.message.content;
+        if tool_calls.is_empty()
+            && text.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && let Some(r) = &reasoning
+            && !r.trim().is_empty()
+        {
+            text = Some(r.clone());
+        }
+
         Ok(ModelOutput {
-            text: first.message.content,
+            text,
             tool_calls,
             usage: Usage {
                 input_tokens: parsed.usage.prompt_tokens,
@@ -348,7 +413,7 @@ impl Model for OpenAiCompat {
                 cached_input_tokens: 0,
             },
             stop_reason,
-            reasoning: first.message.reasoning_content,
+            reasoning,
         })
     }
 
@@ -406,7 +471,7 @@ impl Model for OpenAiCompat {
             .client
             .post(&url)
             .bearer_auth(&self.cfg.api_key)
-            .json(&req)
+            .json(&request_body(&req))
             .send()
             .await
             .map_err(|e| ModelError::Transport(format!("send: {e}")))?;
@@ -531,7 +596,9 @@ fn decode_delta(
     //         back to the API."
     // OpenAI proper doesn't send this field; the guard below makes it a
     // safe no-op for non-DeepSeek streams.
-    if let Some(Value::String(r)) = delta.get("reasoning_content")
+    if let Some(Value::String(r)) = delta
+        .get("reasoning_content")
+        .or_else(|| delta.get("reasoning"))
         && !r.is_empty()
     {
         return Some(ModelDelta::Reasoning(r.clone()));
@@ -634,6 +701,7 @@ fn inject_schema_hint(messages: &mut Vec<ChatMessage>, hint: &str) {
                 tool_calls: Vec::new(),
                 tool_call_id: None,
                 reasoning_content: None,
+                reasoning: None,
             },
         );
     }
@@ -654,6 +722,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             tool_calls: Vec::new(),
             tool_call_id: None,
             reasoning_content: None,
+            reasoning: None,
         });
     }
 
@@ -674,6 +743,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             tool_calls: Vec::new(),
             tool_call_id: None,
             reasoning_content: None,
+            reasoning: None,
         });
     }
     out
@@ -702,6 +772,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     tool_calls: Vec::new(),
                     tool_call_id: Some(call_id.clone()),
                     reasoning_content: None,
+                    reasoning: None,
                 });
             } else if let Block::Feedback(signals) = b {
                 let mut s = String::new();
@@ -718,6 +789,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     tool_calls: Vec::new(),
                     tool_call_id: None,
                     reasoning_content: None,
+                    reasoning: None,
                 });
             }
         }
@@ -744,7 +816,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     kind: "function".into(),
                     function: WireToolFunction {
                         name: name.clone(),
-                        arguments: args.to_string(),
+                        arguments: normalize_tool_args(args),
                     },
                 });
             }
@@ -773,6 +845,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         tool_calls,
         tool_call_id: None,
         reasoning_content: reasoning,
+        reasoning: None,
     });
 }
 
@@ -892,6 +965,23 @@ mod tests {
             .count();
         assert_eq!(starts, 1);
         assert_eq!(args_count, 2);
+    }
+
+    #[test]
+    fn normalize_tool_args_coerces_empty_to_object() {
+        use serde_json::{Value, json};
+        // No-arg calls in their various empty forms → "{}" (Ollama rejects "").
+        assert_eq!(normalize_tool_args(&Value::String(String::new())), "{}");
+        assert_eq!(normalize_tool_args(&Value::Null), "{}");
+        assert_eq!(normalize_tool_args(&json!("not json")), "{}");
+        assert_eq!(normalize_tool_args(&json!([1, 2])), "{}");
+        // Real object args pass through unchanged.
+        assert_eq!(normalize_tool_args(&json!({"a": 1})), r#"{"a":1}"#);
+        // Object already encoded as a JSON string passes through.
+        assert_eq!(
+            normalize_tool_args(&Value::String(r#"{"a":1}"#.into())),
+            r#"{"a":1}"#
+        );
     }
 
     #[test]

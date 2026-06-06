@@ -467,8 +467,15 @@ impl<M: Model> AgentLoop<M> {
                 self.hooks.fire(&Event::TaskCompleted, world);
                 self.hooks.fire(&Event::SessionEnd, world);
                 self.run_learning_review(&ctx, world, tools_called).await;
+                // Thinking models (e.g. Qwen3 via Ollama) sometimes emit the
+                // whole answer into the reasoning channel and leave `text`
+                // empty. Fall back to the reasoning so the turn isn't blank.
+                let text = out
+                    .text
+                    .filter(|t| !t.trim().is_empty())
+                    .or_else(|| out.reasoning.filter(|r| !r.trim().is_empty()));
                 return Ok(Outcome::Done {
-                    text: out.text,
+                    text,
                     iters: iter + 1,
                     tools_called,
                     usage: total_usage,
@@ -671,7 +678,7 @@ impl<M: Model> AgentLoop<M> {
             .await
             .map_err(harness_core::HarnessError::Model)?;
         let mut text = String::new();
-        let mut reasoning_lines: Vec<String> = Vec::new();
+        let mut reasoning = String::new();
         let mut usage = Usage::default();
         let mut stop_reason = StopReason::EndTurn;
         // Insertion-ordered map: index → (id, name, args). We can't use the
@@ -711,9 +718,9 @@ impl<M: Model> AgentLoop<M> {
                 ModelDelta::Usage(u) => usage = u,
                 ModelDelta::Stop(r) => stop_reason = r,
                 ModelDelta::Reasoning(s) => {
-                    if !s.is_empty() {
-                        reasoning_lines.push(s);
-                    }
+                    // Streamed reasoning arrives as token fragments, not lines —
+                    // concatenate verbatim (same as `text`), don't insert newlines.
+                    reasoning.push_str(&s);
                 }
                 // ModelDelta is `#[non_exhaustive]`; ignore future variants
                 // we don't yet understand.
@@ -747,10 +754,10 @@ impl<M: Model> AgentLoop<M> {
             tool_calls,
             usage,
             stop_reason,
-            reasoning: if reasoning_lines.is_empty() {
+            reasoning: if reasoning.is_empty() {
                 None
             } else {
-                Some(reasoning_lines.join("\n"))
+                Some(reasoning)
             },
         })
     }

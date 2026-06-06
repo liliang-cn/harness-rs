@@ -3,6 +3,34 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.9
+
+Thinking-model + local-tool-calling fixes for the OpenAI-compat adapter,
+shaken out against Qwen3 on Ollama. Backward-compatible.
+
+### Fixed
+
+- **No-arg tool calls no longer 400 on strict backends.** A tool call with no
+  arguments was echoed back with `arguments: ""`, which Ollama rejects
+  (`HTTP 400 invalid tool call arguments`). `OpenAiCompat` now normalises any
+  non-object arguments to `"{}"` when serializing the assistant turn.
+- **Thinking-model replies no longer come back blank.** Models that emit the
+  whole answer into the reasoning channel and leave `content` empty (e.g. Qwen3
+  via Ollama) now surface that reasoning as the turn's text — both in
+  `OpenAiCompat::complete` and in the streaming agent loop when a turn ends with
+  no text, no tool calls, and non-empty reasoning.
+- **Streamed reasoning is concatenated verbatim** instead of being joined with
+  newlines, so fallback replies read as prose rather than one word per line.
+
+### Added
+
+- **`OpenAiCompat` now captures Ollama's `reasoning` field** (in addition to
+  DeepSeek's `reasoning_content`) on both the non-streaming and streaming paths.
+- **`HARNESS_OPENAI_EXTRA_BODY`** — a JSON object merged into every
+  chat-completions request body. Lets callers pass provider-specific knobs the
+  typed request doesn't model, e.g. disable Qwen3 thinking on Ollama with
+  `{"chat_template_kwargs":{"enable_thinking":false}}`.
+
 ## 0.0.8
 
 Local-model ergonomics — an Ollama embeddings adapter and a configurable HTTP
