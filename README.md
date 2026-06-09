@@ -28,6 +28,7 @@ architectural rationale.
 | **Observability** | `SessionRecorder` JSONL traces, `LiveProgressHook` live stderr stream, `harness trace --verbose` | `harness-loop` + `harness-cli` |
 | **Blueprint** | deterministic + agent state machine with retry/fallback | `harness-blueprint` |
 | **Sandbox** | git worktree isolation (container/VM in v0.2) | `harness-sandbox` |
+| **MCP** | expose harness tools *to* any MCP client (server); consume any MCP server's tools *as* harness `Arc<dyn Tool>` (client, built on `rmcp`) — results flow back through the loop | `harness-mcp`, `harness-mcp-client` |
 | **CLI** | `harness skills validate / list / export`, `harness new`, `harness trace` | `harness-cli` |
 
 ## 60-second tour
@@ -319,7 +320,7 @@ of increasing surface area:
   `MemoryGuide`, `MemorySynthesizer` cheap-model distillation). Examples
   ship `--memory` / `--synth-model` / `--progress` / `--record` /
   `HARNESS_*` env vars.
-- **v0.0.5** — ✅ **current**. Three new opt-in, one-builder-call capabilities:
+- **v0.0.5** — Three new opt-in, one-builder-call capabilities:
   **cross-session recall** (`RecallStore` + `FileRecall` + `session_search`;
   optional FTS5 `harness-rs-recall-sqlite`), a **self-evolving learning loop**
   (`.with_learning_loop()` forks a review subagent to write/patch skills +
@@ -328,8 +329,20 @@ of increasing surface area:
   `cronjob`). Plus `harness_core::DynModel` (use a boxed `Arc<dyn Model>` as a
   concrete `M`). Verified with a real-DeepSeek end-to-end
   (`examples/deepseek-caps-e2e`). See [CHANGELOG](CHANGELOG.md).
+- **v0.0.6** — `FileRecall` filename sanitization is byte-safe (fixes Linux
+  `ENAMETOOLONG` on long / non-ASCII session keys); **tag-driven release
+  workflow** (push `vX.Y.Z` → CI publishes every crate to crates.io in
+  dependency order).
+- **v0.0.7** — ✅ **current**. New **`harness-rs-mcp-client`** — a generic MCP
+  client (built on the official `rmcp` 1.7 SDK) that spawns any MCP server over
+  stdio and exposes its tools as harness `Arc<dyn Tool>`; tool results flow back
+  through the standard agent loop (`PreToolUse` / `PostToolUse`, session record,
+  context). Verified end-to-end against CortexDB's MCP server (47 RAG / GraphRAG
+  tools). Complements the existing `harness-rs-mcp` server. See
+  [CHANGELOG](CHANGELOG.md).
 - **v0.1+** — `ContainerSandbox` / `VmSandbox` / first-class blueprint
-  `Node::Agent` / semantic memory backends are on the road.
+  `Node::Agent` / semantic memory backends (e.g. CortexDB via the published
+  `cortexdb-client` gRPC sidecar) are on the road.
 
 ## License
 
