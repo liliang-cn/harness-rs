@@ -1,9 +1,10 @@
 # harness
 
 > **Agent = Model + Harness.** This crate is the *Harness* — the modular
-> scaffolding around an LLM that turns it into an autonomous coding agent.
+> scaffolding around an LLM that turns it into an autonomous agent.
 
-Rust framework for building production coding agents, based on the
+Rust framework for building production agents of any kind — assistants,
+research, ops automation, data work, coding tools — based on the
 *harness engineering* discipline as written up by Böckeler (Thoughtworks,
 2026) and Lopopolo (OpenAI, 2026). See **`DESIGN.md`** for the full
 architectural rationale.
