@@ -3,6 +3,21 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.12
+
+Security fix for the skill-management tool. Additive (no breaking changes).
+
+### Security
+
+- **`harness-rs-tools-skills` — `skill_manage` path-traversal hardening.** The
+  `patch` action joined the user-supplied skill `name` into a path and read the
+  `SKILL.md` *before* validating the name, so a crafted name like
+  `../other/skill` could read a file outside the tool's skills dir (a low-severity
+  existence-probe leak in multi-tenant hosts — no write, no content exfiltration).
+  `validate_name` now runs up front in `SkillManageTool::invoke` for **every**
+  action before any filesystem access. Added a `patch_rejects_traversal_name`
+  regression test.
+
 ## 0.0.11
 
 Security fix for the MCP HTTP client. Additive (no breaking changes).
