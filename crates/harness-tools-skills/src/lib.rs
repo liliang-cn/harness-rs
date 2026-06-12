@@ -67,6 +67,21 @@ impl Tool for SkillManageTool {
             reason: "name required".into(),
         })?;
 
+        // Validate the skill name up front, before any filesystem access, so
+        // EVERY action is path-safe. In particular `patch` used to `join(name)`
+        // and read the file *before* validation, letting a crafted name like
+        // `../other/skill` read outside the skills dir (an existence-probe leak
+        // in multi-tenant hosts). create/edit/delete already validate inside
+        // write_skill_md/delete_skill; this also covers patch and is harmless
+        // defense-in-depth for the rest.
+        if let Err(e) = harness_skills::validate_name(name) {
+            return Ok(ToolResult {
+                ok: false,
+                content: json!({"error": e.to_string()}),
+                trace: None,
+            });
+        }
+
         let result: Result<Value, String> = match action {
             "create" | "edit" => {
                 let content =
@@ -186,5 +201,39 @@ mod tests {
             .unwrap();
         assert!(!out.ok);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `patch` must reject a path-traversal name BEFORE touching the filesystem,
+    /// so it can't read a SKILL.md outside the tool's own skills dir.
+    #[tokio::test]
+    async fn patch_rejects_traversal_name() {
+        // Plant a "victim" skill in a sibling dir of the tool's skills root.
+        let base = tmp();
+        let tool_dir = base.join("attacker");
+        let victim_dir = base.join("victim");
+        std::fs::create_dir_all(victim_dir.join("secret-skill")).unwrap();
+        std::fs::write(victim_dir.join("secret-skill").join("SKILL.md"), SKILL).unwrap();
+
+        let tool = SkillManageTool::new(&tool_dir);
+        let mut w = default_world(".");
+        // ../victim/secret-skill would escape `attacker/` into `victim/`.
+        let out = tool
+            .invoke(
+                json!({"action":"patch","name":"../victim/secret-skill",
+                       "old_string":"1. build","new_string":"x"}),
+                &mut w,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !out.ok,
+            "traversal name must be rejected, got: {:?}",
+            out.content
+        );
+        // The victim file must be untouched.
+        let body =
+            std::fs::read_to_string(victim_dir.join("secret-skill").join("SKILL.md")).unwrap();
+        assert_eq!(body, SKILL);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
