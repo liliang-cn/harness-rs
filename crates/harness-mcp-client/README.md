@@ -37,7 +37,8 @@ println!("{:?}", mcp.tool_names());
 | Method | Description |
 |---|---|
 | `McpClient::connect_stdio(program, args)` | Spawn an MCP stdio server and initialize a session |
-| `McpClient::connect_http(url)` | Connect to an MCP server over Streamable HTTP (`http` feature, on by default) |
+| `McpClient::connect_http(url)` | Connect over Streamable HTTP with a default client (`http` feature, on by default). **Follows redirects — not SSRF-safe for untrusted URLs.** |
+| `McpClient::connect_http_with_client(url, client)` | Connect over Streamable HTTP with a caller-supplied `reqwest::Client` — the SSRF-safe entry point |
 | `.tools()` | All remote tools as `Arc<dyn Tool>` (all `Destructive`) |
 | `.tools_with_read_only(names)` | Same, but listed names are marked `ReadOnly` |
 | `.tool_names()` | Names of tools discovered at connect time |
@@ -51,6 +52,26 @@ Transports supported:
   SSE is subsumed by Streamable HTTP in the MCP spec; this transport handles both.
 
 Capability: tools only (no resources/prompts). Auth is future work.
+
+### SSRF safety (untrusted URLs)
+
+`connect_http` uses a default reqwest client that **follows HTTP redirects** and
+re-resolves DNS at connect time, so pre-validating the URL does not stop SSRF: a
+`302 Location: http://169.254.169.254/…` or DNS rebinding reaches internal
+targets. For untrusted input, validate the URL, resolve the host to an
+allow-listed IP, and pass your own hardened client:
+
+```rust
+use harness_mcp_client::{McpClient, reqwest}; // re-exported, version-matched
+
+let client = reqwest::Client::builder()
+    .redirect(reqwest::redirect::Policy::none())        // kill redirect bypass
+    .resolve(host, validated_ip_addr)                   // pin host → vetted IP (no rebinding)
+    .build()?;
+let mcp = McpClient::connect_http_with_client(url, client).await?;
+```
+
+The security policy stays on your side; the crate just provides the seam.
 
 Non-text MCP content blocks (image, resource, audio) are omitted from the tool
 result with a `tracing::warn!`; text and structured content pass through normally.

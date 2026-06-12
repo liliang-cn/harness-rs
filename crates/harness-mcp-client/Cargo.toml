@@ -23,7 +23,7 @@ required-features = ["test-server"]
 
 [features]
 default = ["http"]
-http = ["rmcp/transport-streamable-http-client", "rmcp/transport-streamable-http-client-reqwest"]
+http = ["rmcp/transport-streamable-http-client", "rmcp/transport-streamable-http-client-reqwest", "dep:reqwest"]
 test-server = ["dep:harness-mcp", "dep:harness-context"]
 
 [dependencies]
@@ -31,6 +31,13 @@ harness-core = { workspace = true }
 harness-mcp = { workspace = true, optional = true }
 harness-context = { workspace = true, optional = true }
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-io"] }
+# Optional, only under `http`: lets callers inject a hardened reqwest client
+# (redirect policy + pinned DNS) for SSRF-safe connects. MUST match the reqwest
+# version rmcp 1.7 links (0.13) so the `reqwest::Client` type unifies and rmcp's
+# `impl StreamableHttpClient for reqwest::Client` applies. No TLS feature here —
+# we only name core types; rmcp's reqwest features (TLS) unify in. Re-exported as
+# `crate::reqwest`.
+reqwest = { version = "0.13", optional = true, default-features = false }
 async-trait = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
 serde_json = { workspace = true }
