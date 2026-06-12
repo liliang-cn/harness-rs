@@ -34,12 +34,55 @@ impl McpClient {
         Self::from_service(service).await
     }
 
-    /// Connect to an MCP server over Streamable HTTP (MCP 2025-03-26 spec).
+    /// Connect to an MCP server over Streamable HTTP (MCP 2025-03-26 spec) using a
+    /// default reqwest client.
     ///
     /// Requires the `http` crate feature (on by default).
+    ///
+    /// # Security
+    ///
+    /// The default client **follows HTTP redirects** and re-resolves DNS at
+    /// connect time, so validating `url` up front does **not** prevent SSRF when
+    /// `url` is untrusted: a `302 Location: http://169.254.169.254/…` (cloud
+    /// metadata) or DNS rebinding to an internal address slips straight past a
+    /// pre-flight check. For untrusted URLs use
+    /// [`connect_http_with_client`](Self::connect_http_with_client) with a
+    /// hardened client instead.
     #[cfg(feature = "http")]
     pub async fn connect_http(url: &str) -> anyhow::Result<Self> {
         let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(url);
+        let service = ()
+            .serve(transport)
+            .await
+            .map_err(|e| anyhow::anyhow!("mcp http connect to `{url}` failed: {e}"))?;
+        Self::from_service(service).await
+    }
+
+    /// Connect over Streamable HTTP using a **caller-supplied** [`reqwest::Client`].
+    ///
+    /// This is the SSRF-safe entry point: the caller owns the HTTP policy. A
+    /// security-sensitive host can validate the URL, resolve the host to an
+    /// allow-listed IP, then pass a client built with
+    /// `reqwest::redirect::Policy::none()` and `.resolve(host, addr)` pinning the
+    /// host to that validated IP — closing both the redirect-bypass and
+    /// DNS-rebinding holes while keeping the security policy on the caller's side.
+    ///
+    /// The matching `reqwest` is re-exported as [`crate::reqwest`] so the client
+    /// type unifies with the one rmcp expects.
+    ///
+    /// Requires the `http` crate feature.
+    #[cfg(feature = "http")]
+    pub async fn connect_http_with_client(
+        url: &str,
+        client: reqwest::Client,
+    ) -> anyhow::Result<Self> {
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        };
+        let transport = StreamableHttpClientTransport::with_client(
+            client,
+            StreamableHttpClientTransportConfig::with_uri(url),
+        );
         let service = ()
             .serve(transport)
             .await

@@ -994,6 +994,7 @@ dependencies = [
  "harness-rs-loop",
  "harness-rs-mcp",
  "harness-rs-models",
+ "reqwest 0.13.4",
  "rmcp",
  "serde_json",
  "tokio",
