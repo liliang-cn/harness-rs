@@ -3,6 +3,23 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.11
+
+Security fix for the MCP HTTP client. Additive (no breaking changes).
+
+### Security
+
+- **`harness-rs-mcp-client` — SSRF-safe HTTP connect.** `connect_http` uses a
+  default reqwest client that follows redirects and re-resolves DNS, so a
+  validated URL can still be redirected (`302 → http://169.254.169.254/…`) or
+  DNS-rebound to an internal target. New **`McpClient::connect_http_with_client(url,
+  client)`** lets the caller pass a hardened `reqwest::Client`
+  (`redirect::Policy::none()` + `.resolve(host, vetted_ip)`), closing the
+  redirect-bypass and DNS-rebinding holes while keeping the security policy on the
+  caller's side. The matching `reqwest` is re-exported as
+  `harness_mcp_client::reqwest` so client types unify. `connect_http` now carries
+  an explicit SSRF warning in its docs.
+
 ## 0.0.10
 
 100% MCP client transport coverage. Pure addition on top of 0.0.9.
