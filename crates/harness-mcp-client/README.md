@@ -37,14 +37,20 @@ println!("{:?}", mcp.tool_names());
 | Method | Description |
 |---|---|
 | `McpClient::connect_stdio(program, args)` | Spawn an MCP stdio server and initialize a session |
+| `McpClient::connect_http(url)` | Connect to an MCP server over Streamable HTTP (`http` feature, on by default) |
 | `.tools()` | All remote tools as `Arc<dyn Tool>` (all `Destructive`) |
 | `.tools_with_read_only(names)` | Same, but listed names are marked `ReadOnly` |
 | `.tool_names()` | Names of tools discovered at connect time |
 
 ## Scope
 
-Transport: stdio (child process). Capability: tools only (no resources/prompts).
-HTTP/SSE transports and auth are future work.
+Transports supported:
+
+- **stdio** (child process) via `connect_stdio`
+- **Streamable HTTP** (MCP 2025-03-26 spec) via `connect_http` — feature `http`, on by default.
+  SSE is subsumed by Streamable HTTP in the MCP spec; this transport handles both.
+
+Capability: tools only (no resources/prompts). Auth is future work.
 
 Non-text MCP content blocks (image, resource, audio) are omitted from the tool
 result with a `tracing::warn!`; text and structured content pass through normally.

@@ -14,6 +14,11 @@ pub struct McpClient {
 }
 
 impl McpClient {
+    async fn from_service(service: RunningService<RoleClient, ()>) -> anyhow::Result<Self> {
+        let tools = service.list_all_tools().await?;
+        Ok(Self { service, tools })
+    }
+
     /// Spawn `program args...` as an MCP stdio server and initialize a session.
     pub async fn connect_stdio(program: &str, args: &[&str]) -> anyhow::Result<Self> {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -26,8 +31,20 @@ impl McpClient {
             .serve(transport)
             .await
             .map_err(|e| anyhow::anyhow!("mcp init for `{program}` failed: {e}"))?;
-        let tools = service.list_all_tools().await?;
-        Ok(Self { service, tools })
+        Self::from_service(service).await
+    }
+
+    /// Connect to an MCP server over Streamable HTTP (MCP 2025-03-26 spec).
+    ///
+    /// Requires the `http` crate feature (on by default).
+    #[cfg(feature = "http")]
+    pub async fn connect_http(url: &str) -> anyhow::Result<Self> {
+        let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(url);
+        let service = ()
+            .serve(transport)
+            .await
+            .map_err(|e| anyhow::anyhow!("mcp http connect to `{url}` failed: {e}"))?;
+        Self::from_service(service).await
     }
 
     fn peer(&self) -> Peer<RoleClient> {
