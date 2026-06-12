@@ -58,8 +58,8 @@ scheduler, MCP, and end-to-end runs against a real model.
 
 ## Status
 
-Latest: **v0.0.7** — adds `harness-rs-mcp-client` (consume any MCP server's
-tools). Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.10** — the MCP client now speaks Streamable HTTP (remote servers)
+as well as stdio. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 

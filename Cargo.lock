@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "ai-note"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "argon2",
@@ -53,7 +53,7 @@ dependencies = [
  "hex",
  "include_dir",
  "rand 0.8.6",
- "reqwest",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "crate-keeper"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-caps-e2e"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-hello"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "harness-rs",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-rs-context",
  "harness-rs-core",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-blueprint"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "futures",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-cli"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-compactor"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-context"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-core"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "futures",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-daemon"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-hooks"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "futures",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-macros"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp-client"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1002,13 +1002,13 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-models"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
  "harness-rs-core",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-permissions"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-rs-core",
  "serde",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-recall-sqlite"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sandbox"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-scheduler"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1061,7 +1061,7 @@ dependencies = [
  "harness-rs-core",
  "harness-rs-daemon",
  "harness-rs-loop",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-common"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-rust"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-skills"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-templates"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "futures",
@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-fs"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-memory"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-shell"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-skills"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-tasks"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1191,12 +1191,12 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-web"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-rs",
  "harness-rs-core",
- "reqwest",
+ "reqwest 0.12.28",
  "scraper",
  "serde",
  "serde_json",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "investor-bot"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1837,7 +1837,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-assistant"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2261,9 +2261,43 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots",
+]
+
+[[package]]
+name = "reqwest"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "sync_wrapper",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http 0.6.10",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-streams 0.5.0",
+ "web-sys",
 ]
 
 [[package]]
@@ -2290,13 +2324,16 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
+ "http",
  "pastey",
  "pin-project-lite",
  "process-wrap",
+ "reqwest 0.13.4",
  "rmcp-macros",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -2675,6 +2712,19 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3962b63f038885f15bce2c6e02c0e7925c072f1ac86bb60fd44c5c6b762fb72"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -3303,6 +3353,19 @@ name = "wasm-streams"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
 dependencies = [
  "futures-util",
  "js-sys",

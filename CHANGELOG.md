@@ -3,6 +3,20 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.10
+
+100% MCP client transport coverage. Pure addition on top of 0.0.9.
+
+### Added
+
+- **`harness-rs-mcp-client` — Streamable HTTP transport.** New
+  `McpClient::connect_http(url)` connects to a remote MCP server over Streamable
+  HTTP (the standard remote MCP transport; SSE is subsumed by it), in addition to
+  the existing `connect_stdio` child-process transport. Behind the `http` feature
+  (on by default; `default-features = false` drops the reqwest dependency). The
+  tool-proxy layer is transport-agnostic, so remote-tool results flow back through
+  the agent loop exactly as with stdio.
+
 ## 0.0.9
 
 Thinking-model + local-tool-calling fixes for the OpenAI-compat adapter,
