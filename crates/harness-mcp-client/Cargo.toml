@@ -22,6 +22,8 @@ path = "src/bin/mcp-echo-server.rs"
 required-features = ["test-server"]
 
 [features]
+default = ["http"]
+http = ["rmcp/transport-streamable-http-client", "rmcp/transport-streamable-http-client-reqwest"]
 test-server = ["dep:harness-mcp", "dep:harness-context"]
 
 [dependencies]
