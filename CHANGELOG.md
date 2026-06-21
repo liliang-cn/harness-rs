@@ -3,6 +3,22 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.13
+
+`forget_memory` can now delete in a single tool round. Additive, backward-compatible.
+
+### Added
+
+- **`harness-rs-tools-memory` — one-call `forget_memory`.** `ForgetMemoryTool`
+  gains `with_resolver(Arc<dyn Memory>)`: when wired, the tool accepts a natural
+  language `query` (the fact in the user's own words) in addition to an exact
+  `id`, recalls the single best match, and deletes it. This collapses the usual
+  `list_memories` → `forget_memory` two-round dance into one call, cutting an LLM
+  round-trip off every delete. Without a resolver the tool keeps its prior
+  id-only behaviour; if both `id` and `query` are given, `id` wins. Added
+  regression tests covering query resolution, id precedence, a no-match miss, and
+  the id-only rejection path.
+
 ## 0.0.12
 
 Security fix for the skill-management tool. Additive (no breaking changes).

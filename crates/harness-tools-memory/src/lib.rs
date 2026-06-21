@@ -150,6 +150,11 @@ impl Tool for RememberThisTool {
 /// directly when constructing the tool.
 pub struct ForgetMemoryTool {
     deleter: Arc<dyn MemoryDelete>,
+    /// Optional recall source. When present, the agent may pass `query` (the
+    /// fact in the user's own words) instead of an `id`: the tool resolves it
+    /// to the single best-matching entry and deletes that — collapsing the
+    /// usual list-then-forget into ONE tool round. Absent → `id` only.
+    resolver: Option<Arc<dyn Memory>>,
     schema: ToolSchema,
 }
 
@@ -187,7 +192,42 @@ impl ForgetMemoryTool {
     pub fn new(deleter: Arc<dyn MemoryDelete>) -> Self {
         Self {
             deleter,
-            schema: ToolSchema {
+            resolver: None,
+            schema: Self::build_schema(false),
+        }
+    }
+
+    /// Attach a recall source so the agent can forget by `query` (the fact
+    /// text) in a single call, without first running `list_memories`. The
+    /// tool recalls the top match and deletes it. Pass the same `Memory`
+    /// the loop uses for recall so the match set is consistent.
+    pub fn with_resolver(mut self, memory: Arc<dyn Memory>) -> Self {
+        self.resolver = Some(memory);
+        self.schema = Self::build_schema(true);
+        self
+    }
+
+    fn build_schema(with_query: bool) -> ToolSchema {
+        if with_query {
+            ToolSchema {
+                name: "forget_memory".into(),
+                description: "Remove a previously-stored fact. Prefer `query`: the fact in the \
+                              user's own words (e.g. \"我喜欢的咖啡\" / \"my home address\") — \
+                              the single best match is deleted in ONE step, no `list_memories` \
+                              needed. Use when the user says \"忘掉 X\" / \"forget that\" / \
+                              \"that's wrong\". Pass an exact `id` from list_memories only when \
+                              you already have one; if both are given, `id` wins."
+                    .into(),
+                input: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The fact to forget, in natural language. Deletes the best match."},
+                        "id": {"type": "string", "description": "Exact entry id from list_memories (optional; overrides query)."}
+                    }
+                }),
+            }
+        } else {
+            ToolSchema {
                 name: "forget_memory".into(),
                 description: "Remove a previously-stored fact by id. Use when the user says \
                               \"忘掉 X\" / \"forget that\" / \"that's wrong\" about a specific \
@@ -200,7 +240,7 @@ impl ForgetMemoryTool {
                     },
                     "required": ["id"]
                 }),
-            },
+            }
         }
     }
 }
@@ -217,16 +257,52 @@ impl Tool for ForgetMemoryTool {
         ToolRisk::Destructive
     }
     async fn invoke(&self, args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
-        let id = args
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidArgs {
-                name: "forget_memory".into(),
-                reason: "id required".into(),
-            })?;
+        let arg = |k: &str| {
+            args.get(k)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+
+        // Resolve to a concrete id. `id` wins; otherwise fall back to `query`
+        // (one recall → top hit) when a resolver is wired. This is what lets a
+        // delete complete in a single tool round instead of list-then-forget.
+        let id = match arg("id") {
+            Some(id) => id,
+            None => {
+                let Some(query) = arg("query") else {
+                    return Err(ToolError::InvalidArgs {
+                        name: "forget_memory".into(),
+                        reason: "provide `id`, or `query` (the fact in natural language)".into(),
+                    });
+                };
+                let Some(resolver) = &self.resolver else {
+                    return Err(ToolError::InvalidArgs {
+                        name: "forget_memory".into(),
+                        reason: "this deployment supports id-only; call list_memories first, then pass id".into(),
+                    });
+                };
+                let hits = resolver
+                    .recall(&query, 1)
+                    .await
+                    .map_err(|e| ToolError::Exec(e.to_string()))?;
+                match hits.into_iter().next() {
+                    Some(entry) => entry.id,
+                    None => {
+                        return Ok(ToolResult {
+                            ok: false,
+                            content: json!({"error": format!("no memory matched query `{query}`")}),
+                            trace: None,
+                        });
+                    }
+                }
+            }
+        };
+
         let ok = self
             .deleter
-            .delete_by_id(id)
+            .delete_by_id(&id)
             .await
             .map_err(ToolError::Exec)?;
         Ok(ToolResult {
@@ -302,5 +378,136 @@ impl Tool for ListMemoriesTool {
             content: json!({"count": hits.len(), "memories": hits}),
             trace: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_core::MemoryError;
+    use std::sync::Mutex;
+
+    /// Backs both `Memory` (recall/write) and `MemoryDelete` so one instance can
+    /// stand in for the FileMemory wiring `ForgetMemoryTool` sees in production.
+    #[derive(Default)]
+    struct MockMem {
+        entries: Mutex<Vec<MemoryEntry>>,
+    }
+
+    #[async_trait]
+    impl Memory for MockMem {
+        async fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryEntry>, MemoryError> {
+            let e = self.entries.lock().unwrap();
+            Ok(e.iter()
+                .filter(|m| m.content.contains(query))
+                .take(k)
+                .cloned()
+                .collect())
+        }
+        async fn write(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
+            self.entries.lock().unwrap().push(entry);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl MemoryDelete for MockMem {
+        async fn delete_by_id(&self, id: &str) -> Result<bool, String> {
+            let mut e = self.entries.lock().unwrap();
+            let before = e.len();
+            e.retain(|m| m.id != id);
+            Ok(e.len() != before)
+        }
+        async fn delete_all(&self) -> Result<u32, String> {
+            let mut e = self.entries.lock().unwrap();
+            let n = e.len() as u32;
+            e.clear();
+            Ok(n)
+        }
+    }
+
+    fn entry(id: &str, content: &str) -> MemoryEntry {
+        let mut m = MemoryEntry::new(content);
+        m.id = id.into();
+        m
+    }
+
+    fn world() -> World {
+        harness_context::with_profile(".", harness_core::UserProfile::default())
+    }
+
+    #[tokio::test]
+    async fn forget_by_query_resolves_top_match_and_deletes_in_one_call() {
+        let mem = Arc::new(MockMem::default());
+        mem.entries
+            .lock()
+            .unwrap()
+            .push(entry("a", "我喜欢喝美式咖啡"));
+        mem.entries.lock().unwrap().push(entry("b", "我住在上海"));
+
+        let tool = ForgetMemoryTool::new(mem.clone() as Arc<dyn MemoryDelete>)
+            .with_resolver(mem.clone() as Arc<dyn Memory>);
+
+        let res = tool
+            .invoke(json!({"query": "咖啡"}), &mut world())
+            .await
+            .unwrap();
+        assert!(res.ok);
+        assert_eq!(res.content["forgot"], "a");
+
+        let left = mem.entries.lock().unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "b");
+    }
+
+    #[tokio::test]
+    async fn forget_by_id_still_works_and_wins_over_query() {
+        let mem = Arc::new(MockMem::default());
+        mem.entries.lock().unwrap().push(entry("a", "咖啡"));
+        mem.entries.lock().unwrap().push(entry("b", "茶"));
+
+        let tool = ForgetMemoryTool::new(mem.clone() as Arc<dyn MemoryDelete>)
+            .with_resolver(mem.clone() as Arc<dyn Memory>);
+
+        // query would match "a", but an explicit id takes precedence.
+        let res = tool
+            .invoke(json!({"id": "b", "query": "咖啡"}), &mut world())
+            .await
+            .unwrap();
+        assert!(res.ok);
+        assert_eq!(res.content["forgot"], "b");
+    }
+
+    #[tokio::test]
+    async fn forget_by_query_reports_miss_without_deleting() {
+        let mem = Arc::new(MockMem::default());
+        mem.entries.lock().unwrap().push(entry("a", "咖啡"));
+
+        let tool = ForgetMemoryTool::new(mem.clone() as Arc<dyn MemoryDelete>)
+            .with_resolver(mem.clone() as Arc<dyn Memory>);
+
+        let res = tool
+            .invoke(json!({"query": "不存在的东西"}), &mut world())
+            .await
+            .unwrap();
+        assert!(!res.ok);
+        assert!(
+            res.content["error"]
+                .as_str()
+                .unwrap()
+                .contains("no memory matched")
+        );
+        assert_eq!(mem.entries.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_without_resolver_is_rejected() {
+        let mem = Arc::new(MockMem::default());
+        let tool = ForgetMemoryTool::new(mem as Arc<dyn MemoryDelete>); // no resolver
+        let err = tool
+            .invoke(json!({"query": "咖啡"}), &mut world())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArgs { .. }));
     }
 }
