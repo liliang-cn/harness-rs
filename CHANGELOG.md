@@ -3,6 +3,28 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.14
+
+Skill loading is now interop-friendly and fault-isolated. Additive, backward-compatible.
+
+### Fixed
+
+- **`harness-rs-skills` — one bad skill no longer hides them all.**
+  `scan_skills_root` previously did `load(&p)?`, so a single malformed
+  `SKILL.md` aborted the entire scan and the agent saw *zero* skills. It now
+  **skips the offending skill with a `tracing::warn!`** and returns every valid
+  one. Regression test `scan_skips_invalid_skill_keeps_the_rest`.
+
+### Changed
+
+- **`harness-rs-skills` — tolerate non-spec frontmatter fields.** Skills from
+  the wider ecosystem (skills.sh, Claude Code, …) routinely carry extensions
+  like `displayName` / `hidden`. The loader used to **reject** any unknown
+  top-level field; it now **logs and ignores** them (the field is dropped on
+  deserialize), so those skills load instead of failing. Spec guidance is
+  unchanged — extensions still belong under `metadata`. Test
+  `rejects_unknown_top_field` → `tolerates_unknown_top_field`.
+
 ## 0.0.13
 
 `forget_memory` can now delete in a single tool round. Additive, backward-compatible.

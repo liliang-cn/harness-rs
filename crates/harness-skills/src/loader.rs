@@ -28,9 +28,13 @@ pub fn load(path: &Path) -> Result<FileSkill, SkillError> {
     Ok(FileSkill::new(manifest, body.to_string(), resources))
 }
 
-/// Scan a root for `<name>/SKILL.md`. Returns one entry per valid skill.
-/// Invalid skills produce a per-entry error so the caller can surface them in
-/// `harness skills validate --all` mode without aborting.
+/// Scan a root for `<name>/SKILL.md`. Returns one entry per *valid* skill.
+///
+/// A single malformed skill (bad YAML, name/dir mismatch, …) is **skipped with
+/// a warning**, never fatal: one broken `SKILL.md` must not hide every other
+/// skill the user has. (This previously did `load(&p)?`, so a third-party skill
+/// — e.g. one carrying a `displayName`/`hidden` frontmatter field — aborted the
+/// whole scan and the agent saw *no* skills at all.)
 pub fn scan_skills_root(root: &Path) -> Result<Vec<FileSkill>, SkillError> {
     let mut skills = Vec::new();
     if !root.exists() {
@@ -47,7 +51,14 @@ pub fn scan_skills_root(root: &Path) -> Result<Vec<FileSkill>, SkillError> {
         if !p.join("SKILL.md").is_file() {
             continue;
         }
-        skills.push(load(&p)?);
+        match load(&p) {
+            Ok(skill) => skills.push(skill),
+            Err(e) => tracing::warn!(
+                path = %p.display(),
+                error = %e,
+                "skipping invalid skill; other skills are unaffected"
+            ),
+        }
     }
     Ok(skills)
 }
@@ -71,13 +82,17 @@ fn parse_frontmatter<'a>(raw: &'a str, p: &Path) -> Result<(SkillManifest, &'a s
     let after_close = &rest[end + 4..];
     let body = after_close.strip_prefix('\n').unwrap_or(after_close);
 
-    // First parse into a raw map so we can reject unknown top-level fields.
+    // Parse into a raw map first. Unknown top-level fields are tolerated (just
+    // logged) rather than rejected: skills from the wider ecosystem (skills.sh,
+    // Claude Code, …) routinely carry extensions like `displayName` / `hidden`,
+    // and refusing to load over a harmless extra key is hostile to interop.
+    // `SkillManifest` ignores unknown fields on deserialize, so they're dropped.
     let yaml_val: serde_yaml::Value =
         serde_yaml::from_str(yaml_str).map_err(|e| SkillError::Invalid {
             path: p.display().to_string(),
             reason: format!("YAML parse: {e}"),
         })?;
-    reject_unknown_top_fields(&yaml_val, p)?;
+    warn_unknown_top_fields(&yaml_val, p);
 
     let manifest: SkillManifest =
         serde_yaml::from_value(yaml_val).map_err(|e| SkillError::Invalid {
@@ -99,30 +114,26 @@ const KNOWN_FIELDS: &[&str] = &[
     "allowed-tools",
 ];
 
-fn reject_unknown_top_fields(v: &serde_yaml::Value, p: &Path) -> Result<(), SkillError> {
-    let map = match v {
-        serde_yaml::Value::Mapping(m) => m,
-        _ => {
-            return Err(SkillError::Invalid {
-                path: p.display().to_string(),
-                reason: "frontmatter must be a YAML mapping".into(),
-            });
-        }
+/// Warn (don't fail) on frontmatter fields outside the spec. The skill still
+/// loads — `SkillManifest` simply ignores the extra keys. Non-mapping
+/// frontmatter is left for the schema deserialize below to reject with a
+/// clearer error.
+fn warn_unknown_top_fields(v: &serde_yaml::Value, p: &Path) {
+    let serde_yaml::Value::Mapping(map) = v else {
+        return;
     };
     for (k, _) in map {
         let key = k.as_str().unwrap_or_default();
         if !KNOWN_FIELDS.contains(&key) {
-            return Err(SkillError::Invalid {
-                path: p.display().to_string(),
-                reason: format!(
-                    "unknown frontmatter field `{key}`. \
-                     Spec allows only: {}. Put framework extensions under `metadata`.",
-                    KNOWN_FIELDS.join(", ")
-                ),
-            });
+            tracing::warn!(
+                path = %p.display(),
+                field = key,
+                "ignoring non-spec SKILL.md frontmatter field; \
+                 spec fields are: {}. Move framework extensions under `metadata`.",
+                KNOWN_FIELDS.join(", "),
+            );
         }
     }
-    Ok(())
 }
 
 fn scan_resources(skill_dir: &Path) -> Vec<Resource> {
@@ -217,20 +228,41 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_top_field() {
+    fn tolerates_unknown_top_field() {
+        // Ecosystem skills (skills.sh, Claude Code) carry extensions like
+        // `displayName` / `hidden`. We log + ignore them, not reject the skill.
         let td = TestDir::new();
         let p = write_skill(
             &td.0,
-            "x",
-            "---\nname: x\ndescription: hi\ntriggers: [\"foo\"]\n---\nbody\n",
+            "ai-music",
+            "---\nname: ai-music\ndisplayName: \"AI Music\"\nhidden: true\ndescription: make a song\nallowed-tools: Bash(runcomfy *)\n---\nbody\n",
         );
-        let err = load(&p).unwrap_err();
-        match err {
-            SkillError::Invalid { reason, .. } => {
-                assert!(reason.contains("unknown frontmatter field `triggers`"))
-            }
-            e => panic!("wrong error: {e:?}"),
-        }
+        let s = load(&p).expect("non-spec fields must not block loading");
+        assert_eq!(s.manifest().name, "ai-music");
+        assert_eq!(s.manifest().description, "make a song");
+        assert_eq!(
+            s.manifest().allowed_tools.as_deref(),
+            Some("Bash(runcomfy *)")
+        );
+    }
+
+    #[test]
+    fn scan_skips_invalid_skill_keeps_the_rest() {
+        // One broken skill (name/dir mismatch) must not hide the valid ones.
+        let td = TestDir::new();
+        write_skill(
+            &td.0,
+            "good",
+            "---\nname: good\ndescription: a valid skill\n---\nbody\n",
+        );
+        write_skill(
+            &td.0,
+            "broken",
+            "---\nname: not-broken\ndescription: dir/name mismatch\n---\nbody\n",
+        );
+        let skills = scan_skills_root(&td.0).unwrap();
+        let names: Vec<_> = skills.iter().map(|s| s.manifest().name.clone()).collect();
+        assert_eq!(names, vec!["good".to_string()]);
     }
 
     #[test]
