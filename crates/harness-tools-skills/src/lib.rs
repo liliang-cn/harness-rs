@@ -146,11 +146,22 @@ mod tests {
     use harness_context::default_world;
 
     fn tmp() -> PathBuf {
+        // A per-call atomic counter, NOT just the clock: macOS `SystemTime` is
+        // coarse enough that two tests in this binary running concurrently could
+        // get the same nanos → the same dir, and one test's end-of-run
+        // `remove_dir_all` would then yank the other's files mid-test (flaky
+        // `exists()` failures under `cargo test --workspace`).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("harness-skillmanage-{}-{n}", std::process::id()))
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "harness-skillmanage-{}-{n}-{seq}",
+            std::process::id()
+        ))
     }
 
     const SKILL: &str =
