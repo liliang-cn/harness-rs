@@ -1,0 +1,29 @@
+[package]
+name = "harness-rs-loop-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Loop engineering for harness-rs: maturity levels (L1/L2/L3), human gates, token budgets, and schedulable production-loop patterns (daily triage, PR babysitter, CI sweeper, …) composed over the scheduler, sandbox, sub-agent, and memory primitives. Optional."
+
+[lib]
+name = "harness_loop_engine"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-sandbox = { workspace = true }
+harness-context = { workspace = true }
+harness-daemon  = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+chrono          = { workspace = true }
+tokio           = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

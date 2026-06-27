@@ -23,7 +23,7 @@ use futures::Stream;
 use harness::Task;
 use harness_core::{Block, Embedder, Event, Hook, HookOutcome, Model, World as CoreWorld};
 use harness_loop::{AgentLoop, Outcome};
-use harness_models::{GeminiNative, OpenAiCompat, providers};
+use harness_models::{GeminiNative, OpenAiCompat};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -109,7 +109,11 @@ impl AppState {
                     .gemini_key
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("no gemini key configured"))?;
-                Ok(Arc::new(GeminiNative::with_key(model_id, key)))
+                Ok(Arc::new(GeminiNative::with_key(
+                    "https://generativelanguage.googleapis.com",
+                    model_id,
+                    key,
+                )))
             }
             _ => {
                 let key = cfg
@@ -117,7 +121,7 @@ impl AppState {
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("no deepseek key configured"))?;
                 Ok(Arc::new(OpenAiCompat::with_key(
-                    providers::DEEPSEEK.to_string(),
+                    "https://api.deepseek.com",
                     model_id,
                     key,
                 )))

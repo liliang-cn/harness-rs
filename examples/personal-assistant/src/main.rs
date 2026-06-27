@@ -18,7 +18,7 @@ use harness_core::Model;
 use harness_core::UserProfile;
 use harness_loop::ProfileGuide;
 use harness_loop::{AgentLoop, Outcome};
-use harness_models::{OpenAiCompat, providers::DEEPSEEK};
+use harness_models::OpenAiCompat;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -727,7 +727,8 @@ async fn main() -> anyhow::Result<()> {
     let api_key = std::env::var("HARNESS_API_KEY")
         .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
         .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY or DEEPSEEK_API_KEY"))?;
-    let base_url = std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| DEEPSEEK.to_string());
+    let base_url = std::env::var("HARNESS_BASE_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
     let default_model_id = match cli.tier.as_str() {
         "flash" => "deepseek-v4-flash",
         _ => "deepseek-v4-pro",

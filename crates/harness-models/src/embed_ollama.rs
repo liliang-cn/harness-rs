@@ -5,8 +5,9 @@
 //!
 //! Optional, opt-in. The chat adapters in this crate do not reference this
 //! module; users that want fully-local vector search wire `OllamaEmbed`
-//! themselves. Pair it with `OpenAiCompat::with_key(providers::OLLAMA, ..)`
-//! for an offline chat + embeddings stack.
+//! themselves. Pair it with
+//! `OpenAiCompat::with_key("http://127.0.0.1:11434/v1", ..)` for an offline
+//! chat + embeddings stack.
 
 use harness_core::{EmbedError, Embedder};
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,9 @@ pub struct OllamaEmbed {
 }
 
 impl OllamaEmbed {
-    /// Build against an OpenAI-compat `base_url` (e.g. [`crate::providers::OLLAMA`])
-    /// using the default `embeddinggemma` model at 768-dim.
+    /// Build against an OpenAI-compat `base_url` (e.g.
+    /// `http://127.0.0.1:11434/v1`) using the default `embeddinggemma` model
+    /// at 768-dim.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_model(base_url.into(), DEFAULT_MODEL.to_string(), DEFAULT_DIM)
     }

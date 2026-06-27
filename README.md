@@ -27,7 +27,7 @@ Full architectural rationale in **[DESIGN.md](DESIGN.md)**.
 
 ```rust
 use harness_loop::AgentLoop;
-use harness_models::{OpenAiCompat, providers::DEEPSEEK};
+use harness_models::OpenAiCompat;
 use harness_tools_fs::{ListDir, ReadFile};
 use harness_context::default_world;
 use harness_core::Task;
@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), harness::HarnessError> {
-    let model = OpenAiCompat::with_key(DEEPSEEK, "deepseek-chat",
+    let model = OpenAiCompat::with_key("https://api.deepseek.com", "deepseek-chat",
         std::env::var("DEEPSEEK_API_KEY").unwrap());
     let mut world = default_world(".");
     let outcome = AgentLoop::new(model)

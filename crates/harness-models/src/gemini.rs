@@ -52,13 +52,18 @@ impl GeminiNative {
         }
     }
 
-    /// `model` is the Gemini model id (e.g. `gemini-3.5-flash`, `gemini-2.5-pro`).
-    /// Base URL defaults to `https://generativelanguage.googleapis.com`.
-    pub fn with_key(model: impl Into<String>, api_key: impl Into<String>) -> Self {
+    /// Convenience: `base_url + model + api_key`. You pass the endpoint —
+    /// nothing is hardcoded. `model` is the Gemini model id (e.g.
+    /// `gemini-3.5-flash`, `gemini-2.5-pro`).
+    pub fn with_key(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
         let model = model.into();
         Self::new(LlmConfig::new(
             format!("gemini:{model}"),
-            crate::providers::GEMINI,
+            base_url,
             api_key,
             model,
         ))

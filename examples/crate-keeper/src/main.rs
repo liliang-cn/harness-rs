@@ -18,7 +18,7 @@ use clap::Parser;
 use harness_context::default_world;
 use harness_core::{Model, Task};
 use harness_loop::{AgentLoop, Outcome, SessionRecorder};
-use harness_models::{OpenAiCompat, providers};
+use harness_models::OpenAiCompat;
 use harness_sensors_rust::CargoCheck;
 use harness_tools_fs::{ListDir, ReadFile, WriteFile};
 use harness_tools_shell::ShellRead;
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         "flash" => "deepseek-v4-flash",
         _ => "deepseek-v4-pro",
     };
-    let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
+    let model = OpenAiCompat::with_key("https://api.deepseek.com", model_id, api_key);
     let info = model.info();
     println!(
         "→ harness crate-keeper\n  workspace: {}\n  model:     {} ({}/{}) window={}",

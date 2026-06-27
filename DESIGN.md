@@ -98,6 +98,7 @@ harness/
 │   ├── harness-compactor/         # 5-stage compaction
 │   ├── harness-hooks/             # HookBus + 27 个 Event 类型
 │   ├── harness-loop/              # AgentLoop (ReAct + self-correct)
+│   ├── harness-loop-engine/       # 循环编排纪律: L1/L2/L3 + gate + budget + 生产模式 (§11.5)
 │   ├── harness-blueprint/         # state machine 编排
 │   ├── harness-sandbox/           # Sandbox trait + worktree/container/vm
 │   ├── harness-skills/            # SKILL.md & #[skill] 收集器, inventory 注册
@@ -621,6 +622,82 @@ pub struct VmSandbox        { /* Firecracker microVM, 类 Stripe Devbox */ }
 **核心原则**：权限不是运行时弹窗，而是 spawn 时一次性烧进沙箱。`Tool::risk()` 用于沙箱选择策略，而不是用于在每个 tool call 时打断用户。
 
 > 例外：当用户运行交互模式 (`harness run -i`) 时，hook 仍可生成 `PermissionRequest` 走 CLI 提示——但这是 hook 的实现细节，不是核心模型。
+
+---
+
+## 11.5 Loop Engineering — 循环编排纪律 (`harness-loop-engine`)
+
+> **Harness 包住一次 agent 调用；Loop 包住 harness**——让它带着 state、验证、预算与
+> gate，按 cadence 反复跑，*随时间*逼近目标，而不是一次到位。
+>
+> "Loop engineering is replacing yourself as the person who prompts the agent.
+> You design the system that does it instead." ——而你仍是对这套系统负责的工程师。
+> （概念源自 cobusgreyling/loop-engineering、Addy Osmani。）
+
+循环的**零件** harness 早已具备，`harness-loop-engine` 只补上把它们组织成
+*可信循环*的**编排纪律层**：
+
+| loop-engineering 概念 | harness 已有零件 |
+| --------------------- | ---------------- |
+| Automations / Scheduling | `harness-scheduler` / 本 crate 的 `LoopScheduler` |
+| Worktrees | `harness-sandbox::WorktreeSandbox` |
+| Sub-agents (maker / checker) | `harness-loop::Subagent` + `SubagentStatus` |
+| Memory / State（持久脊柱）| `harness-core::Memory` |
+| Plugins / Connectors | `harness-mcp` |
+| 迭代 / token 预算 | `Outcome::BudgetExhausted` + `Usage` |
+
+### 成熟度等级（循环按阶段挣得自治权）
+
+```rust
+pub enum LoopLevel { L1Report, L2Assisted, L3Unattended }
+```
+
+- **L1 Report**：maker 严格只读，每个提案都升级为人读的报告。任何循环都从这里起步。
+- **L2 Assisted**：maker 可在隔离沙箱里写，但**每一次改动都过 human gate**。
+- **L3 Unattended**：仅 gate allowlist 内的已验证动作自动落地，其余仍升级。只给窄而可控的循环。
+
+等级是唯一的总开关：它同时决定**写能力**与**gate 策略**（工具权限再由其推导到 `harness-permissions`）。
+
+### Human Gate 与 Budget
+
+```rust
+pub trait HumanGate { fn decide(&self, level: LoopLevel, action: &ProposedAction) -> GateDecision; }
+//   内置：AlwaysEscalate(L1/L2 默认) · AllowlistGate(L3) · CallbackGate(自定义)
+pub struct TokenBudget { max_input/output/total_tokens: Option<u64>, max_iters_per_round: u32 }
+```
+
+无人值守的循环若不设上限会无界烧钱——`TokenBudget` 是每轮的硬天花板，跨 maker+checker 累计。
+
+### 一圈循环的解剖（`LoopEngine::run_once`）
+
+```text
+recall state(memory) → 隔离沙箱 → maker 子 agent(提案)
+   → checker 子 agent(测试+gate) → human gate? ┬ 安全/allowlisted → proceed
+                                               └ 风险/模糊 → escalate(带上下文)
+   → 写回 state(memory) → 下一 tick 递归
+```
+
+maker/checker 拆分 = 把"验证纪律"做成结构：一个提案，另一个独立 agent 设法证明它干净。
+`run_once` 永不 panic / 永不返回 `Err`——沙箱/maker/checker 的失败都折叠进
+`RoundOutcome::Failed`，让 `LoopScheduler` 持续 tick。
+
+### 生产模式目录（`patterns::*`）
+
+每个都是一个返回 `LoopSpec` 的构造函数，绑定 model+tools+sandbox+gate 即可直接调度：
+`daily_triage`(L1) · `pr_babysitter`(L1) · `ci_sweeper`(L2) · `dependency_sweeper`(L2) ·
+`changelog_drafter`(L1) · `post_merge_cleanup`(L1) · `issue_triage`(L1)。默认刻意保守，
+按你建立的信任度逐级提升等级。
+
+### 两种要盯住的债
+
+- **Intent debt**——循环"该做什么"与"实际做什么"之间的漂移。解药：`LoopSpec.intent`
+  是必填的一句话目的，注入每次 maker 轮并打进每份报告。
+- **Comprehension debt**——已上线行为与人类仍理解的部分之间的差距。解药：maker/checker
+  拆分 + 记录的 state 脊柱 + 渲染报告，留下每一轮可读的轨迹。
+
+> 本 crate 让两种债**可见**，而非替你解决——它们是工程责任，不是 feature。
+> 安全立场：验证仍在你身上；默认保守（L1 只读、各级默认 `AlwaysEscalate`、L3 自动放行
+> 必须显式给 `AllowlistGate`）。完整 API 文档见 crate 的 `lib.rs`。
 
 ---
 

@@ -3,6 +3,54 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.15
+
+New **loop-engineering** layer, plus a simplified, hardcoded-URL-free model API.
+
+### Added
+
+- **`harness-rs-loop-engine` — loop engineering for harness-rs.** A new crate
+  that turns the existing building blocks (scheduler, sandbox, sub-agents,
+  memory, MCP) into *trusted recurring loops*. It adds the orchestration
+  discipline those parts lacked:
+  - **`LoopLevel`** — maturity levels `L1Report` → `L2Assisted` → `L3Unattended`
+    (a loop earns autonomy in stages; the level governs both write-capability
+    and gate policy).
+  - **`HumanGate`** — proceed-or-escalate decisions tied to the level
+    (`AlwaysEscalate`, `AllowlistGate`, `CallbackGate`).
+  - **`TokenBudget` / `BudgetState`** — per-round input/output/total token
+    ceilings, tallied across the maker and checker sub-agents.
+  - **`LoopSpec`** — an inert, serializable loop definition; its required
+    `intent` field is the antidote to *intent debt*.
+  - **`LoopEngine::run_once`** — one verified, budgeted, gated round: recall
+    state → isolate → **maker** sub-agent → **checker** sub-agent → gate →
+    record state. Never panics or returns `Err` (failures fold into
+    `RoundOutcome::Failed`).
+  - **`LoopScheduler`** — runs loops on their declared cadence.
+  - **`patterns`** — seven ready-made production loops: `daily_triage`,
+    `pr_babysitter`, `ci_sweeper`, `dependency_sweeper`, `changelog_drafter`,
+    `post_merge_cleanup`, `issue_triage`.
+
+  See DESIGN.md §11.5. Example: `examples/loop-engine-demo`.
+- **`harness-rs-models` — `ApiKind` single entry point.** `ApiKind::{OpenAI,
+  Anthropic, Gemini}.build(base_url, model, key) -> Arc<dyn Model>` constructs
+  any of the three protocol families through one call.
+
+### Changed
+
+- **`harness-rs-models` — no more hardcoded provider URLs (breaking).** The
+  `providers` module and its vendor URL menu (`DEEPSEEK`, `OPENAI`, `GROQ`,
+  `TOGETHER`, `OLLAMA`, `ANTHROPIC`, `GEMINI`) are **removed**. There are exactly
+  three protocol families and you always pass `base_url` yourself.
+  `AnthropicNative::with_key` and `GeminiNative::with_key` now take
+  `(base_url, model, key)` to match `OpenAiCompat::with_key` — no URL is baked
+  into any adapter. Migration: replace `providers::DEEPSEEK` with the literal
+  `"https://api.deepseek.com"`, etc.
+- **`harness-rs-loop` — `SubagentReport` now carries `usage`.** The
+  `harness_core::Usage` from the sub-agent's loop is preserved on the report
+  (previously discarded), so callers can account for token spend across
+  sub-agent turns. `BudgetExhausted` rounds also surface their `last_text`.
+
 ## 0.0.14
 
 Skill loading is now interop-friendly and fault-isolated. Additive, backward-compatible.

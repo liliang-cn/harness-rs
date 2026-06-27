@@ -17,7 +17,7 @@ use anyhow::Context as _;
 use harness::prelude::*;
 use harness::skills::SkillRegistry;
 use harness_core::{Block, Task, Turn, TurnRole};
-use harness_models::{OpenAiCompat, providers};
+use harness_models::OpenAiCompat;
 use std::collections::BTreeMap;
 
 /// Echo the user's input verbatim.
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         "deepseek-v4-flash"
     };
-    let model = OpenAiCompat::with_key(providers::DEEPSEEK, model_id, api_key);
+    let model = OpenAiCompat::with_key("https://api.deepseek.com", model_id, api_key);
     let info = model.info();
     println!(
         "→ model: {} ({} via {}, window {} tokens)",

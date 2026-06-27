@@ -37,17 +37,22 @@ impl AnthropicNative {
         }
     }
 
-    /// Convenience: pass model name + API key. URL is api.anthropic.com.
+    /// Convenience: `base_url + model + api_key`. You pass the endpoint —
+    /// nothing is hardcoded.
     ///
     /// ```ignore
     /// use harness_models::AnthropicNative;
-    /// let m = AnthropicNative::with_key("claude-opus-4-7", api_key);
+    /// let m = AnthropicNative::with_key("https://api.anthropic.com", "claude-opus-4-7", api_key);
     /// ```
-    pub fn with_key(model: impl Into<String>, api_key: impl Into<String>) -> Self {
+    pub fn with_key(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
         let model = model.into();
         Self::new(LlmConfig::new(
             format!("anthropic:{model}"),
-            crate::providers::ANTHROPIC,
+            base_url,
             api_key,
             model,
         ))
