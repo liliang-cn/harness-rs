@@ -19,11 +19,110 @@
 use crate::budget::{BudgetLimit, BudgetState};
 use crate::level::{GateDecision, HumanGate, LoopLevel, ProposedAction};
 use crate::spec::LoopSpec;
-use harness_core::{Memory, MemoryEntry, Model, SubagentStatus, Task, Tool};
+use async_trait::async_trait;
+use harness_core::{Memory, MemoryEntry, Model, SubagentStatus, Task, Tool, ToolRisk};
 use harness_loop::{Subagent, SubagentReport, SubagentSpec};
 use harness_sandbox::{NullSandbox, Sandbox};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Evidence that an auto-approved action was handed off to its executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionReceipt {
+    /// Action kind that was executed, e.g. `"commit"` or `"open-pr"`.
+    pub kind: String,
+    /// Human-readable execution summary.
+    pub summary: String,
+}
+
+impl ActionReceipt {
+    pub fn new(kind: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            summary: summary.into(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ActionError {
+    #[error("action executor: {0}")]
+    Exec(String),
+}
+
+/// Carries out a verified, auto-approved action.
+///
+/// Gates decide whether a proposal is allowed. Executors do the side effect:
+/// create a PR, commit a worktree, post a comment, apply a patch, or hand the
+/// proposal to any project-specific system. The engine ships conservative
+/// defaults; production loops should install an executor that matches their
+/// action kinds.
+#[async_trait]
+pub trait ActionExecutor: Send + Sync {
+    async fn execute(
+        &self,
+        spec: &LoopSpec,
+        action: &ProposedAction,
+        world: &mut harness_core::World,
+    ) -> Result<ActionReceipt, ActionError>;
+}
+
+/// Default executor: records that a gate approved the action but performs no
+/// external side effect. This keeps `LoopEngine::new` safe while making the
+/// missing production handoff visible in the round report.
+pub struct ApprovalOnlyExecutor;
+
+#[async_trait]
+impl ActionExecutor for ApprovalOnlyExecutor {
+    async fn execute(
+        &self,
+        spec: &LoopSpec,
+        action: &ProposedAction,
+        _world: &mut harness_core::World,
+    ) -> Result<ActionReceipt, ActionError> {
+        Ok(ActionReceipt::new(
+            action.kind.clone(),
+            format!(
+                "loop `{}` auto-approved `{}`; no external action executor configured",
+                spec.name, action.kind
+            ),
+        ))
+    }
+}
+
+/// Wrap a synchronous callback as an [`ActionExecutor`]. Use this for
+/// application-specific handoffs without defining a bespoke type.
+pub struct CallbackActionExecutor<F>(pub F)
+where
+    F: Fn(
+            &LoopSpec,
+            &ProposedAction,
+            &mut harness_core::World,
+        ) -> Result<ActionReceipt, ActionError>
+        + Send
+        + Sync;
+
+#[async_trait]
+impl<F> ActionExecutor for CallbackActionExecutor<F>
+where
+    F: Fn(
+            &LoopSpec,
+            &ProposedAction,
+            &mut harness_core::World,
+        ) -> Result<ActionReceipt, ActionError>
+        + Send
+        + Sync,
+{
+    async fn execute(
+        &self,
+        spec: &LoopSpec,
+        action: &ProposedAction,
+        world: &mut harness_core::World,
+    ) -> Result<ActionReceipt, ActionError> {
+        (self.0)(spec, action, world)
+    }
+}
 
 /// What one round of a loop did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +153,7 @@ pub struct RoundReport {
     pub maker: Option<SubagentReport>,
     pub checker: Option<SubagentReport>,
     pub decision: Option<GateDecision>,
+    pub action: Option<ActionReceipt>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub outcome: RoundOutcome,
@@ -91,6 +191,9 @@ impl RoundReport {
         if let RoundOutcome::Escalated { reason } = &self.outcome {
             s.push_str(&format!("escalation: {reason}\n"));
         }
+        if let Some(a) = &self.action {
+            s.push_str(&format!("action: {} — {}\n", a.kind, a.summary));
+        }
         s.push_str(&format!(
             "tokens: {} in / {} out\n",
             self.input_tokens, self.output_tokens
@@ -119,6 +222,7 @@ pub struct LoopEngine {
     checker_tools: Vec<Arc<dyn Tool>>,
     sandbox: Arc<dyn Sandbox>,
     gate: Arc<dyn HumanGate>,
+    action_executor: Arc<dyn ActionExecutor>,
     memory: Option<Arc<dyn Memory>>,
 }
 
@@ -136,6 +240,7 @@ impl LoopEngine {
             checker_tools: Vec::new(),
             sandbox: Arc::new(NullSandbox::new(PathBuf::from("."))),
             gate,
+            action_executor: Arc::new(ApprovalOnlyExecutor),
             memory: None,
         }
     }
@@ -154,6 +259,10 @@ impl LoopEngine {
     }
     pub fn with_gate(mut self, g: Arc<dyn HumanGate>) -> Self {
         self.gate = g;
+        self
+    }
+    pub fn with_action_executor(mut self, e: Arc<dyn ActionExecutor>) -> Self {
+        self.action_executor = e;
         self
     }
     pub fn with_memory(mut self, m: Arc<dyn Memory>) -> Self {
@@ -201,7 +310,7 @@ impl LoopEngine {
             },
         )
         .with_max_iters(budget.max_iters());
-        let maker = with_tools(maker, &self.maker_tools);
+        let maker = with_tools_for_level(maker, &self.maker_tools, level);
         let maker_report = match Subagent::new(dyn_model(&self.model), maker)
             .run(&mut handle.world)
             .await
@@ -227,7 +336,7 @@ impl LoopEngine {
             },
         )
         .with_max_iters(budget.max_iters());
-        let checker = with_tools(checker, &self.checker_tools);
+        let checker = with_tools_for_level(checker, &self.checker_tools, level);
         let checker_report = match Subagent::new(dyn_model(&self.model), checker)
             .run(&mut handle.world)
             .await
@@ -257,13 +366,32 @@ impl LoopEngine {
         let proposed = ProposedAction::new(self.spec.action_kind.clone(), summary, verified);
         let decision = self.gate.decide(level, &proposed);
 
-        let outcome = match (&decision, level) {
+        let (outcome, action_receipt) = match (&decision, level) {
             // L1 never acts — it reports, regardless of the gate verdict.
-            (_, LoopLevel::L1Report) => RoundOutcome::Reported,
-            (GateDecision::AutoProceed, _) => RoundOutcome::Proceeded,
-            (GateDecision::Escalate { reason }, _) => RoundOutcome::Escalated {
-                reason: reason.clone(),
-            },
+            (_, LoopLevel::L1Report) => (RoundOutcome::Reported, None),
+            (GateDecision::AutoProceed, _) => {
+                match self
+                    .action_executor
+                    .execute(&self.spec, &proposed, &mut handle.world)
+                    .await
+                {
+                    Ok(receipt) => (RoundOutcome::Proceeded, Some(receipt)),
+                    Err(e) => {
+                        return self.failed(
+                            format!("action executor failed: {e}"),
+                            &budget,
+                            Some(maker_report),
+                            Some(checker_report),
+                        );
+                    }
+                }
+            }
+            (GateDecision::Escalate { reason }, _) => (
+                RoundOutcome::Escalated {
+                    reason: reason.clone(),
+                },
+                None,
+            ),
         };
 
         RoundReport {
@@ -273,6 +401,7 @@ impl LoopEngine {
             maker: Some(maker_report),
             checker: Some(checker_report),
             decision: Some(decision),
+            action: action_receipt,
             input_tokens: budget.input_tokens,
             output_tokens: budget.output_tokens,
             outcome,
@@ -365,6 +494,7 @@ impl LoopEngine {
             maker,
             checker,
             decision: None,
+            action: None,
             input_tokens: budget.input_tokens,
             output_tokens: budget.output_tokens,
             outcome: RoundOutcome::Failed { error },
@@ -386,6 +516,7 @@ impl LoopEngine {
             maker,
             checker,
             decision: None,
+            action: None,
             input_tokens: budget.input_tokens,
             output_tokens: budget.output_tokens,
             outcome: RoundOutcome::BudgetExhausted { limit },
@@ -397,9 +528,281 @@ fn dyn_model(m: &Arc<dyn Model>) -> harness_core::DynModel {
     harness_core::DynModel(m.clone())
 }
 
-fn with_tools(mut spec: SubagentSpec, tools: &[Arc<dyn Tool>]) -> SubagentSpec {
+fn with_tools_for_level(
+    mut spec: SubagentSpec,
+    tools: &[Arc<dyn Tool>],
+    level: LoopLevel,
+) -> SubagentSpec {
     for t in tools {
+        if level == LoopLevel::L1Report && !l1_tool_allowed(t.risk()) {
+            tracing::info!(
+                subagent = %spec.name,
+                tool = %t.name(),
+                risk = ?t.risk(),
+                "loop-engine: skipping mutating tool for L1 loop"
+            );
+            continue;
+        }
         spec = spec.with_tool(t.clone());
     }
     spec
+}
+
+fn l1_tool_allowed(risk: ToolRisk) -> bool {
+    matches!(risk, ToolRisk::ReadOnly | ToolRisk::Network)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AllowlistGate, TokenBudget};
+    use async_trait::async_trait;
+    use harness_core::{MemoryError, Model, ToolError, ToolResult, ToolSchema, World};
+    use harness_models::{MockModel, MockResponse};
+    use serde_json::{Value, json};
+    use std::sync::{
+        Arc as StdArc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn spec(level: LoopLevel) -> LoopSpec {
+        LoopSpec::new("test-loop", "keep the test loop honest", level)
+            .with_maker_prompt("make a report")
+            .with_checker_prompt("verify the report")
+            .with_action_kind("commit")
+    }
+
+    fn model(resps: impl IntoIterator<Item = MockResponse>) -> Arc<MockModel> {
+        Arc::new(MockModel::new().script_many(resps))
+    }
+
+    #[derive(Clone)]
+    struct TestTool {
+        schema: ToolSchema,
+        risk: ToolRisk,
+    }
+
+    impl TestTool {
+        fn new(name: &str, risk: ToolRisk) -> Arc<Self> {
+            Arc::new(Self {
+                schema: ToolSchema {
+                    name: name.into(),
+                    description: "test tool".into(),
+                    input: json!({"type": "object"}),
+                },
+                risk,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Tool for TestTool {
+        fn name(&self) -> &str {
+            &self.schema.name
+        }
+
+        fn schema(&self) -> &ToolSchema {
+            &self.schema
+        }
+
+        fn risk(&self) -> ToolRisk {
+            self.risk
+        }
+
+        async fn invoke(&self, _args: Value, _world: &mut World) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult {
+                ok: true,
+                content: json!({"ok": true}),
+                trace: None,
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct TestMemory {
+        entries: Mutex<Vec<MemoryEntry>>,
+    }
+
+    impl TestMemory {
+        fn with_entry(entry: MemoryEntry) -> Self {
+            Self {
+                entries: Mutex::new(vec![entry]),
+            }
+        }
+
+        fn entries(&self) -> Vec<MemoryEntry> {
+            self.entries.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Memory for TestMemory {
+        async fn recall(&self, _query: &str, k: usize) -> Result<Vec<MemoryEntry>, MemoryError> {
+            Ok(self
+                .entries
+                .lock()
+                .unwrap()
+                .iter()
+                .take(k)
+                .cloned()
+                .collect())
+        }
+
+        async fn write(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
+            self.entries.lock().unwrap().push(entry);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn l1_filters_mutating_tools_before_subagent_context() {
+        let model = model([
+            MockResponse::text("maker report"),
+            MockResponse::text("checker report"),
+        ]);
+        let engine = LoopEngine::new(spec(LoopLevel::L1Report), model.clone() as Arc<dyn Model>)
+            .with_maker_tool(TestTool::new("read", ToolRisk::ReadOnly))
+            .with_maker_tool(TestTool::new("write", ToolRisk::Destructive))
+            .with_checker_tool(TestTool::new("web", ToolRisk::Network))
+            .with_checker_tool(TestTool::new("format", ToolRisk::Idempotent));
+
+        let report = engine.run_once().await;
+
+        assert_eq!(report.outcome, RoundOutcome::Reported);
+        let calls = model.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tools_available, vec!["read"]);
+        assert_eq!(calls[1].tools_available, vec!["web"]);
+        assert!(calls[0].task_description.contains("READ-ONLY"));
+    }
+
+    #[tokio::test]
+    async fn l3_allowlisted_verified_round_proceeds_quietly() {
+        let model = model([
+            MockResponse::text("maker produced patch").with_usage(10, 5),
+            MockResponse::text("verified clean").with_usage(7, 3),
+        ]);
+        let engine = LoopEngine::new(spec(LoopLevel::L3Unattended), model as Arc<dyn Model>)
+            .with_gate(Arc::new(AllowlistGate::new(["commit"])));
+
+        let report = engine.run_once().await;
+
+        assert_eq!(report.outcome, RoundOutcome::Proceeded);
+        assert!(matches!(report.decision, Some(GateDecision::AutoProceed)));
+        let action = report.action.as_ref().expect("action receipt");
+        assert_eq!(action.kind, "commit");
+        assert!(
+            action
+                .summary
+                .contains("no external action executor configured")
+        );
+        assert!(!report.should_deliver());
+        assert_eq!(report.input_tokens, 17);
+        assert_eq!(report.output_tokens, 8);
+    }
+
+    #[tokio::test]
+    async fn auto_proceed_invokes_custom_action_executor() {
+        let model = model([
+            MockResponse::text("maker produced patch"),
+            MockResponse::text("verified clean"),
+        ]);
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let executor = CallbackActionExecutor(move |spec, action, world| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(spec.name, "test-loop");
+            assert_eq!(action.kind, "commit");
+            assert_eq!(world.repo.root, PathBuf::from("."));
+            Ok(ActionReceipt::new("commit", "created commit abc123"))
+        });
+        let engine = LoopEngine::new(spec(LoopLevel::L3Unattended), model as Arc<dyn Model>)
+            .with_gate(Arc::new(AllowlistGate::new(["commit"])))
+            .with_action_executor(Arc::new(executor));
+
+        let report = engine.run_once().await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(report.outcome, RoundOutcome::Proceeded);
+        assert_eq!(
+            report.action,
+            Some(ActionReceipt::new("commit", "created commit abc123"))
+        );
+        assert!(report.render().contains("action: commit"));
+    }
+
+    #[tokio::test]
+    async fn action_executor_failure_fails_round() {
+        let model = model([
+            MockResponse::text("maker produced patch"),
+            MockResponse::text("verified clean"),
+        ]);
+        let executor = CallbackActionExecutor(|_, _, _| Err(ActionError::Exec("boom".into())));
+        let engine = LoopEngine::new(spec(LoopLevel::L3Unattended), model as Arc<dyn Model>)
+            .with_gate(Arc::new(AllowlistGate::new(["commit"])))
+            .with_action_executor(Arc::new(executor));
+
+        let report = engine.run_once().await;
+
+        match &report.outcome {
+            RoundOutcome::Failed { error } => {
+                assert!(error.contains("action executor failed"));
+                assert!(error.contains("boom"));
+            }
+            other => panic!("expected action failure, got {other:?}"),
+        }
+        assert!(report.action.is_none());
+        assert!(report.should_deliver());
+    }
+
+    #[tokio::test]
+    async fn budget_exhaustion_after_maker_skips_checker() {
+        let model = model([
+            MockResponse::text("maker spent too much").with_usage(4, 3),
+            MockResponse::text("checker should not run"),
+        ]);
+        let low_budget = TokenBudget::iters(4).with_max_total_tokens(5);
+        let spec = spec(LoopLevel::L2Assisted).with_budget(low_budget);
+        let engine = LoopEngine::new(spec, model.clone() as Arc<dyn Model>);
+
+        let report = engine.run_once().await;
+
+        assert_eq!(
+            report.outcome,
+            RoundOutcome::BudgetExhausted {
+                limit: BudgetLimit::Total
+            }
+        );
+        assert!(report.maker.is_some());
+        assert!(report.checker.is_none());
+        assert_eq!(model.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_state_is_recalled_and_round_is_recorded() {
+        let model = model([
+            MockResponse::text("maker used prior state"),
+            MockResponse::text("checker verified"),
+        ]);
+        let memory = Arc::new(TestMemory::with_entry(
+            MemoryEntry::new("prior loop state").with_tags(["test-loop", "loop-state"]),
+        ));
+        let engine = LoopEngine::new(spec(LoopLevel::L1Report), model.clone() as Arc<dyn Model>)
+            .with_memory(memory.clone());
+
+        let report = engine.run_once().await;
+
+        assert_eq!(report.outcome, RoundOutcome::Reported);
+        assert!(
+            model.calls()[0]
+                .task_description
+                .contains("State from previous rounds:\n- prior loop state")
+        );
+        let entries = memory.entries();
+        assert_eq!(entries.len(), 2);
+        let recorded = entries.last().unwrap();
+        assert!(recorded.content.starts_with("reported"));
+        assert_eq!(recorded.source.as_deref(), Some("loop:test-loop"));
+        assert!(recorded.tags.iter().any(|t| t == "loop-state"));
+    }
 }

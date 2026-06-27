@@ -4,7 +4,11 @@
 //!
 //! - [`WorktreeSandbox`] — git worktree on a feature branch; cheapest and most
 //!   useful default. Auto-cleanup on drop unless `.keep()` is called.
-//! - `ContainerSandbox` / `VmSandbox` — placeholder enums for the v0.2+ road.
+//! - [`ContainerSandbox`] — Docker-backed command execution for OCI isolation.
+//!
+//! VM / microVM isolation belongs in deployment-owned crates that implement
+//! [`Sandbox`]. The core crate intentionally avoids shipping a Firecracker stub
+//! that cannot enforce isolation by itself.
 
 use async_trait::async_trait;
 use harness_core::{RepoView, World};
@@ -406,71 +410,6 @@ impl harness_core::ProcessRunner for DockerExecRunner {
 }
 
 // ============================================================
-// VmSandbox — Firecracker-shaped API, stub backend
-// ============================================================
-
-/// Sandbox API for VM-isolated agent runs. The full Firecracker backend is
-/// out of scope for a pure Rust crate; this type validates configuration and
-/// returns an error from `spawn()` so callers can detect missing infra
-/// without bringing the framework down.
-pub struct VmSandbox {
-    pub kernel_image: PathBuf,
-    pub rootfs_image: PathBuf,
-    pub source: PathBuf,
-    pub vcpus: u8,
-    pub mem_mb: u32,
-}
-
-impl VmSandbox {
-    pub fn new(
-        kernel: impl Into<PathBuf>,
-        rootfs: impl Into<PathBuf>,
-        source: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            kernel_image: kernel.into(),
-            rootfs_image: rootfs.into(),
-            source: source.into(),
-            vcpus: 1,
-            mem_mb: 512,
-        }
-    }
-}
-
-#[async_trait]
-impl Sandbox for VmSandbox {
-    fn fs_policy(&self) -> FsPolicy {
-        FsPolicy::Confined
-    }
-    fn net_policy(&self) -> NetPolicy {
-        NetPolicy::None
-    }
-
-    async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
-        // Validate config so users get an early error before learning the
-        // backend isn't wired up.
-        if !self.kernel_image.exists() {
-            return Err(SandboxError::Io(format!(
-                "kernel image not found: {}",
-                self.kernel_image.display()
-            )));
-        }
-        if !self.rootfs_image.exists() {
-            return Err(SandboxError::Io(format!(
-                "rootfs image not found: {}",
-                self.rootfs_image.display()
-            )));
-        }
-        Err(SandboxError::GitMissing(
-            "VmSandbox: Firecracker backend not yet implemented in this build. \
-             Use ContainerSandbox for OCI isolation or WorktreeSandbox for cheap \
-             git-level isolation."
-                .into(),
-        ))
-    }
-}
-
-// ============================================================
 // NullSandbox (for tests & for "I don't actually need isolation")
 // ============================================================
 
@@ -517,31 +456,6 @@ impl Sandbox for NullSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn vm_sandbox_returns_clear_error_when_unimplemented() {
-        let tmp = std::env::temp_dir().join(format!("harness-vm-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join("kernel"), b"fake").unwrap();
-        std::fs::write(tmp.join("rootfs"), b"fake").unwrap();
-        let s = VmSandbox::new(tmp.join("kernel"), tmp.join("rootfs"), tmp.clone());
-        let err = match s.spawn().await {
-            Ok(_) => panic!("expected VmSandbox spawn to error"),
-            Err(e) => e,
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Firecracker") || msg.contains("not yet implemented"),
-            "got: {msg}"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[tokio::test]
-    async fn vm_sandbox_rejects_missing_images() {
-        let s = VmSandbox::new("/no/such/kernel", "/no/such/rootfs", ".");
-        assert!(matches!(s.spawn().await, Err(SandboxError::Io(_))));
-    }
 
     #[tokio::test]
     async fn container_sandbox_fails_cleanly_without_docker() {

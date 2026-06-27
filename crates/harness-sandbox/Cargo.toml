@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Sandbox tiers for harness-rs — git Worktree, Docker Container, and Firecracker-shaped VM stubs."
+description = "Sandbox tiers for harness-rs — git Worktree, Docker Container, and a trait for deployment-owned isolation backends."
 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]

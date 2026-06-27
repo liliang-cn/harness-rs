@@ -74,7 +74,8 @@
 //! - `harness_hooks` — `HookBus` over 27 lifecycle events.
 //! - `harness_blueprint` — hybrid deterministic + agent state machine.
 //! - `harness_compactor` — five-stage progressive context compaction.
-//! - `harness_sandbox` — `WorktreeSandbox` (default) + container/VM stubs.
+//! - `harness_sandbox` — `WorktreeSandbox`, `ContainerSandbox`, and the
+//!   `Sandbox` trait for deployment-owned isolation backends.
 //! - `harness_models` — `OpenAiCompat` / `AnthropicNative` / `MockModel`.
 //! - `harness_mcp` — MCP stdio JSON-RPC server.
 //! - [`skills`] — agentskills.io-compliant skill loader + validator.

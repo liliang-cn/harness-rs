@@ -3,7 +3,7 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## 0.0.15
+## 0.0.16
 
 New **loop-engineering** layer, plus a simplified, hardcoded-URL-free model API.
 
@@ -50,6 +50,28 @@ New **loop-engineering** layer, plus a simplified, hardcoded-URL-free model API.
   `harness_core::Usage` from the sub-agent's loop is preserved on the report
   (previously discarded), so callers can account for token spend across
   sub-agent turns. `BudgetExhausted` rounds also surface their `last_text`.
+- **`harness-rs-loop-engine` — L1 now hard-filters mutating tools.** Report-only
+  loops no longer rely only on prompt text for read-only behaviour: L1 maker and
+  checker sub-agents receive only `ReadOnly` / `Network` tools. `Idempotent` and
+  `Destructive` tools are skipped with a trace log.
+- **`harness-rs-loop-engine` — action executors for approved work.**
+  `LoopEngine` now has an `ActionExecutor` handoff. When a verified proposal is
+  auto-approved, the executor is invoked and its `ActionReceipt` is attached to
+  the `RoundReport`; executor failures become `RoundOutcome::Failed` instead of
+  pretending the action landed. The safe default is `ApprovalOnlyExecutor`, and
+  apps can install `CallbackActionExecutor` or their own async executor via
+  `with_action_executor`.
+- **`harness-rs-sandbox` — VM isolation is now explicitly deployment-owned.**
+  The non-functional `VmSandbox` / Firecracker stub has been removed from the
+  core crate. VM or microVM isolation should be provided by downstream
+  infrastructure crates that implement the existing `Sandbox` trait.
+
+### Tests
+
+- Added deterministic `LoopEngine::run_once` coverage for L1 tool filtering, L3
+  allowlisted auto-proceed, budget exhaustion before checker execution, and
+  memory recall/writeback of the loop state spine. Added action-executor
+  coverage for successful handoff and failed handoff.
 
 ## 0.0.14
 
