@@ -1,0 +1,24 @@
+[package]
+name = "eval-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Run a fixed agentic task through harness-rs; emit an eval-go Sample for cross-framework benchmarking"
+
+[[bin]]
+name = "eval-bench"
+path = "src/main.rs"
+
+[dependencies]
+harness         = { workspace = true }
+harness-core    = { workspace = true }
+harness-models  = { workspace = true }
+harness-loop    = { workspace = true }
+harness-tools-fs = { workspace = true }
+harness-context = { workspace = true }
+tokio           = { workspace = true }
+anyhow          = { workspace = true }
+serde_json      = { workspace = true }
