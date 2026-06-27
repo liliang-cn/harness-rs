@@ -30,7 +30,7 @@
 1. **Context 是稀缺资源**——内置渐进式压缩，而不是把所有文档塞进单一 prompt。
 2. **行为可控**——前馈 (Guide) 与反馈 (Sensor) 双向闭环，而不是只靠 prompt 调教。
 3. **确定性优先**——能用代码搞定的事 (lint / format / git / 移动文件) 不烧 token。
-4. **隔离优于约束**——权限通过沙箱 (worktree / container / VM) 而不是运行时弹窗。
+4. **隔离优于约束**——权限通过沙箱 (worktree / container / downstream backend) 而不是运行时弹窗。
 5. **可观测**——27 个 lifecycle 事件全开放，配合 `tracing` 全链路追踪。
 
 ---
@@ -70,7 +70,7 @@
                               ┌───────────┴───────────┐
                               │   HookBus (27 evts)   │
                               │   Compactor (5 stg.)  │
-                              │   Sandbox (3 tiers)   │
+                              │      Sandbox          │
                               └───────────────────────┘
 ```
 
@@ -100,7 +100,7 @@ harness/
 │   ├── harness-loop/              # AgentLoop (ReAct + self-correct)
 │   ├── harness-loop-engine/       # 循环编排纪律: L1/L2/L3 + gate + budget + 生产模式 (§11.5)
 │   ├── harness-blueprint/         # state machine 编排
-│   ├── harness-sandbox/           # Sandbox trait + worktree/container/vm
+│   ├── harness-sandbox/           # Sandbox trait + worktree/container
 │   ├── harness-skills/            # SKILL.md & #[skill] 收集器, inventory 注册
 │   ├── harness-tools-fs/          # 文件读写 / 编辑 / ripgrep
 │   ├── harness-tools-shell/       # 受控 shell, 按 risk 分级
@@ -605,7 +605,7 @@ Hook 实现可以是 native Rust 函数、shell 脚本（兼容 Claude Code hook
 
 ---
 
-## 11. Sandbox — 三层隔离
+## 11. Sandbox — 两层内置隔离 + 扩展点
 
 ```rust
 pub trait Sandbox: Send + Sync {
@@ -616,7 +616,8 @@ pub trait Sandbox: Send + Sync {
 
 pub struct WorktreeSandbox  { /* git worktree + ro 工具白名单 */ }
 pub struct ContainerSandbox { image: String, net: NetPolicy /* OCI 容器, 默认无网络 */ }
-pub struct VmSandbox        { /* Firecracker microVM, 类 Stripe Devbox */ }
+// VM / microVM isolation is deployment-owned:
+// downstream crates can implement Sandbox for Firecracker, Kata, remote runners, etc.
 ```
 
 **核心原则**：权限不是运行时弹窗，而是 spawn 时一次性烧进沙箱。`Tool::risk()` 用于沙箱选择策略，而不是用于在每个 tool call 时打断用户。
@@ -784,7 +785,7 @@ harness trace ./session.jsonl            # 回放
 - [x] Compactor 全部 5 阶段 — `DefaultCompactor` 在 `AgentLoop` 内按预算阈值自动触发
 - [x] HookBus + 全部 27 事件 + `#[hook]` 宏 — `HookBus` 在 PreTool/PostTool/Pre…/Post…/SessionStart/SessionEnd/Heartbeat/PreCompact/PostCompact 等点全部触发；PreToolUse `Deny` 短路并把原因喂回模型
 - [x] Blueprint 状态机 — `Deterministic` + `Agent` 节点，命名边 + Transition::Next/Done/Edge/Abort，`branch_on_failure` + `retry_cap`
-- [x] WorktreeSandbox — 真实 `git worktree add` + drop-time `git worktree remove`；`NullSandbox` 作 fallback；`ContainerSandbox`/`VmSandbox` 留 v0.2
+- [x] WorktreeSandbox — 真实 `git worktree add` + drop-time `git worktree remove`；`NullSandbox` 作 fallback；`ContainerSandbox` 留 v0.2
 - [x] `#[guide]` `#[sensor]` `#[hook]` `#[tool]` 全部宏 — 与 `#[skill]` 同一 inventory 注册模式
 - [x] Subagent — `SubagentSpec` + `Subagent::run` 跑隔离 `AgentLoop`，按 `SubagentStatus` (Done/DoneWithConcerns/Blocked/NeedsContext) 报告
 - [x] `harness skills export` — 把所有注册 skill (宏 + 文件系统) 物化为 `<target>/<name>/SKILL.md`，验证后可被 Claude Code/Cursor/Codex 直接消费
@@ -796,7 +797,7 @@ harness trace ./session.jsonl            # 回放
 
 - [x] **Session replay** — `SessionRecorder` Hook serialises every lifecycle event to JSONL; `read_session` + `replay_as_mock` reconstruct a deterministic `MockModel` from the log. `harness trace <file>` pretty-prints with stats. `crate-keeper --record <path>` produces live recordings.
 - [x] **ContainerSandbox** — `docker run -d --rm` + bind-mount + `docker exec` routing for the world runner. `--network none` by default.
-- [x] **VmSandbox** — Firecracker-shaped API with image-path validation; Firecracker process backend stubbed with a clear error so callers can detect the missing infra path without crashing.
+- [x] **VM isolation boundary clarified** — VM / microVM backends are intentionally out-of-tree and deployment-owned. The framework exposes the `Sandbox` trait; downstream infrastructure can implement Firecracker, Kata, remote runners, or other hardened isolation without a non-functional core stub.
 - [x] **MCP server** — `harness-mcp` crate ships a JSON-RPC 2.0 server over stdio implementing `initialize`, `tools/list`, `tools/call`, `ping`. Bin: `harness mcp serve --workspace <path>`. Tools exposed: read/write/edit/list_dir/shell_read. Tested round-trips with 6 unit tests.
 - [x] **OpenTelemetry** — `harness-hooks` `otel` feature emits OTel spans for session/model/tool/sensor/compaction. Token usage, stop reason, signal counts as attributes. Uses `BoxedSpan` to stay dyn-compatible.
 - [x] **Harness linter** — `harness skills lint <dir>` flags short / vague / overlapping descriptions, near-duplicate names, Jaccard keyword overlap > 50%. 5 unit tests.

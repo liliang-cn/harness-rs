@@ -4,9 +4,10 @@
 > turns an LLM into an autonomous agent. Any domain: research, ops, assistants,
 > data work, coding.
 
-A Rust framework for production agents, built on the *harness engineering*
-discipline (Böckeler/Thoughtworks, Lopopolo/OpenAI, 2026). Compile-time
-type-safe, deterministic-first, observable. Rationale in **[DESIGN.md](DESIGN.md)**.
+A Rust framework for production-oriented AI agents, built on the *harness
+engineering* discipline (Böckeler/Thoughtworks, Lopopolo/OpenAI, 2026).
+Compile-time type-safe, deterministic-first, observable. Rationale in
+**[DESIGN.md](DESIGN.md)**.
 
 ## What you get
 
@@ -15,7 +16,7 @@ type-safe, deterministic-first, observable. Rationale in **[DESIGN.md](DESIGN.md
 | **Models** | 3 protocol families — OpenAI-compat · Anthropic · Gemini — one `ApiKind::build(url, model, key)` | `harness-models` |
 | **Tools** | fs · shell (risk-gated) · web search/fetch | `harness-tools-*` |
 | **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix + final synthesis | `harness-loop` |
-| **Loop engineering** | recurring loops with maturity levels (L1/L2/L3), human gates, token budgets, 7 production patterns | `harness-loop-engine` |
+| **Loop engineering** | recurring loops with maturity levels (L1/L2/L3), human gates, action executors, token budgets, 7 production patterns | `harness-loop-engine` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK trigram) | `harness-core`, `harness-recall-sqlite` |
 | **Scheduler · MCP** | cron-style agent jobs · MCP server + client (`rmcp`) | `harness-scheduler`, `harness-mcp` |
@@ -69,7 +70,9 @@ let report = LoopEngine::new(patterns::daily_triage(), model)
 ```
 
 Loops earn autonomy in stages — **L1 report** → **L2 assisted** (human gates
-every change) → **L3 unattended** (allowlisted actions only). See DESIGN.md §11.5.
+every change) → **L3 unattended** (allowlisted actions only). After a verified
+L3 approval, an `ActionExecutor` performs the project-specific side effect
+(commit, PR, comment, patch, ticket update). See DESIGN.md §11.5.
 
 ## For Agents
 

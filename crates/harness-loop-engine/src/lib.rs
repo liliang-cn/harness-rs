@@ -20,6 +20,9 @@
 //!   (unattended)**. A loop earns autonomy in stages.
 //! - [`HumanGate`] — the proceed-or-escalate decision, tied to the level.
 //!   Built-ins: [`AlwaysEscalate`], [`AllowlistGate`], [`CallbackGate`].
+//! - [`ActionExecutor`] — the side-effect handoff after a verified L3
+//!   auto-approval. Built-ins: [`ApprovalOnlyExecutor`],
+//!   [`CallbackActionExecutor`].
 //! - [`TokenBudget`] — a per-round spend ceiling, because unattended loops
 //!   spend without bound if you let them.
 //! - [`LoopSpec`] — the inert, serializable description of a loop.
@@ -44,7 +47,7 @@
 //!        │                  checker sub-agent  (tests + gates)
 //!        │                          │
 //!        │                          ▼
-//!        │                     human gate? ──┬─ safe/allowlisted ─► proceed
+//!        │                     human gate? ──┬─ safe/allowlisted ─► action executor
 //!        │                                   └─ risky/ambiguous ──► escalate
 //!        ▼                                            │
 //!   write STATE / memory  ◄────────────────────────── recurse next tick
@@ -81,7 +84,10 @@ mod scheduler;
 mod spec;
 
 pub use budget::{BudgetLimit, BudgetState, TokenBudget};
-pub use engine::{LoopEngine, RoundOutcome, RoundReport};
+pub use engine::{
+    ActionError, ActionExecutor, ActionReceipt, ApprovalOnlyExecutor, CallbackActionExecutor,
+    LoopEngine, RoundOutcome, RoundReport,
+};
 pub use level::{
     AllowlistGate, AlwaysEscalate, CallbackGate, GateDecision, HumanGate, LoopLevel,
     ProposedAction, default_gate_for,
