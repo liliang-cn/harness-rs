@@ -36,6 +36,7 @@ members = [
     "examples/investor-bot",
     "examples/ai-note",
     "examples/deepseek-caps-e2e",
+    "examples/eval-bench",
 ]
 
 [workspace.package]
