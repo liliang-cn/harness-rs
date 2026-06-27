@@ -71,8 +71,8 @@ impl OpenAiCompat {
     /// Convenience: 3-arg construction without writing out an `LlmConfig`.
     ///
     /// ```ignore
-    /// use harness_models::{OpenAiCompat, providers::DEEPSEEK};
-    /// let m = OpenAiCompat::with_key(DEEPSEEK, "deepseek-v4-pro", api_key);
+    /// use harness_models::OpenAiCompat;
+    /// let m = OpenAiCompat::with_key("https://api.deepseek.com", "deepseek-v4-pro", api_key);
     /// ```
     pub fn with_key(
         base_url: impl Into<String>,

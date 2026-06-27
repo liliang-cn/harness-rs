@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use clap::Parser;
 use harness_core::Model;
-use harness_models::{GeminiNative, OpenAiCompat, providers};
+use harness_models::{GeminiNative, OpenAiCompat};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -110,14 +110,18 @@ async fn main() -> anyhow::Result<()> {
             let key = gemini_key.clone().ok_or_else(|| {
                 anyhow::anyhow!("GEMINI_API_KEY required for chat_provider=gemini")
             })?;
-            Arc::new(GeminiNative::with_key(&cli.chat_model, key))
+            Arc::new(GeminiNative::with_key(
+                "https://generativelanguage.googleapis.com",
+                &cli.chat_model,
+                key,
+            ))
         }
         _ => {
             let key = deepseek_key.clone().ok_or_else(|| {
                 anyhow::anyhow!("DEEPSEEK_API_KEY required for openai-compat chat")
             })?;
             Arc::new(OpenAiCompat::with_key(
-                providers::DEEPSEEK.to_string(),
+                "https://api.deepseek.com",
                 &cli.chat_model,
                 key,
             ))

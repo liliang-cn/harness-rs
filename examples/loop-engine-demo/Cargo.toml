@@ -1,0 +1,14 @@
+[package]
+name = "loop-engine-demo"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+harness-loop-engine = { workspace = true }
+harness-core        = { workspace = true }
+harness-models      = { workspace = true }
+harness-tools-fs    = { workspace = true }
+anyhow              = { workspace = true }
+tokio               = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing             = { workspace = true }

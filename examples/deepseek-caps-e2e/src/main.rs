@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use harness_context::{FileMemory, FileRecall, default_world};
 use harness_core::{Model, RecallStore, Task, ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use harness_loop::{AgentLoop, LearningConfig, Outcome};
-use harness_models::{OpenAiCompat, providers};
+use harness_models::OpenAiCompat;
 use harness_scheduler::{FileJobStore, Job, Scheduler, StdoutChannel};
 use harness_tools_memory::RememberThisTool;
 use harness_tools_skills::SkillManageTool;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 // ── model helper ────────────────────────────────────────────────────────────
 
 fn model(key: &str) -> OpenAiCompat {
-    OpenAiCompat::with_key(providers::DEEPSEEK, "deepseek-v4-flash", key)
+    OpenAiCompat::with_key("https://api.deepseek.com", "deepseek-v4-flash", key)
 }
 
 // ── ClockTool — triggers nudge on the main agent turn ───────────────────────

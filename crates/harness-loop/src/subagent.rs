@@ -62,6 +62,10 @@ pub struct SubagentReport {
     pub status: SubagentStatus,
     pub text: Option<String>,
     pub iters: u32,
+    /// Token usage accumulated by the subagent's loop. Lets callers
+    /// (e.g. `harness-loop-engine`'s `TokenBudget`) account for spend
+    /// across maker/checker turns.
+    pub usage: harness_core::Usage,
 }
 
 /// Bind a `Model` to a `SubagentSpec` and run it.
@@ -91,17 +95,26 @@ impl<M: Model> Subagent<M> {
         let task = self.spec.task.clone();
         let outcome = self.loop_.run_with_max_iters(task, world, max).await?;
         let report = match outcome {
-            Outcome::Done { text, iters, .. } => SubagentReport {
+            Outcome::Done {
+                text, iters, usage, ..
+            } => SubagentReport {
                 name,
                 status: SubagentStatus::Done,
                 text,
                 iters,
+                usage,
             },
-            Outcome::BudgetExhausted { iters, .. } => SubagentReport {
+            Outcome::BudgetExhausted {
+                iters,
+                last_text,
+                usage,
+                ..
+            } => SubagentReport {
                 name,
                 status: SubagentStatus::Blocked,
-                text: None,
+                text: last_text,
                 iters,
+                usage,
             },
         };
         tracing::info!(

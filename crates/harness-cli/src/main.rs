@@ -360,7 +360,7 @@ serde_json           = "1"
 use harness::prelude::*;
 use harness_context::default_world;
 use harness_loop::{AgentLoop, LiveProgressHook};
-use harness_models::{providers::DEEPSEEK, OpenAiCompat};
+use harness_models::OpenAiCompat;
 use harness_tools_fs::{ListDir, ReadFile};
 use std::sync::Arc;
 
@@ -397,8 +397,8 @@ async fn main() -> anyhow::Result<()> {
     let key = std::env::var("HARNESS_API_KEY")
         .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
         .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY or DEEPSEEK_API_KEY"))?;
-    let base_url =
-        std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| DEEPSEEK.to_string());
+    let base_url = std::env::var("HARNESS_BASE_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
     let model_id =
         std::env::var("HARNESS_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
