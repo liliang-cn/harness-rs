@@ -13,3 +13,14 @@
 # works without first running `npm run build` (the binary embeds dist via
 # include_dir!).
 examples/ai-ledger/admin-ui/node_modules/
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+# CortexDB local SQLite store (per-machine, not source)
+cortexdb.db
+cortexdb.db-shm
+cortexdb.db-wal
+# superpowers tooling cache
+.superpowers/
+# stray npm lockfile (this is a Cargo workspace, not npm)
+package-lock.json
