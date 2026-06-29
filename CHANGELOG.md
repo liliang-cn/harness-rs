@@ -3,6 +3,16 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.18
+
+### Fixed
+
+- **`harness-rs-orchestrator` — `RunReport::render` no longer panics on
+  multibyte text.** The summary truncation sliced the job result at a fixed
+  byte index (`&t[..80]`), which panics when byte 80 falls inside a multi-byte
+  UTF-8 char (e.g. an emoji or CJK character in a model's output). It now
+  truncates on a character boundary. Regression test added.
+
 ## 0.0.17
 
 New **orchestration** layer: run one goal as a concurrent DAG of Jobs.
