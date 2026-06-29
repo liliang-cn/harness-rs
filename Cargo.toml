@@ -34,6 +34,7 @@ members = [
     "examples/loop-engine-demo",
     "examples/orchestrator-demo",
     "examples/ecommerce-analyst",
+    "examples/ecommerce-ops-agent",
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",

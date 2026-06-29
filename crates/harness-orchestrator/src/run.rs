@@ -135,11 +135,34 @@ impl RunReport {
             s.push_str(&format!("  - {id}: {}", st.label()));
             if let Some(t) = text {
                 let t = t.trim();
-                let short = if t.len() > 80 { &t[..80] } else { t };
+                // Char-safe truncation (text may contain multi-byte chars / emoji).
+                let short: String = t.chars().take(80).collect();
                 s.push_str(&format!(" — {short}"));
             }
             s.push('\n');
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::job::JobState;
+
+    #[test]
+    fn render_truncates_on_char_boundary_with_multibyte_text() {
+        // A job result whose 80th byte lands inside a multi-byte char must not
+        // panic when rendered (regression: byte-slicing `&t[..80]`).
+        let long = format!("🔄 {}", "更".repeat(100));
+        let report = RunReport {
+            run_id: "r".into(),
+            goal: "g".into(),
+            state: RunState::Completed,
+            spent_tokens: 0,
+            jobs: vec![("j".into(), JobState::Succeeded, Some(long))],
+        };
+        let out = report.render(); // must not panic
+        assert!(out.contains("j: succeeded"));
     }
 }
