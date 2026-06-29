@@ -33,6 +33,7 @@ members = [
     "examples/crate-keeper",
     "examples/loop-engine-demo",
     "examples/orchestrator-demo",
+    "examples/ecommerce-analyst",
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",

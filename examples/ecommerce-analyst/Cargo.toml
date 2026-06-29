@@ -1,0 +1,30 @@
+[package]
+name = "ecommerce-analyst"
+version.workspace = true
+edition.workspace = true
+publish = false
+default-run = "ecommerce-analyst"
+
+[lib]
+name = "ecommerce_analyst"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ecommerce-analyst"
+path = "src/main.rs"
+
+[[bin]]
+name = "seed"
+path = "src/bin/seed.rs"
+
+[dependencies]
+harness-orchestrator = { workspace = true }
+harness-core         = { workspace = true }
+harness-models       = { workspace = true }
+async-trait          = { workspace = true }
+serde_json           = { workspace = true }
+anyhow               = { workspace = true }
+tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }
+chrono               = { workspace = true }
+sqlx                 = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+rand                 = "0.8"
