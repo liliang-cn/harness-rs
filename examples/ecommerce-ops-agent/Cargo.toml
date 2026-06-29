@@ -1,0 +1,22 @@
+[package]
+name = "ecommerce-ops-agent"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+harness-orchestrator = { workspace = true }
+harness-loop-engine  = { workspace = true }
+harness-loop         = { workspace = true }
+harness-core         = { workspace = true }
+harness-context      = { workspace = true }
+harness-models       = { workspace = true }
+ecommerce-analyst    = { path = "../ecommerce-analyst" }
+async-trait          = { workspace = true }
+serde                = { workspace = true }
+serde_json           = { workspace = true }
+anyhow               = { workspace = true }
+tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }
+chrono               = { workspace = true }
+tracing              = { workspace = true }
+sqlx                 = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }

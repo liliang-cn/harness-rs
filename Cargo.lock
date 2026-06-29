@@ -678,6 +678,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecommerce-ops-agent"
+version = "0.0.17"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "ecommerce-analyst",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-loop-engine",
+ "harness-rs-models",
+ "harness-rs-orchestrator",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ego-tree"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
