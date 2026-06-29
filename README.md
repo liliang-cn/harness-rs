@@ -17,6 +17,7 @@ Compile-time type-safe, deterministic-first, observable. Rationale in
 | **Tools** | fs · shell (risk-gated) · web search/fetch | `harness-tools-*` |
 | **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix + final synthesis | `harness-loop` |
 | **Loop engineering** | recurring loops with maturity levels (L1/L2/L3), human gates, action executors, token budgets, 7 production patterns | `harness-loop-engine` |
+| **Orchestration** | single-machine async Run: concurrent Job DAG + dependency gating + retry/backoff/dead-letter + dynamic replanning + run budget + resumable state | `harness-orchestrator` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK trigram) | `harness-core`, `harness-recall-sqlite` |
 | **Scheduler · MCP** | cron-style agent jobs · MCP server + client (`rmcp`) | `harness-scheduler`, `harness-mcp` |
@@ -73,6 +74,31 @@ Loops earn autonomy in stages — **L1 report** → **L2 assisted** (human gates
 every change) → **L3 unattended** (allowlisted actions only). After a verified
 L3 approval, an `ActionExecutor` performs the project-specific side effect
 (commit, PR, comment, patch, ticket update). See DESIGN.md §11.5.
+
+## Orchestration
+
+When one goal needs *many* steps that fan out and depend on each other,
+`harness-orchestrator` runs them as a concurrent **DAG of Jobs** — single
+machine, no Kafka:
+
+```rust
+use harness_orchestrator::{Dag, Job, Orchestrator, Run, SubagentJobRunner};
+
+// Three jobs run concurrently; `compare` waits for all three, gets their results.
+let dag = Dag::from_jobs([
+    Job::new("notion", "what is Notion best at?"),
+    Job::new("airtable", "what is Airtable best at?"),
+    Job::new("coda", "what is Coda best at?"),
+    Job::new("compare", "compare the three").with_deps(["notion", "airtable", "coda"]),
+]);
+let report = Orchestrator::new(Arc::new(SubagentJobRunner::new(model, ".")))
+    .run(Run::new("run-1", "compare tools", dag)).await;
+```
+
+Dependency gating + concurrency, per-job **retry/backoff/dead-letter**, a
+run-level **token budget**, **crash-resumable** state (`RunStore`), and
+**dynamic replanning** (a `Planner` mutates the DAG mid-run from results so
+far — the feedback edge a static workflow lacks). See DESIGN.md §11.6.
 
 ## For Agents
 
