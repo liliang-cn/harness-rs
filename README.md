@@ -4,24 +4,23 @@
 > turns an LLM into an autonomous agent. Any domain: research, ops, assistants,
 > data work, coding.
 
-A Rust framework for production-oriented AI agents, built on the *harness
-engineering* discipline (Böckeler/Thoughtworks, Lopopolo/OpenAI, 2026).
-Compile-time type-safe, deterministic-first, observable. Rationale in
-**[DESIGN.md](DESIGN.md)**.
+A Rust framework for production agents, built on the *harness engineering*
+discipline (Böckeler/Thoughtworks, Lopopolo/OpenAI, 2026). Compile-time
+type-safe, deterministic-first, observable, governance built in.
+Full rationale in **[DESIGN.md](DESIGN.md)**.
 
 ## What you get
 
 | Layer | What | Crate |
 |---|---|---|
-| **Models** | 3 protocol families — OpenAI-compat · Anthropic · Gemini — one `ApiKind::build(url, model, key)` | `harness-models` |
+| **Models** | 3 protocol families (OpenAI-compat · Anthropic · Gemini), one `ApiKind::build(url, model, key)` | `harness-models` |
 | **Tools** | fs · shell (risk-gated) · web search/fetch | `harness-tools-*` |
-| **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix + final synthesis | `harness-loop` |
-| **Loop engineering** | recurring loops with maturity levels (L1/L2/L3), human gates, action executors, token budgets, 7 production patterns | `harness-loop-engine` |
-| **Orchestration** | single-machine async Run: concurrent Job DAG + dependency gating + retry/backoff/dead-letter + dynamic replanning + run budget + resumable state | `harness-orchestrator` |
+| **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix | `harness-loop` |
+| **Loop engineering** | recurring loops: maturity levels L1/L2/L3, human gates, action executors, token budgets | `harness-loop-engine` |
+| **Orchestration** | async Run = concurrent Job DAG + retry/backoff + dynamic replanning + resumable state | `harness-orchestrator` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
-| **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK trigram) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP** | cron-style agent jobs · MCP server + client (`rmcp`) | `harness-scheduler`, `harness-mcp` |
-| **Compactor · Sandbox · Blueprint · CLI** | progressive compaction · git-worktree isolation · state machine · `harness` CLI | — |
+| **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
+| **Scheduler · MCP · Sandbox · CLI** | cron jobs · MCP server+client · git-worktree isolation · `harness` CLI | — |
 
 ## Quick start
 
@@ -52,81 +51,52 @@ async fn main() -> Result<(), harness::HarnessError> {
 
 Register tools/skills/guides/sensors/hooks with `#[harness::tool]` / `#[skill]`
 / `#[guide]` / `#[sensor]` / `#[hook]` — they auto-register via `inventory`.
-Scaffold with `harness new`. See **[examples/](examples/)**.
+Scaffold a new project with `harness new`.
 
-## Loop engineering
+## Three layers, composable
 
-When one agent run isn't enough — you want it to run on a cadence, verify
-itself, stay on budget, and escalate when unsure — `harness-loop-engine` gives
-you *trusted recurring loops*:
-
-```rust
-use harness_loop_engine::{LoopEngine, patterns};
-
-// A daily, report-only (L1) triage loop. Maker proposes, checker verifies,
-// the gate escalates, the budget caps spend, memory carries state forward.
-let report = LoopEngine::new(patterns::daily_triage(), model)
-    .with_maker_tool(read_only_tool)
-    .run_once().await;
-```
-
-Loops earn autonomy in stages — **L1 report** → **L2 assisted** (human gates
-every change) → **L3 unattended** (allowlisted actions only). After a verified
-L3 approval, an `ActionExecutor` performs the project-specific side effect
-(commit, PR, comment, patch, ticket update). See DESIGN.md §11.5.
-
-## Orchestration
-
-When one goal needs *many* steps that fan out and depend on each other,
-`harness-orchestrator` runs them as a concurrent **DAG of Jobs** — single
-machine, no Kafka:
+- **`harness-loop`** runs *one* agent (ReAct: think → call tools → observe).
+- **`harness-loop-engine`** governs a *recurring* loop: it earns autonomy in
+  stages — **L1 report** → **L2 assisted** (human gates every change) → **L3
+  unattended** (allowlisted actions only) — under a token budget, with an
+  `ActionExecutor` for the side effect after a verified approval.
+- **`harness-orchestrator`** fans *one goal* across many concurrent, dependent
+  Jobs (a DAG) with retry/backoff, a run budget, crash-resumable state, and
+  **dynamic replanning** (a `Planner` mutates the DAG mid-run from results).
 
 ```rust
 use harness_orchestrator::{Dag, Job, Orchestrator, Run, SubagentJobRunner};
 
-// Three jobs run concurrently; `compare` waits for all three, gets their results.
+// notion/airtable/coda run concurrently; `compare` waits for all three.
 let dag = Dag::from_jobs([
     Job::new("notion", "what is Notion best at?"),
     Job::new("airtable", "what is Airtable best at?"),
     Job::new("coda", "what is Coda best at?"),
-    Job::new("compare", "compare the three").with_deps(["notion", "airtable", "coda"]),
+    Job::new("compare", "compare them").with_deps(["notion", "airtable", "coda"]),
 ]);
 let report = Orchestrator::new(Arc::new(SubagentJobRunner::new(model, ".")))
     .run(Run::new("run-1", "compare tools", dag)).await;
 ```
 
-Dependency gating + concurrency, per-job **retry/backoff/dead-letter**, a
-run-level **token budget**, **crash-resumable** state (`RunStore`), and
-**dynamic replanning** (a `Planner` mutates the DAG mid-run from results so
-far — the feedback edge a static workflow lacks). See DESIGN.md §11.6.
+## Examples
 
-## For Agents
+See **[examples/](examples/)** — memory, recall, the scheduler, MCP, and two
+end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
+(concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
+dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
-Building or operating agents *with* harness, or landing in this repo as a
-coding agent? Start here:
+## Principles
 
-- **Map:** `harness-core` defines every trait (`Model`, `Tool`, `Memory`,
-  `Sensor`, `Guide`, `Hook`) with zero heavy deps — read it first. Everything
-  else builds on it; the dependency graph is in DESIGN.md §4.
-- **Add a tool/skill:** annotate a function with `#[harness::tool]` or
-  `#[skill]` — no registry edits, `inventory` collects it at link time.
-  Skills follow the [agentskills.io](https://agentskills.io/specification) spec.
-- **Pick a model:** always `ApiKind::{OpenAI,Anthropic,Gemini}.build(base_url,
-  model, key)`. There are **no hardcoded provider URLs** — pass `base_url`
-  yourself.
-- **Don't burn tokens on what code can do:** lint/format/git/file-moves run
-  deterministically via Sensors and Hooks, not the model. Context is scarce —
-  the Compactor manages it; don't stuff everything into one prompt.
-- **Isolate, don't interrupt:** permissions are burned in at sandbox spawn
+- **Don't burn tokens on what code can do** — lint/format/git run via Sensors
+  and Hooks, not the model. The Compactor manages scarce context.
+- **Isolate, don't interrupt** — permissions are burned in at sandbox spawn
   (`WorktreeSandbox` / `ContainerSandbox`), not prompted per call.
-- **Run loops responsibly:** unattended loops make unattended mistakes. Keep
-  `LoopSpec.intent` honest, start at L1, set a `TokenBudget`, graduate levels
-  only as you build trust. Verification stays on you.
+- **Earn autonomy in stages** — start at L1, set a budget, graduate only as you
+  build trust. Unattended loops make unattended mistakes; verification is on you.
 
 ## Status
 
-Latest: **v0.0.15** — new `harness-loop-engine` (loop engineering) + simplified,
-hardcoded-URL-free model API (`ApiKind`). History in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.18**. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 
