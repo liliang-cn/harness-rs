@@ -1,0 +1,28 @@
+[package]
+name = "harness-rs-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Single-machine async Run orchestrator for harness-rs: a concurrent DAG of sub-agent Jobs with dependency gating, per-job retry/backoff/dead-letter, dynamic replanning, a run-level token budget, and crash-resumable Run/Job state. Optional."
+
+[lib]
+name = "harness_orchestrator"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tokio           = { workspace = true }
+futures         = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+
+[dev-dependencies]
+harness-models = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

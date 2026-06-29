@@ -3,6 +3,34 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.17
+
+New **orchestration** layer: run one goal as a concurrent DAG of Jobs.
+
+### Added
+
+- **`harness-rs-orchestrator` — single-machine async Run orchestration.** A new
+  crate that fans one goal out across many concurrent, dependent Jobs — the
+  durable task fabric of an agent system, kept deliberately single-machine (no
+  Kafka, no worker pool, no distributed locks; just `tokio` + a state store):
+  - **Concurrent Job DAG** — a `Dag` of `Job`s; the `Orchestrator` runs every
+    Job whose dependencies have `Succeeded`, up to a concurrency cap, on one
+    thread via `FuturesUnordered` (sub-agent futures are `!Send`). Each Job
+    gets a fresh `World` from a factory for worker-style isolation.
+  - **Dynamic replanning** — a `Planner` is re-invoked with the results so far
+    and may merge new Jobs into the running DAG (`PlanDelta::Add`), the
+    feedback edge a static plan-then-execute workflow lacks.
+  - **Retry / backoff / dead-letter** — per-Job `RetryPolicy` with
+    `Backoff::{None, Fixed, Exponential}`; exhausted Jobs are `DeadLettered`
+    and their dependents `Cancelled`.
+  - **Resumable state** — a `RunStore` (`InMemoryRunStore` / `FileRunStore`)
+    persists Run + Job state after every transition; `Orchestrator::resume`
+    restarts a crashed Run from its succeeded results.
+  - **Run-level token budget** — `RunBudget` caps total spend across all Jobs.
+  - Up-front DAG **cycle rejection**. Execution is decoupled via the
+    `JobRunner` trait; the default `SubagentJobRunner` runs each Job as an
+    isolated sub-agent. See DESIGN.md §11.6 and `examples/orchestrator-demo`.
+
 ## 0.0.16
 
 New **loop-engineering** layer, plus a simplified, hardcoded-URL-free model API.

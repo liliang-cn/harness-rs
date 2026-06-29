@@ -95,15 +95,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Seed the workspace file "database".
     let seed = env2("EVAL_FILES", "TASK_SEED");
-    if !seed.is_empty() {
-        if let Ok(files) = serde_json::from_str::<HashMap<String, String>>(&seed) {
-            for (p, c) in files {
-                let full = ws.join(&p);
-                if let Some(parent) = full.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(full, c);
+    if !seed.is_empty()
+        && let Ok(files) = serde_json::from_str::<HashMap<String, String>>(&seed)
+    {
+        for (p, c) in files {
+            let full = ws.join(&p);
+            if let Some(parent) = full.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
+            let _ = std::fs::write(full, c);
         }
     }
 

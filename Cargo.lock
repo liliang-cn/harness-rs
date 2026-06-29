@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "ai-note"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "argon2",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "crate-keeper"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-caps-e2e"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "deepseek-hello"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "harness-rs",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "eval-bench"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "harness-rs",
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "harness-rs-context",
  "harness-rs-core",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-blueprint"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "futures",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-cli"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-compactor"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-context"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-core"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "futures",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-daemon"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-hooks"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "futures",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop-engine"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "chrono",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-macros"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp-client"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-models"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1053,8 +1053,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-rs-orchestrator"
+version = "0.0.17"
+dependencies = [
+ "async-trait",
+ "futures",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-loop",
+ "harness-rs-models",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "harness-rs-permissions"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "harness-rs-core",
  "serde",
@@ -1064,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-recall-sqlite"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1076,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sandbox"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1088,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-scheduler"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1106,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-common"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1115,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-rust"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1127,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-skills"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1144,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-templates"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "futures",
@@ -1162,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-fs"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1174,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-memory"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1187,7 +1204,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-shell"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1199,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-skills"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1211,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-tasks"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1227,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-web"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "async-trait",
  "harness-rs",
@@ -1585,7 +1602,7 @@ dependencies = [
 
 [[package]]
 name = "investor-bot"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1691,7 +1708,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loop-engine-demo"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "harness-rs-core",
@@ -1839,6 +1856,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orchestrator-demo"
+version = "0.0.17"
+dependencies = [
+ "anyhow",
+ "harness-rs-core",
+ "harness-rs-models",
+ "harness-rs-orchestrator",
+ "tokio",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1886,7 +1914,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-assistant"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "anyhow",
  "async-trait",
