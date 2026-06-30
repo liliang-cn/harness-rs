@@ -1,5 +1,7 @@
 # harness
 
+[![crates.io](https://img.shields.io/crates/v/harness-rs.svg)](https://crates.io/crates/harness-rs) [![license](https://img.shields.io/crates/l/harness-rs.svg)](#license)
+
 > **Agent = Model + Harness.** This is the *Harness* — the scaffolding that
 > turns an LLM into an autonomous agent. Any domain: research, ops, assistants,
 > data work, coding.
