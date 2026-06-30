@@ -35,6 +35,7 @@ members = [
     "examples/orchestrator-demo",
     "examples/ecommerce-analyst",
     "examples/ecommerce-ops-agent",
+    "examples/cortexdb-memory",
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",

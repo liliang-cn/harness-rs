@@ -1,0 +1,14 @@
+[package]
+name = "cortexdb-memory"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+harness-loop       = { workspace = true }
+harness-models     = { workspace = true }
+harness-core       = { workspace = true }
+harness-context    = { workspace = true }
+harness-mcp-client = { package = "harness-rs-mcp-client", path = "../../crates/harness-mcp-client" }
+anyhow             = { workspace = true }
+tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
