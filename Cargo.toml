@@ -10,6 +10,7 @@ members = [
     "crates/harness-loop",
     "crates/harness-loop-engine",
     "crates/harness-orchestrator",
+    "crates/harness-experience",
     "crates/harness-blueprint",
     "crates/harness-sandbox",
     "crates/harness-permissions",
@@ -65,6 +66,7 @@ harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness
 harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.18" }
 harness-loop-engine= { package = "harness-rs-loop-engine", path = "crates/harness-loop-engine", version = "0.0.18" }
 harness-orchestrator= { package = "harness-rs-orchestrator", path = "crates/harness-orchestrator", version = "0.0.18" }
+harness-experience = { package = "harness-rs-experience",   path = "crates/harness-experience",   version = "0.0.18" }
 harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.18" }
 harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.18" }
 harness-permissions= { package = "harness-rs-permissions",path = "crates/harness-permissions",version = "0.0.18" }
