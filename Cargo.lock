@@ -1117,6 +1117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-rs-experience"
+version = "0.0.18"
+dependencies = [
+ "async-trait",
+ "harness-rs-context",
+ "harness-rs-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "harness-rs-hooks"
 version = "0.0.18"
 dependencies = [
