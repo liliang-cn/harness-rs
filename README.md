@@ -20,6 +20,7 @@ Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix | `harness-loop` |
 | **Loop engineering** | recurring loops: maturity levels L1/L2/L3, human gates, action executors, token budgets | `harness-loop-engine` |
 | **Orchestration** | async Run = concurrent Job DAG + retry/backoff + dynamic replanning + resumable state | `harness-orchestrator` |
+| **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
 | **Scheduler · MCP · Sandbox · CLI** | cron jobs · MCP server+client · git-worktree isolation · `harness` CLI | — |
@@ -55,7 +56,7 @@ Register tools/skills/guides/sensors/hooks with `#[harness::tool]` / `#[skill]`
 / `#[guide]` / `#[sensor]` / `#[hook]` — they auto-register via `inventory`.
 Scaffold a new project with `harness new`.
 
-## Three layers, composable
+## Composable layers
 
 - **`harness-loop`** runs *one* agent (ReAct: think → call tools → observe).
 - **`harness-loop-engine`** governs a *recurring* loop: it earns autonomy in
@@ -65,6 +66,10 @@ Scaffold a new project with `harness new`.
 - **`harness-orchestrator`** fans *one goal* across many concurrent, dependent
   Jobs (a DAG) with retry/backoff, a run budget, crash-resumable state, and
   **dynamic replanning** (a `Planner` mutates the DAG mid-run from results).
+- **`harness-experience`** makes an agent *learn*: it records each run as an
+  episode (situation → tools used → outcome) and recalls similar past episodes
+  to guide the next run. Pair with **`harness-cortexdb`** (a CortexDB-backed
+  `Memory`) for semantic recall over a brain shared with Claude Code / Codex.
 
 ```rust
 use harness_orchestrator::{Dag, Job, Orchestrator, Run, SubagentJobRunner};
@@ -82,7 +87,8 @@ let report = Orchestrator::new(Arc::new(SubagentJobRunner::new(model, ".")))
 
 ## Examples
 
-See **[examples/](examples/)** — memory, recall, the scheduler, MCP, and two
+See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
+**`experience-cortexdb`** (the learning layer over a CortexDB brain), and two
 end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
 (concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
 dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
@@ -98,7 +104,7 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
 ## Status
 
-Latest: **v0.0.18**. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.20**. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 
