@@ -3,6 +3,14 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.20
+
+### Changed
+
+- **README** — documents the learning layer (`harness-experience` +
+  `harness-cortexdb`) and the `experience-cortexdb` example. Docs-only refresh;
+  no code changes.
+
 ## 0.0.19
 
 A **learning layer**: agents can now remember how they handled past situations
