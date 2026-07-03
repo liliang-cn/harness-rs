@@ -3,6 +3,28 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.19
+
+A **learning layer**: agents can now remember how they handled past situations
+and semantically recall that experience, backed by CortexDB.
+
+### Added
+
+- **`harness-rs-experience` — episodic learning layer.** Records each run as an
+  `Episode` (situation → tools used → outcome) and recalls similar past
+  episodes before the next run to guide it. Pieces: `Episode`, `ToolTrace` (a
+  `Hook` capturing the tools a run calls, in order), `ExperienceStore`
+  (record/recall over any `Memory`), `ExperienceGuide` (recall + inject each
+  turn), and `ExperienceRecorder` (wires them to an `AgentLoop`). Backend-
+  agnostic — semantic recall comes from a semantic `Memory` backend.
+- **`harness-rs-cortexdb` — CortexDB-backed `Memory`.** Implements
+  `harness_core::Memory` over CortexDB's MCP server (`memory_search` for
+  recall, `memory_save` for write); `tags` + `source` round-trip through
+  CortexDB `metadata`. Gives any harness agent **semantic recall** and a brain
+  that can be shared with Claude Code / Codex (the default `~/.cortexdb`
+  store). Pair with `harness-rs-experience` for a learning layer with real
+  semantic recall. See `examples/experience-cortexdb`.
+
 ## 0.0.18
 
 ### Fixed
