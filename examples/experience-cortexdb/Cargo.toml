@@ -1,0 +1,12 @@
+[package]
+name = "experience-cortexdb"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+harness-cortexdb   = { workspace = true }
+harness-experience = { workspace = true }
+harness-core       = { workspace = true }
+anyhow             = { workspace = true }
+tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }

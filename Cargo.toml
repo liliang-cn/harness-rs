@@ -11,6 +11,7 @@ members = [
     "crates/harness-loop-engine",
     "crates/harness-orchestrator",
     "crates/harness-experience",
+    "crates/harness-cortexdb",
     "crates/harness-blueprint",
     "crates/harness-sandbox",
     "crates/harness-permissions",
@@ -37,6 +38,7 @@ members = [
     "examples/ecommerce-analyst",
     "examples/ecommerce-ops-agent",
     "examples/cortexdb-memory",
+    "examples/experience-cortexdb",
     "examples/deepseek-hello",
     "examples/personal-assistant",
     "examples/investor-bot",
@@ -67,6 +69,8 @@ harness-loop       = { package = "harness-rs-loop",       path = "crates/harness
 harness-loop-engine= { package = "harness-rs-loop-engine", path = "crates/harness-loop-engine", version = "0.0.18" }
 harness-orchestrator= { package = "harness-rs-orchestrator", path = "crates/harness-orchestrator", version = "0.0.18" }
 harness-experience = { package = "harness-rs-experience",   path = "crates/harness-experience",   version = "0.0.18" }
+harness-cortexdb   = { package = "harness-rs-cortexdb",     path = "crates/harness-cortexdb",     version = "0.0.18" }
+harness-mcp-client = { package = "harness-rs-mcp-client",   path = "crates/harness-mcp-client",   version = "0.0.18" }
 harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.18" }
 harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.18" }
 harness-permissions= { package = "harness-rs-permissions",path = "crates/harness-permissions",version = "0.0.18" }
