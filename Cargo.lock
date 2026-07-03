@@ -780,6 +780,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "experience-cortexdb"
+version = "0.0.18"
+dependencies = [
+ "anyhow",
+ "harness-rs-core",
+ "harness-rs-cortexdb",
+ "harness-rs-experience",
+ "tokio",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1097,6 +1108,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "harness-rs-cortexdb"
+version = "0.0.18"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "harness-rs-context",
+ "harness-rs-core",
+ "harness-rs-mcp-client",
+ "serde_json",
  "tokio",
  "tracing",
 ]

@@ -1,0 +1,25 @@
+[package]
+name = "harness-rs-cortexdb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CortexDB-backed Memory for harness-rs: implements the harness-core Memory trait over CortexDB's MCP server (memory_save / memory_search), giving any harness agent semantic recall + a shared knowledge brain. Optional."
+
+[lib]
+name = "harness_cortexdb"
+
+[dependencies]
+harness-core       = { workspace = true }
+harness-context    = { workspace = true }
+harness-mcp-client = { workspace = true }
+async-trait        = { workspace = true }
+serde_json         = { workspace = true }
+anyhow             = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
