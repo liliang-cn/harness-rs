@@ -3,6 +3,19 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.21
+
+### Added
+
+- **`harness run "<prompt>"` — run an agent from the CLI.** The headline gap:
+  the CLI could scaffold, lint skills, print traces, and serve MCP, but it
+  couldn't actually *run* an agent. Now it can. Model comes from
+  `--model`/`--base-url` or the `HARNESS_*` / `DEEPSEEK_API_KEY` env vars.
+  **Read-only by default** (`ReadFile` + `ListDir`); opt into writes with
+  `--write` and the shell tool with `--shell`. Also: `--workspace`,
+  `--max-iters`, `--progress` (live stderr trace), and `--json` (dump the full
+  `Outcome`).
+
 ## 0.0.20
 
 ### Changed

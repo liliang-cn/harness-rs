@@ -56,6 +56,38 @@ enum Cmd {
         #[command(subcommand)]
         cmd: McpCmd,
     },
+    /// Run an agent against a prompt. Model from --model/--base-url or the
+    /// HARNESS_* / DEEPSEEK_API_KEY env vars. Read-only by default; opt into
+    /// writes with --write and shell with --shell.
+    Run {
+        /// The task / prompt for the agent.
+        prompt: String,
+        /// Agent world root — where fs tools read/write (default: current dir).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
+        #[arg(long)]
+        model: Option<String>,
+        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL, else
+        /// https://api.deepseek.com).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Max agent iterations (default: 12).
+        #[arg(long, default_value_t = 12)]
+        max_iters: u32,
+        /// Add write/edit filesystem tools (off by default — read-only).
+        #[arg(long)]
+        write: bool,
+        /// Add the risk-gated read-only shell tool.
+        #[arg(long)]
+        shell: bool,
+        /// Stream a live progress trace to stderr.
+        #[arg(long)]
+        progress: bool,
+        /// Print the full Outcome as JSON instead of just the final text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -197,7 +229,154 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Mcp {
             cmd: McpCmd::Serve { workspace, skills },
         } => run_mcp_server(workspace, skills).await,
+        Cmd::Run {
+            prompt,
+            workspace,
+            model,
+            base_url,
+            max_iters,
+            write,
+            shell,
+            progress,
+            json,
+        } => {
+            run_agent(RunOpts {
+                prompt,
+                workspace,
+                model,
+                base_url,
+                max_iters,
+                write,
+                shell,
+                progress,
+                json,
+            })
+            .await
+        }
     }
+}
+
+struct RunOpts {
+    prompt: String,
+    workspace: Option<PathBuf>,
+    model: Option<String>,
+    base_url: Option<String>,
+    max_iters: u32,
+    write: bool,
+    shell: bool,
+    progress: bool,
+    json: bool,
+}
+
+async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
+    use harness_core::Task;
+    use harness_loop::{AgentLoop, LiveProgressHook, Outcome};
+    use harness_models::OpenAiCompat;
+    use std::sync::Arc;
+
+    // Endpoint config: flags override env, env overrides sane defaults.
+    let key = std::env::var("HARNESS_API_KEY")
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+        .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY (or DEEPSEEK_API_KEY)"))?;
+    let base_url = opts
+        .base_url
+        .or_else(|| std::env::var("HARNESS_BASE_URL").ok())
+        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+    let model_id = opts
+        .model
+        .or_else(|| std::env::var("HARNESS_MODEL").ok())
+        .unwrap_or_else(|| "deepseek-chat".to_string());
+
+    let root = opts
+        .workspace
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let mut world = harness_context::default_world(root);
+
+    let model = OpenAiCompat::with_key(base_url, model_id, key);
+    let mut loop_ = AgentLoop::new(model)
+        .with_tool(Arc::new(harness_tools_fs::ReadFile))
+        .with_tool(Arc::new(harness_tools_fs::ListDir));
+    if opts.write {
+        loop_ = loop_
+            .with_tool(Arc::new(harness_tools_fs::WriteFile))
+            .with_tool(Arc::new(harness_tools_fs::EditFile));
+    }
+    if opts.shell {
+        loop_ = loop_.with_tool(Arc::new(harness_tools_shell::ShellRead));
+    }
+    if opts.progress {
+        loop_ = loop_.with_hook(Arc::new(LiveProgressHook::new()));
+    }
+
+    let task = Task {
+        description: opts.prompt,
+        source: None,
+        deadline: None,
+    };
+    let outcome = loop_
+        .run_with_max_iters(task, &mut world, opts.max_iters)
+        .await
+        .map_err(|e| anyhow::anyhow!("agent run failed: {e}"))?;
+
+    if opts.json {
+        // Best-effort structured dump of the outcome.
+        let (kind, text, iters, tools, ti, to) = match &outcome {
+            Outcome::Done {
+                text,
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                "done",
+                text.clone(),
+                *iters,
+                *tools_called,
+                usage.input_tokens,
+                usage.output_tokens,
+            ),
+            Outcome::BudgetExhausted {
+                last_text,
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                "budget_exhausted",
+                last_text.clone(),
+                *iters,
+                *tools_called,
+                usage.input_tokens,
+                usage.output_tokens,
+            ),
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "outcome": kind,
+                "text": text,
+                "iters": iters,
+                "tools_called": tools,
+                "input_tokens": ti,
+                "output_tokens": to,
+            })
+        );
+    } else {
+        match outcome {
+            Outcome::Done { text, .. } => {
+                println!("{}", text.unwrap_or_default().trim());
+            }
+            Outcome::BudgetExhausted {
+                last_text, iters, ..
+            } => {
+                eprintln!("(budget exhausted after {iters} iters)");
+                if let Some(t) = last_text {
+                    println!("{}", t.trim());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn run_mcp_server(workspace: Option<PathBuf>, skills: Option<PathBuf>) -> anyhow::Result<()> {
