@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Jail-safe filesystem tools (read_file, write_file, edit_file, list_dir) for harness-rs. Symlink-escape protection."
+description = "Jail-safe filesystem tools (read_file, write_file, edit_file, list_dir, grep, glob) for harness-rs. Symlink-escape protection."
 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
@@ -22,3 +22,5 @@ tokio        = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 once_cell    = { workspace = true }
+walkdir      = { workspace = true }
+regex        = { workspace = true }

@@ -23,7 +23,7 @@ Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · git-worktree isolation · `harness run` / `sched` / `new` / `mcp serve` | — |
+| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · git-worktree isolation · `harness code` / `run` / `sched` / `new` / `mcp serve` | — |
 
 ## Quick start
 
@@ -88,8 +88,10 @@ let report = Orchestrator::new(Arc::new(SubagentJobRunner::new(model, ".")))
 ## Examples
 
 See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
-**`experience-cortexdb`** (the learning layer over a CortexDB brain), and two
-end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
+**`experience-cortexdb`** (the learning layer over a CortexDB brain),
+**`cap`** (a coding agent reimplementing [oh-my-pi](https://github.com/can1357/oh-my-pi)'s
+**hashline editing** — content-hash line anchors instead of line numbers), and
+two end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
 (concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
 dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
@@ -101,6 +103,19 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
   (`WorktreeSandbox` / `ContainerSandbox`), not prompted per call.
 - **Earn autonomy in stages** — start at L1, set a budget, graduate only as you
   build trust. Unattended loops make unattended mistakes; verification is on you.
+
+## Coding agent
+
+`harness code` is an interactive, opencode-style coding REPL built entirely on
+the framework above — multi-turn, streaming, with read/write/edit/list/grep/glob
+and shell tools. It runs in **NORMAL** mode (every write, edit, and shell command
+waits for a `y/N` you approve) or **`--yolo`** (unattended). A single Rust binary,
+any OpenAI-compatible model:
+
+```sh
+HARNESS_API_KEY=… HARNESS_BASE_URL=… HARNESS_MODEL=… harness code            # NORMAL
+harness code --yolo --workspace .                                            # YOLO
+```
 
 ## Benchmarks
 
@@ -122,9 +137,10 @@ per-task cost fields for cross-framework comparison.
 
 ## Status
 
-Latest: **v0.0.22** — `harness sched` (schedule agents from the CLI), real
-`RUST_LOG` tracing in the CLI, per-crate docs, and measured benchmarks. Full
-history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.23** — `harness code` (interactive coding agent), `grep`/`glob`
+fs tools, and **[`examples/cap`](examples/cap)** — a full coding agent (hashline
+editing, subagents, memory, persistent-LSP, MCP, skills, model routing, sessions)
+with both a CLI and a ratatui TUI. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 

@@ -3,6 +3,64 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.23
+
+### Added
+
+- **`harness code` — an interactive coding agent (opencode-style), built on the
+  framework.** A multi-turn REPL with streaming output and read/write/edit/list/
+  grep/glob + shell tools. Two modes: **NORMAL** (default) gates every mutating
+  action — `write_file`, `edit_file`, `shell_exec` — behind a `y/N` prompt,
+  surfacing a rejection back to the model (via `HookOutcome::Deny`) so it adapts;
+  **`--yolo`** runs unattended. Conversation continuity across turns via
+  `run_with_seed_history`; the whole terminal UX (token streaming + tool activity
+  lines + approval) is one `Hook`. Verified live against `deepseek-v4-flash`
+  (approve, decline, and YOLO paths).
+- **`grep` and `glob` tools** in `harness-rs-tools-fs` — regex content search and
+  path-glob file finding (`*`, `**`, `?`), both read-only, skipping `.git` /
+  `target` / `node_modules` / `.venv`. So code search never trips the approval
+  gate.
+- **`examples/cap`** — a coding agent that reimplements the core of
+  [oh-my-pi](https://github.com/can1357/oh-my-pi): **hashline editing**
+  (content-hash line anchors instead of line numbers — stable under churn,
+  batch-safe, duplicate-proof; dependency-free core with 8 unit tests). Wired on
+  harness as two `Tool`s (`hash_read` / `hash_edit`), a workspace `Guide`, and a
+  preview-then-approve `Hook` (`y`/`N`/`a`=always). Plus three IDE-grade
+  extensions, all on framework primitives and verified live against
+  `deepseek-v4-pro`:
+  - **`task` subagent fan-out** — one isolated, read-only `Subagent` per
+    subtask, run concurrently, returning a structured report array.
+  - **Hindsight memory** — `harness-experience` records situation → tools used →
+    outcome each turn; a fresh process recalls it (CortexDB semantic recall when
+    available, else a local `~/.cap/experience.jsonl`).
+  - **LSP diagnostics `Sensor`** — opt-in `CAP_LSP=<server>`; a **persistent**
+    LSP client (its own codec tests) keeps the server warm and re-checks each
+    edited file via `didChange`, feeding diagnostics back — errors block so the
+    agent self-corrects (verified end-to-end with `gopls` catching a real type
+    error).
+  - **MCP tools** — `CAP_MCP="<command>"` connects any external MCP server via
+    `harness-mcp-client` and mounts its tools into the loop; mutating MCP tools
+    pass through the approval gate (verified calling `shell_read` over MCP from a
+    second `harness mcp serve` process).
+  - **Skills** — reusable procedures at `~/.cap/skills`: a `SkillCatalog`
+    `Guide` lists them each session, `skill_read` loads one on demand, and
+    `skill_manage` authors new ones — cross-session procedural memory (verified:
+    one run authors a skill, a fresh run discovers and applies it).
+  - **Model routing** — a strong planner (`HARNESS_MODEL`) drives the main loop;
+    a fast worker (`CAP_WORKER_MODEL`) drives the `task` fan-out subagents (same
+    endpoint/key). Verified with planner `deepseek-v4-pro` + worker
+    `deepseek-v4-flash`.
+  - **Sessions** — conversations persist to `~/.cap/sessions/<id>.json`;
+    `--continue` resumes the latest for the workspace, `--resume <id|path>` a
+    specific one, `--session <name>` a named one, `--sessions` lists them
+    (verified: a secret told in one process is recalled in a fresh one). The CLI
+    moved to **clap**.
+  - **Split into a library + two front-ends** — `cap` is now a `cap` library
+    crate plus two binaries sharing it: **`cap`** (CLI/REPL) and **`cap-tui`** (a
+    standalone **ratatui** TUI — scrolling conversation, live streaming, tool
+    feed; the agent runs on its own thread bridged to the render loop by a hook).
+    The front-ends differ only by their UI hook.
+
 ## 0.0.22
 
 ### Added
