@@ -1,0 +1,43 @@
+[package]
+name = "cap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "CAP — Computer-Aided Programming: oh-my-pi's hashline editing core, reimplemented on harness-rs"
+
+[lib]
+name = "cap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cap"
+path = "src/bin/cap.rs"
+
+[[bin]]
+name = "cap-tui"
+path = "src/bin/cap-tui.rs"
+
+[dependencies]
+harness-core       = { workspace = true }
+harness-loop       = { workspace = true }
+harness-models     = { workspace = true }
+harness-context    = { workspace = true }
+harness-tools-fs   = { workspace = true }
+harness-skills     = { workspace = true }
+harness-tools-skills = { workspace = true }
+harness-experience = { workspace = true }
+harness-cortexdb   = { workspace = true }
+harness-mcp-client = { workspace = true }
+async-trait        = { workspace = true }
+clap               = { workspace = true }
+tokio              = { workspace = true }
+anyhow             = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+futures            = { workspace = true }
+# TUI front-end only
+ratatui            = "0.29"
+crossterm          = "0.28"

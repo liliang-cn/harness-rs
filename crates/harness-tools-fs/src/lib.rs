@@ -336,7 +336,255 @@ impl Tool for EditFile {
     }
 }
 
+// ---------- grep (regex search across files) ----------
+
+#[derive(Deserialize)]
+struct GrepArgs {
+    pattern: String,
+    #[serde(default)]
+    path: Option<String>,
+    /// Only search files whose name matches this glob (e.g. "*.rs").
+    #[serde(default)]
+    include: Option<String>,
+    #[serde(default)]
+    max_results: Option<usize>,
+}
+
+pub struct Grep;
+static GREP_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
+    name: "grep".into(),
+    description: "Search file contents by regular expression across the workspace. \
+                  Returns matching `path:line:text`. Skips .git, target, node_modules \
+                  and binary/non-UTF-8 files."
+        .into(),
+    input: json!({
+        "type": "object",
+        "properties": {
+            "pattern":     {"type": "string", "description": "Rust regex."},
+            "path":        {"type": "string", "description": "Subdirectory to search (default: repo root)."},
+            "include":     {"type": "string", "description": "Glob for file names, e.g. \"*.rs\"."},
+            "max_results": {"type": "integer", "minimum": 1, "description": "Cap matches (default 200)."}
+        },
+        "required": ["pattern"]
+    }),
+});
+
+#[async_trait]
+impl Tool for Grep {
+    fn name(&self) -> &str {
+        "grep"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &GREP_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
+
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        world: &mut World,
+    ) -> Result<ToolResult, ToolError> {
+        let a: GrepArgs = serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e.to_string(),
+        })?;
+        let re = regex::Regex::new(&a.pattern).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: format!("bad regex: {e}"),
+        })?;
+        let include = a
+            .include
+            .as_deref()
+            .map(glob_to_regex)
+            .transpose()
+            .map_err(|e| ToolError::InvalidArgs {
+                name: self.name().into(),
+                reason: e,
+            })?;
+        let base = match &a.path {
+            Some(p) if !p.is_empty() => resolve(&world.repo.root, p)?,
+            _ => world.repo.root.clone(),
+        };
+        verify_no_symlink_escape(&world.repo.root, &base)?;
+        let cap = a.max_results.unwrap_or(200);
+
+        let mut matches = Vec::new();
+        'walk: for entry in walk_files(&base) {
+            if let Some(inc) = &include {
+                let fname = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !inc.is_match(fname) {
+                    continue;
+                }
+            }
+            let Ok(content) = std::fs::read_to_string(&entry) else {
+                continue; // binary / non-UTF-8
+            };
+            let rel = entry
+                .strip_prefix(&world.repo.root)
+                .unwrap_or(&entry)
+                .display()
+                .to_string();
+            for (i, line) in content.lines().enumerate() {
+                if re.is_match(line) {
+                    let mut text = line.trim_end().to_string();
+                    if text.len() > 300 {
+                        text.truncate(300);
+                    }
+                    matches.push(json!({ "path": rel, "line": i + 1, "text": text }));
+                    if matches.len() >= cap {
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        let hits = matches.len();
+        Ok(ToolResult {
+            ok: true,
+            content: json!({ "matches": matches, "count": hits, "capped": hits >= cap }),
+            trace: None,
+        })
+    }
+}
+
+// ---------- glob (find files by path pattern) ----------
+
+#[derive(Deserialize)]
+struct GlobArgs {
+    pattern: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    max_results: Option<usize>,
+}
+
+pub struct Glob;
+static GLOB_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
+    name: "glob".into(),
+    description: "Find files by path glob (supports `*`, `**`, `?`), e.g. \"**/*.rs\" or \
+                  \"src/*.toml\". Returns matching paths. Skips .git, target, node_modules."
+        .into(),
+    input: json!({
+        "type": "object",
+        "properties": {
+            "pattern":     {"type": "string", "description": "Glob against the path relative to `path`."},
+            "path":        {"type": "string", "description": "Base subdirectory (default: repo root)."},
+            "max_results": {"type": "integer", "minimum": 1, "description": "Cap paths (default 500)."}
+        },
+        "required": ["pattern"]
+    }),
+});
+
+#[async_trait]
+impl Tool for Glob {
+    fn name(&self) -> &str {
+        "glob"
+    }
+    fn schema(&self) -> &ToolSchema {
+        &GLOB_SCHEMA
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::ReadOnly
+    }
+
+    async fn invoke(
+        &self,
+        args: serde_json::Value,
+        world: &mut World,
+    ) -> Result<ToolResult, ToolError> {
+        let a: GlobArgs = serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e.to_string(),
+        })?;
+        let re = glob_to_regex(&a.pattern).map_err(|e| ToolError::InvalidArgs {
+            name: self.name().into(),
+            reason: e,
+        })?;
+        let base = match &a.path {
+            Some(p) if !p.is_empty() => resolve(&world.repo.root, p)?,
+            _ => world.repo.root.clone(),
+        };
+        verify_no_symlink_escape(&world.repo.root, &base)?;
+        let cap = a.max_results.unwrap_or(500);
+
+        let mut paths = Vec::new();
+        for entry in walk_files(&base) {
+            // Match the glob against the path relative to the search base.
+            let rel_to_base = entry.strip_prefix(&base).unwrap_or(&entry);
+            if re.is_match(&rel_to_base.to_string_lossy()) {
+                let rel = entry
+                    .strip_prefix(&world.repo.root)
+                    .unwrap_or(&entry)
+                    .display()
+                    .to_string();
+                paths.push(rel);
+                if paths.len() >= cap {
+                    break;
+                }
+            }
+        }
+        paths.sort();
+        let n = paths.len();
+        Ok(ToolResult {
+            ok: true,
+            content: json!({ "paths": paths, "count": n, "capped": n >= cap }),
+            trace: None,
+        })
+    }
+}
+
 // ---------- helpers ----------
+
+/// Walk regular files under `base`, skipping VCS/build/vendor noise directories.
+fn walk_files(base: &Path) -> impl Iterator<Item = PathBuf> {
+    walkdir::WalkDir::new(base)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !matches!(name.as_ref(), ".git" | "target" | "node_modules" | ".venv")
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+}
+
+/// Compile a shell-style glob (`*`, `**`, `?`) into an anchored regex that
+/// matches a whole path string. `*` stays within a path segment; `**` crosses
+/// segment boundaries.
+fn glob_to_regex(glob: &str) -> Result<regex::Regex, String> {
+    let mut re = String::with_capacity(glob.len() * 2);
+    re.push('^');
+    let bytes = glob.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'*' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    // `**` — any chars including `/`. Absorb an optional trailing slash.
+                    re.push_str(".*");
+                    i += 2;
+                    if i < bytes.len() && bytes[i] == b'/' {
+                        i += 1;
+                    }
+                    continue;
+                }
+                re.push_str("[^/]*");
+            }
+            b'?' => re.push_str("[^/]"),
+            // regex metacharacters that are literal in a glob
+            b'.' | b'+' | b'(' | b')' | b'|' | b'[' | b']' | b'{' | b'}' | b'^' | b'$' | b'\\' => {
+                re.push('\\');
+                re.push(bytes[i] as char);
+            }
+            c => re.push(c as char),
+        }
+        i += 1;
+    }
+    re.push('$');
+    regex::Regex::new(&re).map_err(|e| format!("bad glob {glob:?}: {e}"))
+}
 
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
     let p = Path::new(rel);
@@ -577,5 +825,102 @@ mod tests {
             matches!(res, Err(ToolError::Permission(_))),
             "symlink escape was not blocked: {res:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn grep_finds_matches_with_include_filter() {
+        let (_td, mut w) = tmp_world();
+        WriteFile
+            .invoke(
+                json!({"path": "a.rs", "content": "fn main() {}\nlet todo = 1; // TODO fix\n"}),
+                &mut w,
+            )
+            .await
+            .unwrap();
+        WriteFile
+            .invoke(
+                json!({"path": "b.txt", "content": "TODO in text\n"}),
+                &mut w,
+            )
+            .await
+            .unwrap();
+
+        // Search everything for TODO → both files.
+        let out = Grep
+            .invoke(json!({"pattern": "TODO"}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(out.content["count"], 2, "{:?}", out.content);
+
+        // Restrict to *.rs → only a.rs, and the line number is reported.
+        let out = Grep
+            .invoke(json!({"pattern": "TODO", "include": "*.rs"}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(out.content["count"], 1);
+        assert_eq!(out.content["matches"][0]["path"], "a.rs");
+        assert_eq!(out.content["matches"][0]["line"], 2);
+    }
+
+    #[tokio::test]
+    async fn glob_matches_recursively_and_skips_noise() {
+        let (_td, mut w) = tmp_world();
+        WriteFile
+            .invoke(json!({"path": "src/main.rs", "content": "x"}), &mut w)
+            .await
+            .unwrap();
+        WriteFile
+            .invoke(json!({"path": "src/lib.rs", "content": "x"}), &mut w)
+            .await
+            .unwrap();
+        WriteFile
+            .invoke(json!({"path": "Cargo.toml", "content": "x"}), &mut w)
+            .await
+            .unwrap();
+        // A file under a noise dir must be excluded from the walk.
+        WriteFile
+            .invoke(
+                json!({"path": "target/debug/ghost.rs", "content": "x"}),
+                &mut w,
+            )
+            .await
+            .unwrap();
+
+        let out = Glob
+            .invoke(json!({"pattern": "**/*.rs"}), &mut w)
+            .await
+            .unwrap();
+        let paths: Vec<String> = out.content["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect();
+        assert!(paths.contains(&"src/main.rs".to_string()));
+        assert!(paths.contains(&"src/lib.rs".to_string()));
+        assert!(
+            !paths.iter().any(|p| p.contains("target")),
+            "target/ should be skipped: {paths:?}"
+        );
+        assert!(!paths.contains(&"Cargo.toml".to_string()));
+    }
+
+    #[test]
+    fn glob_to_regex_segment_vs_crossing() {
+        // `*` stays within a segment; `**` crosses `/`.
+        let star = glob_to_regex("*.rs").unwrap();
+        assert!(star.is_match("main.rs"));
+        assert!(!star.is_match("src/main.rs"));
+
+        let dstar = glob_to_regex("**/*.rs").unwrap();
+        assert!(dstar.is_match("src/main.rs"));
+        assert!(dstar.is_match("a/b/c.rs"));
+        // `**/` absorbs zero dirs too.
+        assert!(dstar.is_match("main.rs"));
+
+        // Dots are literal, not "any char".
+        let toml = glob_to_regex("*.toml").unwrap();
+        assert!(toml.is_match("Cargo.toml"));
+        assert!(!toml.is_match("Cargoxtoml"));
     }
 }

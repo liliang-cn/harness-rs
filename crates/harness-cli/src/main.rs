@@ -95,6 +95,27 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SchedCmd,
     },
+    /// Interactive coding agent — a multi-turn REPL with file, search, and
+    /// shell tools, streaming output. NORMAL mode gates every write/shell behind
+    /// a y/N prompt; `--yolo` runs unattended (no approval). `/exit` to quit.
+    Code {
+        /// Workspace root the agent reads/writes/searches (default: current dir).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
+        #[arg(long)]
+        model: Option<String>,
+        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Max agent iterations per turn (default: 30 — coding needs headroom).
+        #[arg(long, default_value_t = 30)]
+        max_iters: u32,
+        /// YOLO: skip the approval gate — apply writes/edits/shell with no
+        /// confirmation. Default is NORMAL (confirm each mutating action).
+        #[arg(long)]
+        yolo: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -337,6 +358,13 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Cmd::Sched { cmd } => run_sched(cmd).await,
+        Cmd::Code {
+            workspace,
+            model,
+            base_url,
+            max_iters,
+            yolo,
+        } => run_code(workspace, model, base_url, max_iters, yolo).await,
     }
 }
 
@@ -449,6 +477,204 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+// ------------------------------------------------------------------
+// `harness code` — interactive coding-agent REPL
+// ------------------------------------------------------------------
+
+/// One hook drives the whole terminal UX: it streams the model's text to
+/// stdout token-by-token, prints a compact activity line before each tool call,
+/// and — in NORMAL mode — blocks on a y/N prompt before any mutating tool runs,
+/// returning `Deny` (which the loop surfaces to the model) if the user declines.
+struct ReplHook {
+    yolo: bool,
+}
+
+impl harness_core::Hook for ReplHook {
+    fn name(&self) -> &str {
+        "repl-ui"
+    }
+    fn matches(&self, ev: &harness_core::Event<'_>) -> bool {
+        matches!(
+            ev,
+            harness_core::Event::ModelTokenDelta { .. } | harness_core::Event::PreToolUse { .. }
+        )
+    }
+    fn fire(
+        &self,
+        ev: &harness_core::Event<'_>,
+        _w: &mut harness_core::World,
+    ) -> harness_core::HookOutcome {
+        use harness_core::{Event, HookOutcome};
+        use std::io::Write;
+        match ev {
+            Event::ModelTokenDelta { text } => {
+                print!("{text}");
+                let _ = std::io::stdout().flush();
+                HookOutcome::Allow
+            }
+            Event::PreToolUse { action } => {
+                let risky = matches!(
+                    action.tool.as_str(),
+                    "write_file" | "edit_file" | "shell_exec"
+                );
+                // Dim activity line to stderr so it doesn't pollute streamed text.
+                eprintln!(
+                    "\n  \x1b[2m⚙ {}{}\x1b[0m",
+                    action.tool,
+                    fmt_tool_args(&action.tool, &action.args)
+                );
+                if self.yolo || !risky {
+                    return HookOutcome::Allow;
+                }
+                eprint!("  apply this {}? [y/N] ", action.tool);
+                let _ = std::io::stderr().flush();
+                let mut line = String::new();
+                let ok = std::io::stdin().read_line(&mut line).is_ok()
+                    && matches!(line.trim(), "y" | "Y" | "yes");
+                if ok {
+                    HookOutcome::Allow
+                } else {
+                    eprintln!("  \x1b[33m✗ skipped\x1b[0m");
+                    HookOutcome::Deny {
+                        reason: format!(
+                            "user declined the {} action; do not retry it — ask or try another approach",
+                            action.tool
+                        ),
+                    }
+                }
+            }
+            _ => HookOutcome::Allow,
+        }
+    }
+}
+
+/// Compact, human-readable one-liner for a tool call's args.
+fn fmt_tool_args(tool: &str, args: &serde_json::Value) -> String {
+    let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let trunc = |t: &str, n: usize| {
+        let t = t.replace('\n', "⏎");
+        if t.chars().count() > n {
+            format!("{}…", t.chars().take(n).collect::<String>())
+        } else {
+            t
+        }
+    };
+    match tool {
+        "write_file" => format!(" {} ({} bytes)", s("path"), s("content").len()),
+        "edit_file" => format!(
+            " {}  {:?}→{:?}",
+            s("path"),
+            trunc(s("old_string"), 30),
+            trunc(s("new_string"), 30)
+        ),
+        "shell_exec" | "shell_read" => format!(" $ {}", trunc(s("command"), 80)),
+        "read_file" | "list_dir" | "glob" => format!(" {}", s("path")),
+        "grep" => format!(" /{}/ {}", trunc(s("pattern"), 40), s("path")),
+        _ => format!(" {}", trunc(&args.to_string(), 80)),
+    }
+}
+
+async fn run_code(
+    workspace: Option<PathBuf>,
+    model: Option<String>,
+    base_url: Option<String>,
+    max_iters: u32,
+    yolo: bool,
+) -> anyhow::Result<()> {
+    use harness_core::{Block, Task, Turn, TurnRole};
+    use harness_loop::{AgentLoop, Outcome};
+    use harness_models::OpenAiCompat;
+    use std::io::Write;
+    use std::sync::Arc;
+
+    let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
+    let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
+    let mut world = harness_context::default_world(root.clone());
+    let model = OpenAiCompat::with_key(base_url, model_id.clone(), key);
+
+    let loop_ = AgentLoop::new(model)
+        .with_streaming(true)
+        .with_tool(Arc::new(harness_tools_fs::ReadFile))
+        .with_tool(Arc::new(harness_tools_fs::ListDir))
+        .with_tool(Arc::new(harness_tools_fs::Grep))
+        .with_tool(Arc::new(harness_tools_fs::Glob))
+        .with_tool(Arc::new(harness_tools_fs::WriteFile))
+        .with_tool(Arc::new(harness_tools_fs::EditFile))
+        .with_tool(Arc::new(harness_tools_shell::ShellRead))
+        .with_tool(Arc::new(harness_tools_shell::ShellExec))
+        .with_hook(Arc::new(ReplHook { yolo }));
+
+    let mode = if yolo {
+        "\x1b[31mYOLO\x1b[0m (no approval)"
+    } else {
+        "\x1b[32mNORMAL\x1b[0m (approve writes)"
+    };
+    println!(
+        "\x1b[1mharness code\x1b[0m — {model_id}  ·  {}  ·  {mode}",
+        root.display()
+    );
+    println!("tools: read · write · edit · list · grep · glob · shell    /reset · /exit\n");
+
+    let mut seed: Vec<Turn> = Vec::new();
+    let stdin = std::io::stdin();
+    loop {
+        print!("\x1b[1;36m› \x1b[0m");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break; // EOF / Ctrl-D
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        match input {
+            "/exit" | "/quit" | ":q" => break,
+            "/reset" => {
+                seed.clear();
+                println!("\x1b[2m(context cleared)\x1b[0m");
+                continue;
+            }
+            _ => {}
+        }
+
+        let task = Task {
+            description: input.to_string(),
+            source: None,
+            deadline: None,
+        };
+        let outcome = loop_
+            .run_with_seed_history(task, seed.clone(), &mut world, max_iters)
+            .await;
+        println!(); // terminate the streamed line
+        let reply = match outcome {
+            Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),
+            Ok(Outcome::BudgetExhausted {
+                last_text, iters, ..
+            }) => {
+                eprintln!("\x1b[33m(stopped at {iters}-iter budget)\x1b[0m");
+                last_text.unwrap_or_default()
+            }
+            Err(e) => {
+                eprintln!("\x1b[31merror:\x1b[0m {e}");
+                continue;
+            }
+        };
+        // Grow the conversation so the next turn has context. Files on disk are
+        // the real shared state; this keeps the dialogue coherent.
+        seed.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text(input.to_string())],
+        });
+        seed.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::Text(reply)],
+        });
+    }
+    println!("bye.");
     Ok(())
 }
 
