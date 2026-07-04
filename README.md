@@ -23,7 +23,7 @@ Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP · Sandbox · CLI** | cron jobs · MCP server+client · git-worktree isolation · `harness run` / `new` / `mcp serve` | — |
+| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · git-worktree isolation · `harness run` / `sched` / `new` / `mcp serve` | — |
 
 ## Quick start
 
@@ -102,9 +102,29 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 - **Earn autonomy in stages** — start at L1, set a budget, graduate only as you
   build trust. Unattended loops make unattended mistakes; verification is on you.
 
+## Benchmarks
+
+Measured cost on a fixed task set — `deepseek-v4-flash` via Aliyun MaaS,
+2026-07-04. Every task finished (`Done`) with side effects verified
+(`sum.txt` = 42, etc.). Reproduce any row with `harness run "<task>" --json`:
+
+| task | iters | tool calls | in tok | out tok |
+|---|--:|--:|--:|--:|
+| list a directory | 2 | 1 | 975 | 103 |
+| read a file, then answer | 2 | 1 | 992 | 130 |
+| create a file | 2 | 1 | 1350 | 107 |
+| read → sum numbers → write result | 3 | 2 | 2336 | 260 |
+
+File writes go through the `write_file` **tool** (small structured args), not the
+model re-emitting whole file bodies each turn — "don't burn tokens on what code
+can do", measured rather than asserted. `cargo run -p eval-bench` emits the same
+per-task cost fields for cross-framework comparison.
+
 ## Status
 
-Latest: **v0.0.21** — `harness run` (run an agent from the CLI). Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.22** — `harness sched` (schedule agents from the CLI), real
+`RUST_LOG` tracing in the CLI, per-crate docs, and measured benchmarks. Full
+history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 

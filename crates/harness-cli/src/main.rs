@@ -88,6 +88,89 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Schedule agents to run on a recurring schedule. Jobs persist to a JSON
+    /// file (default ~/.harness/jobs.json). `serve` runs the tick loop; `run`
+    /// fires every due job once (for an external cron); the rest are CRUD.
+    Sched {
+        #[command(subcommand)]
+        cmd: SchedCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SchedCmd {
+    /// Add a scheduled job.
+    Add {
+        /// Human-readable name (shown in listings and delivered output).
+        name: String,
+        /// Schedule: "daily 08:00" | "weekly mon 09:30" | "every 15m".
+        schedule: String,
+        /// The agent prompt to run each time the job fires.
+        prompt: String,
+        /// Delivery channel: "stdout" (default) or "email" (needs RESEND_API_KEY).
+        #[arg(long, default_value = "stdout")]
+        channel: String,
+        /// Channel recipient (email address, chat id, …) when relevant.
+        #[arg(long)]
+        target: Option<String>,
+        /// Jobs store file (default: ~/.harness/jobs.json).
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// List all scheduled jobs.
+    List {
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// Remove a job by id.
+    Rm {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// Enable a job by id.
+    Enable {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// Disable a job by id (kept in the store, skipped when due).
+    Disable {
+        id: String,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// Fire every currently-due job once, then exit. Point an OS cron at this.
+    Run {
+        #[arg(long)]
+        store: Option<PathBuf>,
+        /// Agent world root (default: current dir).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
+        #[arg(long)]
+        model: Option<String>,
+        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL).
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Run the scheduler loop forever, ticking on an interval.
+    Serve {
+        #[arg(long)]
+        store: Option<PathBuf>,
+        /// Agent world root (default: current dir).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
+        #[arg(long)]
+        model: Option<String>,
+        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Tick interval in seconds (default: 60).
+        #[arg(long, default_value_t = 60)]
+        tick: u64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -253,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await
         }
+        Cmd::Sched { cmd } => run_sched(cmd).await,
     }
 }
 
@@ -274,18 +358,7 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     use harness_models::OpenAiCompat;
     use std::sync::Arc;
 
-    // Endpoint config: flags override env, env overrides sane defaults.
-    let key = std::env::var("HARNESS_API_KEY")
-        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
-        .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY (or DEEPSEEK_API_KEY)"))?;
-    let base_url = opts
-        .base_url
-        .or_else(|| std::env::var("HARNESS_BASE_URL").ok())
-        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
-    let model_id = opts
-        .model
-        .or_else(|| std::env::var("HARNESS_MODEL").ok())
-        .unwrap_or_else(|| "deepseek-chat".to_string());
+    let (base_url, model_id, key) = resolve_endpoint(opts.model, opts.base_url)?;
 
     let root = opts
         .workspace
@@ -377,6 +450,177 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Resolve (base_url, model_id, api_key) from flags → env → defaults. Shared by
+/// `run` and `sched`. Flags override env; env overrides sane defaults.
+fn resolve_endpoint(
+    model: Option<String>,
+    base_url: Option<String>,
+) -> anyhow::Result<(String, String, String)> {
+    let key = std::env::var("HARNESS_API_KEY")
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+        .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY (or DEEPSEEK_API_KEY)"))?;
+    let base_url = base_url
+        .or_else(|| std::env::var("HARNESS_BASE_URL").ok())
+        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+    let model_id = model
+        .or_else(|| std::env::var("HARNESS_MODEL").ok())
+        .unwrap_or_else(|| "deepseek-chat".to_string());
+    Ok((base_url, model_id, key))
+}
+
+/// Default jobs store: `~/.harness/jobs.json` (or `./harness-jobs.json` if HOME
+/// is unset). Overridable per-command with `--store`.
+fn sched_store_path(explicit: Option<PathBuf>) -> PathBuf {
+    if let Some(p) = explicit {
+        return p;
+    }
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join(".harness").join("jobs.json"),
+        None => PathBuf::from("harness-jobs.json"),
+    }
+}
+
+async fn run_sched(cmd: SchedCmd) -> anyhow::Result<()> {
+    use harness_daemon::Schedule;
+    use harness_scheduler::{FileJobStore, Job, JobStore};
+
+    match cmd {
+        SchedCmd::Add {
+            name,
+            schedule,
+            prompt,
+            channel,
+            target,
+            store,
+        } => {
+            // Validate the schedule up front so a typo fails now, not at fire time.
+            let parsed = Schedule::parse(&schedule)
+                .map_err(|e| anyhow::anyhow!("bad schedule {schedule:?}: {e}"))?;
+            let store = FileJobStore::open(sched_store_path(store))?;
+            let now = chrono::Local::now();
+            let next = parsed.next_after(now).timestamp_millis();
+            let job = Job::new(name, schedule, prompt, channel, now.timestamp_millis())
+                .with_target(target)
+                .with_next_run(Some(next));
+            let id = job.id.clone();
+            store.add(&job).await?;
+            println!("✓ added job {id}  (next run: {})", parsed.next_after(now));
+            Ok(())
+        }
+        SchedCmd::List { store } => {
+            let store = FileJobStore::open(sched_store_path(store))?;
+            let jobs = store.list().await?;
+            if jobs.is_empty() {
+                println!("(no scheduled jobs)");
+                return Ok(());
+            }
+            for j in &jobs {
+                let state = if j.enabled { "on " } else { "off" };
+                let next = j
+                    .next_run_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .map(|dt| {
+                        dt.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "due".into());
+                println!(
+                    "[{state}] {}  {}  ({}) → {}  next {}",
+                    j.id, j.name, j.schedule, j.channel, next
+                );
+            }
+            println!("\n{} job(s)", jobs.len());
+            Ok(())
+        }
+        SchedCmd::Rm { id, store } => {
+            let store = FileJobStore::open(sched_store_path(store))?;
+            if store.remove(&id).await? {
+                println!("✓ removed {id}");
+                Ok(())
+            } else {
+                anyhow::bail!("no job with id {id}");
+            }
+        }
+        SchedCmd::Enable { id, store } => {
+            let store = FileJobStore::open(sched_store_path(store))?;
+            if store.set_enabled(&id, true).await? {
+                println!("✓ enabled {id}");
+                Ok(())
+            } else {
+                anyhow::bail!("no job with id {id}");
+            }
+        }
+        SchedCmd::Disable { id, store } => {
+            let store = FileJobStore::open(sched_store_path(store))?;
+            if store.set_enabled(&id, false).await? {
+                println!("✓ disabled {id}");
+                Ok(())
+            } else {
+                anyhow::bail!("no job with id {id}");
+            }
+        }
+        SchedCmd::Run {
+            store,
+            workspace,
+            model,
+            base_url,
+        } => {
+            let sched = build_scheduler(store, workspace, model, base_url)?;
+            let fired = sched.tick_once().await;
+            eprintln!("fired {fired} due job(s)");
+            Ok(())
+        }
+        SchedCmd::Serve {
+            store,
+            workspace,
+            model,
+            base_url,
+            tick,
+        } => {
+            let sched = build_scheduler(store, workspace, model, base_url)?
+                .with_tick(std::time::Duration::from_secs(tick));
+            eprintln!("scheduler serving; ticking every {tick}s (Ctrl-C to stop)");
+            // Run the tick loop inline. The Subagent future is !Send, so we drive
+            // it on the main runtime's block_on rather than tokio::spawn.
+            loop {
+                let _ = sched.tick_once().await;
+                tokio::time::sleep(std::time::Duration::from_secs(tick)).await;
+            }
+        }
+    }
+}
+
+/// Build a `Scheduler` wired with the resolved model, fs read tools, and the
+/// stdout channel (plus email if RESEND_API_KEY is set).
+fn build_scheduler(
+    store: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+    model: Option<String>,
+    base_url: Option<String>,
+) -> anyhow::Result<harness_scheduler::Scheduler> {
+    use harness_models::OpenAiCompat;
+    use harness_scheduler::{EmailChannel, FileJobStore, JobStore, Scheduler, StdoutChannel};
+    use std::sync::Arc;
+
+    let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
+    let model: Arc<dyn harness_core::Model> =
+        Arc::new(OpenAiCompat::with_key(base_url, model_id, key));
+    let store: Arc<dyn JobStore> = Arc::new(FileJobStore::open(sched_store_path(store))?);
+    let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    let mut sched = Scheduler::new(store, model)
+        .with_repo_root(root)
+        .with_tool(Arc::new(harness_tools_fs::ReadFile))
+        .with_tool(Arc::new(harness_tools_fs::ListDir))
+        .with_tool(Arc::new(harness_tools_shell::ShellRead))
+        .with_channel(Arc::new(StdoutChannel::new()));
+    if let Some(email) = EmailChannel::from_env() {
+        sched = sched.with_channel(Arc::new(email));
+    }
+    Ok(sched)
 }
 
 async fn run_mcp_server(workspace: Option<PathBuf>, skills: Option<PathBuf>) -> anyhow::Result<()> {
@@ -674,6 +918,14 @@ fn detect_local_workspace() -> anyhow::Result<PathBuf> {
 }
 
 fn tracing_subscriber_init() {
-    // intentionally minimal; replace with tracing-subscriber later
-    let _ = tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::default());
+    use tracing_subscriber::{EnvFilter, fmt};
+    // Default to `warn` so real failures (model 401s, delivery errors, dropped
+    // jobs) surface instead of vanishing; override verbosity with RUST_LOG,
+    // e.g. `RUST_LOG=harness_scheduler=info,harness_loop=debug`. Logs go to
+    // stderr so they never pollute `run --json` / MCP stdout.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }

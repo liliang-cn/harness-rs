@@ -3,6 +3,34 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.22
+
+### Added
+
+- **`harness sched` — schedule agents from the CLI.** Wires `harness-scheduler`
+  into the binary: `add` / `list` / `rm` / `enable` / `disable`, plus `run`
+  (fire every due job once — point an OS cron at it) and `serve` (the tick loop,
+  `--tick <secs>`). Jobs persist to `~/.harness/jobs.json` (`--store` to
+  override); schedules are validated at `add` time. Model/endpoint resolve the
+  same way as `harness run`; `stdout` delivery by default, `email` when
+  `RESEND_API_KEY` is set. Verified end-to-end against a real model (fire →
+  HTTP model call → channel delivery → `next_run` advance).
+- **Per-crate READMEs** for `harness-rs`, `harness-rs-loop`, and
+  `harness-rs-models`, so each lands with its own docs on crates.io / docs.rs
+  instead of the shared workspace README.
+- **`eval-bench` now reports cost** — `iters`, `input_tokens`, `output_tokens`,
+  and `tool_calls` are emitted per run (previously the usage was dropped), so
+  the benchmark measures tokens, not just correctness. README gains a
+  **Benchmarks** section with measured numbers on `deepseek-v4-flash`.
+
+### Changed
+
+- **CLI installs a real tracing subscriber.** Previously the CLI set a
+  `NoSubscriber`, so model 401s and scheduler delivery failures vanished
+  silently. It now uses an `EnvFilter` fmt subscriber (default `warn`, override
+  with `RUST_LOG`) writing to **stderr** — failures surface, and `run --json` /
+  `mcp serve` keep stdout clean.
+
 ## 0.0.21
 
 ### Added
