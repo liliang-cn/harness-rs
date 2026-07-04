@@ -132,9 +132,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    let output = match &outcome {
-        Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
-        Outcome::BudgetExhausted { last_text, .. } => last_text.clone().unwrap_or_default(),
+    let (output, iters, usage) = match &outcome {
+        Outcome::Done {
+            text, iters, usage, ..
+        } => (text.clone().unwrap_or_default(), *iters, usage.clone()),
+        Outcome::BudgetExhausted {
+            last_text,
+            iters,
+            usage,
+            ..
+        } => (last_text.clone().unwrap_or_default(), *iters, usage.clone()),
     };
 
     let tool_calls = calls.lock().unwrap().clone();
@@ -152,10 +159,24 @@ async fn main() -> anyhow::Result<()> {
         "tool_calls": tool_calls,
         "trajectory": traj,
         "rubric": rubric,
-        "meta": {"framework": "harness-rs", "lang": "rust", "task": task_id}
+        "meta": {
+            "framework": "harness-rs", "lang": "rust", "task": task_id,
+            // Real measured cost for this run — so the benchmark reports tokens,
+            // not just correctness.
+            "iters": iters,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "tool_calls": tool_calls.len(),
+        }
     }]);
 
     eprintln!("ANSWER: {:.200}", output);
+    eprintln!(
+        "COST: {iters} iters, {} tool-calls, {} in / {} out tokens",
+        tool_calls.len(),
+        usage.input_tokens,
+        usage.output_tokens
+    );
     eprintln!("TOOLS({}): {:?}", tool_calls.len(), traj);
     println!("{}", serde_json::to_string_pretty(&sample)?);
     Ok(())
