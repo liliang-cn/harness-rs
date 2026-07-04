@@ -23,7 +23,7 @@ Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP · Sandbox · CLI** | cron jobs · MCP server+client · git-worktree isolation · `harness` CLI | — |
+| **Scheduler · MCP · Sandbox · CLI** | cron jobs · MCP server+client · git-worktree isolation · `harness run` / `new` / `mcp serve` | — |
 
 ## Quick start
 
@@ -104,7 +104,7 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
 ## Status
 
-Latest: **v0.0.20**. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.21** — `harness run` (run an agent from the CLI). Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 
