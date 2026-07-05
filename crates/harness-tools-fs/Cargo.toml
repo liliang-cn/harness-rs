@@ -24,3 +24,6 @@ serde_json   = { workspace = true }
 once_cell    = { workspace = true }
 walkdir      = { workspace = true }
 regex        = { workspace = true }
+# Capability-based filesystem: the workspace jail becomes OS-enforced (openat),
+# not a lexical string check — `..`/symlink escapes are rejected by the kernel.
+cap-std      = "3"

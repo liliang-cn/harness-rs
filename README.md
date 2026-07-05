@@ -23,7 +23,7 @@ Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · git-worktree isolation · `harness code` / `run` / `sched` / `new` / `mcp serve` | — |
+| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · OS-native sandbox (macOS Seatbelt) · git-worktree / Docker · `harness code` / `run` / `sched` / `new` / `mcp serve` | — |
 
 ## Quick start
 
@@ -99,8 +99,12 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
 - **Don't burn tokens on what code can do** — lint/format/git run via Sensors
   and Hooks, not the model. The Compactor manages scarce context.
-- **Isolate, don't interrupt** — permissions are burned in at sandbox spawn
-  (`WorktreeSandbox` / `ContainerSandbox`), not prompted per call.
+- **Isolate, don't interrupt** — permissions are decided at sandbox spawn, not
+  prompted per call. Backends are honest about what they *enforce*
+  (`Isolation::{None, Changes, Process}`): `SeatbeltSandbox` (macOS, kernel-level
+  via `sandbox-exec`) and `ContainerSandbox` (Docker) enforce; `WorktreeSandbox`
+  isolates git *changes*, not capability. Today a sandbox wraps shell exec;
+  in-process fs tools are jailed separately.
 - **Earn autonomy in stages** — start at L1, set a budget, graduate only as you
   build trust. Unattended loops make unattended mistakes; verification is on you.
 

@@ -1,14 +1,31 @@
 //! Sandbox trait + concrete backends.
 //!
-//! DESIGN.md §11: "权限不是运行时弹窗, 而是 spawn 时一次性烧进沙箱."
+//! Principle (DESIGN.md §11): permissions are decided when the execution
+//! environment is *spawned*, not re-prompted per tool call.
 //!
-//! - [`WorktreeSandbox`] — git worktree on a feature branch; cheapest and most
-//!   useful default. Auto-cleanup on drop unless `.keep()` is called.
-//! - [`ContainerSandbox`] — Docker-backed command execution for OCI isolation.
+//! **Be honest about what each backend enforces** — see [`Isolation`]:
 //!
-//! VM / microVM isolation belongs in deployment-owned crates that implement
-//! [`Sandbox`]. The core crate intentionally avoids shipping a Firecracker stub
-//! that cannot enforce isolation by itself.
+//! - [`WorktreeSandbox`] — a git worktree on a feature branch. Isolates
+//!   *changes* (they land on a branch, not `main`), **not capability**: a shell
+//!   command inside it can still `cd /` and touch anything. `Isolation::Changes`.
+//! - [`SeatbeltSandbox`] (macOS) / [`BubblewrapSandbox`] (Linux) — OS-native,
+//!   kernel-enforced, no daemon. Each runs a command as a *separate* sandboxed
+//!   process (`sandbox-exec` / `bwrap`), so the harness process is never
+//!   restricted — the per-command helper model Codex CLI uses, and the reason
+//!   the in-process `birdcage` crate was *not* used (its `spawn` leaks the
+//!   sandbox to the caller). Denies network by default. `Isolation::Process`.
+//! - [`ContainerSandbox`] — routes `runner.exec` through `docker exec` into a
+//!   container (`--network none` for real net isolation). The container/kernel
+//!   does the isolating; this crate is only the orchestration. `Isolation::Process`.
+//! - [`NullSandbox`] — no isolation (tests / opt-out). `Isolation::None`.
+//!
+//! **Scope (all backends):** a sandbox here wraps `world.runner.exec` — i.e.
+//! *shell subprocesses*. The agent's in-process filesystem tools are confined
+//! *separately*: `harness-tools-fs` runs every op through a capability
+//! directory (`cap-std`), so their workspace jail is OS-enforced (`openat`),
+//! not a string check. So the two side-effect channels are each confined —
+//! shell by this sandbox, files by the cap-std jail — though not yet behind a
+//! single unified `World` capability.
 
 use async_trait::async_trait;
 use harness_core::{RepoView, World};
@@ -42,8 +59,23 @@ pub enum FsPolicy {
 pub enum NetPolicy {
     /// No outbound network at all.
     None,
-    /// Outbound network allowed (today: enforced by host; v0.2 adds real nets).
+    /// Outbound network allowed.
     Allowed,
+}
+
+/// What a backend **actually enforces** — as distinct from the `FsPolicy` /
+/// `NetPolicy` it *requests*. A policy the kernel doesn't enforce is not
+/// isolation, so callers should branch on this, not on the requested policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    /// Nothing is enforced; the agent has host access.
+    None,
+    /// Only *changes* are isolated (e.g. a git worktree/branch). Capability is
+    /// **not** restricted — commands can still read/write/network the host.
+    Changes,
+    /// Shell subprocesses are confined by the kernel or a container (Seatbelt /
+    /// Landlock / Docker). In-process fs tools are jailed separately.
+    Process,
 }
 
 #[async_trait]
@@ -51,6 +83,8 @@ pub trait Sandbox: Send + Sync {
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError>;
     fn fs_policy(&self) -> FsPolicy;
     fn net_policy(&self) -> NetPolicy;
+    /// What this backend actually enforces (be honest — see [`Isolation`]).
+    fn isolation(&self) -> Isolation;
 }
 
 /// What a sandbox hands back to the caller — a `World` rooted at the sandbox
@@ -75,6 +109,18 @@ impl SandboxHandle {
     /// sandbox afterwards.
     pub fn keep(&mut self) {
         self.keep = true;
+    }
+
+    /// Take ownership of the sandbox `World`, keeping the environment alive
+    /// (the cleanup callback is dropped, like [`keep`](Self::keep)). Intended
+    /// for backends with no cleanup resource — Seatbelt / bubblewrap / null —
+    /// where nothing leaks.
+    pub fn into_world(self) -> World {
+        let md = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `md` is a `ManuallyDrop`, so `Drop` never runs and `world` is
+        // moved out exactly once (no double-free). The skipped `cleanup` is
+        // `None` for the OS backends this is used with.
+        unsafe { std::ptr::read(&md.world) }
     }
 }
 
@@ -131,10 +177,14 @@ impl WorktreeSandbox {
 #[async_trait]
 impl Sandbox for WorktreeSandbox {
     fn fs_policy(&self) -> FsPolicy {
+        // Requested, not enforced — a worktree does not stop writes elsewhere.
         FsPolicy::Confined
     }
     fn net_policy(&self) -> NetPolicy {
         NetPolicy::Allowed
+    }
+    fn isolation(&self) -> Isolation {
+        Isolation::Changes
     }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
@@ -281,6 +331,9 @@ impl Sandbox for ContainerSandbox {
             NetPolicy::Allowed
         }
     }
+    fn isolation(&self) -> Isolation {
+        Isolation::Process
+    }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
         // probe docker
@@ -409,6 +462,282 @@ impl harness_core::ProcessRunner for DockerExecRunner {
     }
 }
 
+
+
+// ============================================================
+// SeatbeltSandbox (macOS, OS-native — no Docker, per-command)
+// ============================================================
+
+/// **macOS only.** Runs each shell subprocess under Apple's Seatbelt via
+/// `sandbox-exec` — a *separate* sandboxed process per command, so the harness
+/// process itself is never restricted (unlike an in-process crate such as
+/// birdcage, whose `spawn` leaks the sandbox to the caller). Kernel-enforced,
+/// no daemon; denies outbound network by default. The same per-command helper
+/// approach OpenAI's Codex CLI uses.
+///
+/// Only wraps `world.runner.exec` (shell); in-process fs tools are jailed
+/// separately — see the module docs.
+pub struct SeatbeltSandbox {
+    pub root: PathBuf,
+    pub allow_net: bool,
+    pub confine_writes: bool,
+}
+
+impl SeatbeltSandbox {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            allow_net: false,
+            confine_writes: false,
+        }
+    }
+    pub fn with_network(mut self, allow: bool) -> Self {
+        self.allow_net = allow;
+        self
+    }
+    pub fn with_confine_writes(mut self, confine: bool) -> Self {
+        self.confine_writes = confine;
+        self
+    }
+}
+
+/// Build a Seatbelt profile (SBPL): `allow default`, then subtract capabilities.
+fn seatbelt_profile(root: &Path, allow_net: bool, confine_writes: bool) -> String {
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    if !allow_net {
+        p.push_str("(deny network*)\n");
+    }
+    if confine_writes {
+        p.push_str("(deny file-write*)\n");
+        p.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            root.display()
+        ));
+        p.push_str("(allow file-write* (subpath \"/private/var/folders\") (subpath \"/private/tmp\"))\n");
+        p.push_str("(allow file-write* (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\") (literal \"/dev/dtracehelper\"))\n");
+    }
+    p
+}
+
+struct SeatbeltRunner {
+    profile: String,
+}
+
+#[async_trait]
+impl harness_core::ProcessRunner for SeatbeltRunner {
+    async fn exec(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&std::path::Path>,
+    ) -> std::io::Result<harness_core::ProcessOutput> {
+        // sandbox-exec -p <profile> <program> <args...>
+        let mut sb: Vec<String> = vec!["-p".into(), self.profile.clone(), program.into()];
+        sb.extend(args.iter().map(|a| (*a).to_string()));
+        let mut cmd = tokio::process::Command::new("sandbox-exec");
+        cmd.args(&sb);
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
+        let out = cmd.output().await?;
+        Ok(harness_core::ProcessOutput {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl Sandbox for SeatbeltSandbox {
+    fn fs_policy(&self) -> FsPolicy {
+        if self.confine_writes {
+            FsPolicy::HostReadConfinedWrite
+        } else {
+            FsPolicy::Unrestricted
+        }
+    }
+    fn net_policy(&self) -> NetPolicy {
+        if self.allow_net {
+            NetPolicy::Allowed
+        } else {
+            NetPolicy::None
+        }
+    }
+    fn isolation(&self) -> Isolation {
+        Isolation::Process
+    }
+
+    async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
+        let probe = tokio::process::Command::new("sandbox-exec")
+            .arg("-p")
+            .arg("(version 1)(allow default)")
+            .arg("/usr/bin/true")
+            .output()
+            .await
+            .map_err(|e| SandboxError::GitMissing(format!("sandbox-exec unavailable: {e}")))?;
+        if !probe.status.success() {
+            return Err(SandboxError::GitMissing(
+                "sandbox-exec probe failed (macOS only)".into(),
+            ));
+        }
+        let world = World {
+            repo: RepoView {
+                root: self.root.clone(),
+            },
+            runner: Arc::new(SeatbeltRunner {
+                profile: seatbelt_profile(&self.root, self.allow_net, self.confine_writes),
+            }),
+            clock: Arc::new(harness_context::SystemClock),
+            kv: Arc::new(harness_context::InMemoryKv::new()),
+            profile: harness_core::UserProfile::default(),
+        };
+        Ok(SandboxHandle {
+            world,
+            root: self.root.clone(),
+            cleanup: None,
+            keep: false,
+            label: "seatbelt".into(),
+        })
+    }
+}
+
+// ============================================================
+// BubblewrapSandbox (Linux, OS-native — no Docker/daemon, per-command)
+// ============================================================
+
+/// **Linux only.** Runs each shell subprocess under
+/// [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) — a separate
+/// sandboxed process per command (parent never restricted). The Linux
+/// counterpart to [`SeatbeltSandbox`]. Network denied by default; with
+/// `confine_writes`, `--ro-bind / /` + `--bind <root> <root>` gives real
+/// read-host / write-workspace enforcement.
+pub struct BubblewrapSandbox {
+    pub root: PathBuf,
+    pub allow_net: bool,
+    pub confine_writes: bool,
+}
+
+impl BubblewrapSandbox {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            allow_net: false,
+            confine_writes: true,
+        }
+    }
+    pub fn with_network(mut self, allow: bool) -> Self {
+        self.allow_net = allow;
+        self
+    }
+    pub fn with_confine_writes(mut self, confine: bool) -> Self {
+        self.confine_writes = confine;
+        self
+    }
+}
+
+/// Build the `bwrap` args before the user's program. Pure → unit-testable, and
+/// verified live in a Linux container (`--unshare-net` blocks network;
+/// `--ro-bind / /` + `--bind <root>` confines writes to the workspace).
+pub fn bwrap_args(root: &Path, allow_net: bool, confine_writes: bool) -> Vec<String> {
+    let r = root.display().to_string();
+    let mut a: Vec<String> = Vec::new();
+    if confine_writes {
+        a.extend(["--ro-bind".into(), "/".into(), "/".into()]);
+        a.extend(["--bind".into(), r.clone(), r]);
+    } else {
+        a.extend(["--bind".into(), "/".into(), "/".into()]);
+    }
+    a.extend(["--proc".into(), "/proc".into()]);
+    a.extend(["--dev".into(), "/dev".into()]);
+    if !allow_net {
+        a.push("--unshare-net".into());
+    }
+    a
+}
+
+struct BwrapRunner {
+    args: Vec<String>,
+}
+
+#[async_trait]
+impl harness_core::ProcessRunner for BwrapRunner {
+    async fn exec(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&std::path::Path>,
+    ) -> std::io::Result<harness_core::ProcessOutput> {
+        let mut full = self.args.clone();
+        full.push(program.into());
+        full.extend(args.iter().map(|a| (*a).to_string()));
+        let mut cmd = tokio::process::Command::new("bwrap");
+        cmd.args(&full);
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
+        let out = cmd.output().await?;
+        Ok(harness_core::ProcessOutput {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl Sandbox for BubblewrapSandbox {
+    fn fs_policy(&self) -> FsPolicy {
+        if self.confine_writes {
+            FsPolicy::HostReadConfinedWrite
+        } else {
+            FsPolicy::Unrestricted
+        }
+    }
+    fn net_policy(&self) -> NetPolicy {
+        if self.allow_net {
+            NetPolicy::Allowed
+        } else {
+            NetPolicy::None
+        }
+    }
+    fn isolation(&self) -> Isolation {
+        Isolation::Process
+    }
+
+    async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
+        let probe = tokio::process::Command::new("bwrap")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|e| SandboxError::GitMissing(format!("bwrap unavailable: {e}")))?;
+        if !probe.status.success() {
+            return Err(SandboxError::GitMissing(
+                "bwrap probe failed (Linux only)".into(),
+            ));
+        }
+        let runner = Arc::new(BwrapRunner {
+            args: bwrap_args(&self.root, self.allow_net, self.confine_writes),
+        });
+        let world = World {
+            repo: RepoView {
+                root: self.root.clone(),
+            },
+            runner,
+            clock: Arc::new(harness_context::SystemClock),
+            kv: Arc::new(harness_context::InMemoryKv::new()),
+            profile: harness_core::UserProfile::default(),
+        };
+        Ok(SandboxHandle {
+            world,
+            root: self.root.clone(),
+            cleanup: None,
+            keep: false,
+            label: "bubblewrap".into(),
+        })
+    }
+}
+
 // ============================================================
 // NullSandbox (for tests & for "I don't actually need isolation")
 // ============================================================
@@ -431,6 +760,9 @@ impl Sandbox for NullSandbox {
     }
     fn net_policy(&self) -> NetPolicy {
         NetPolicy::Allowed
+    }
+    fn isolation(&self) -> Isolation {
+        Isolation::None
     }
 
     async fn spawn(&self) -> Result<SandboxHandle, SandboxError> {
@@ -472,6 +804,70 @@ mod tests {
         let s = NullSandbox::new(".");
         let h = s.spawn().await.unwrap();
         assert_eq!(h.label(), "null");
+    }
+
+    #[test]
+    fn seatbelt_profile_denies_network_by_default() {
+        let p = seatbelt_profile(std::path::Path::new("/tmp/x"), false, false);
+        assert!(p.contains("(deny network*)"));
+        let allowed = seatbelt_profile(std::path::Path::new("/tmp/x"), true, false);
+        assert!(!allowed.contains("(deny network*)"));
+    }
+
+    #[test]
+    fn bwrap_args_deny_net_and_confine_writes_by_default() {
+        let a = bwrap_args(std::path::Path::new("/work"), false, true);
+        assert!(a.iter().any(|x| x == "--unshare-net"));
+        assert!(a.windows(3).any(|w| w == ["--ro-bind", "/", "/"]));
+        assert!(a.windows(3).any(|w| w == ["--bind", "/work", "/work"]));
+        let net = bwrap_args(std::path::Path::new("/work"), true, true);
+        assert!(!net.iter().any(|x| x == "--unshare-net"));
+    }
+
+    #[tokio::test]
+    async fn bubblewrap_fails_cleanly_off_linux() {
+        // On macOS `bwrap` is absent → spawn errors, doesn't panic.
+        let absent = std::process::Command::new("bwrap")
+            .arg("--version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true);
+        if absent {
+            assert!(BubblewrapSandbox::new(".").spawn().await.is_err());
+        }
+    }
+
+    /// macOS: prove Seatbelt enforces net-deny at the kernel via the sandbox's
+    /// own **per-command** runner — the networked child is blocked, a local child
+    /// works, and (unlike birdcage) the parent process is never touched.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn seatbelt_denies_child_network_without_touching_parent() {
+        let curl = "/usr/bin/curl";
+        if !std::path::Path::new(curl).exists() {
+            return;
+        }
+        let probe = ["-s", "-m", "6", "-o", "/dev/null", "https://example.com"];
+        let parent_net = || {
+            std::process::Command::new(curl)
+                .args(probe)
+                .output()
+                .map(|o| o.status.code().unwrap_or(-1))
+                .unwrap_or(-1)
+        };
+        if parent_net() != 0 {
+            return; // offline — skip
+        }
+
+        let h = SeatbeltSandbox::new(".").spawn().await.expect("seatbelt spawns");
+        // local child ok
+        let echo = h.world.runner.exec("/bin/echo", &["hi"], None).await.unwrap();
+        assert_eq!(echo.status, 0);
+        // networked child blocked
+        let blocked = h.world.runner.exec(curl, &probe, None).await.unwrap();
+        assert_ne!(blocked.status, 0, "child network must be denied");
+        // parent still unrestricted (the whole point vs birdcage)
+        assert_eq!(parent_net(), 0, "parent must remain unsandboxed");
     }
 
     #[tokio::test]
