@@ -3,6 +3,49 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **`harness code --sandbox`** — shell commands run inside the OS sandbox
+  (macOS Seatbelt / Linux bubblewrap): network denied, writes confined to the
+  workspace. Falls back gracefully if the OS sandbox tool is missing. Closes the
+  gap where the sandbox crate existed but no agent used it (verified live:
+  `curl` inside the sandbox gets `CURLE_COULDNT_RESOLVE_HOST`).
+
+### Changed
+
+- **`harness-tools-fs` — the workspace jail is now OS-enforced.** `read_file`,
+  `write_file`, `edit_file`, and `list_dir` run every operation through a
+  capability directory (`cap-std` / `openat`), so `..`, absolute-path, and
+  symlink escapes are rejected by the kernel instead of a lexical string check.
+  A new `write_cannot_escape_workspace` test confirms a `..` write is refused
+  and leaves nothing outside the root. With `--sandbox`, both side-effect
+  channels are now confined: shell by the OS sandbox, files by the cap-std jail.
+
+- **`harness-sandbox` — honest isolation.** Added an `Isolation` enum
+  (`None` / `Changes` / `Process`) and a `Sandbox::isolation()` method so a
+  backend reports what it *actually enforces*, not just the `FsPolicy`/`NetPolicy`
+  it *requests*. Docs (crate + README + DESIGN §11) corrected: `WorktreeSandbox`
+  isolates git *changes*, not capability; a sandbox wraps `runner.exec` (shell)
+  only — in-process fs tools are jailed separately.
+
+### Added
+
+- **`SeatbeltSandbox` (macOS)** and **`BubblewrapSandbox` (Linux)** — OS-native,
+  kernel-enforced isolation with **no Docker/daemon**. Each runs a command as a
+  *separate* sandboxed process (`sandbox-exec` / `bwrap`), so the harness process
+  is never restricted — the per-command helper model Codex CLI uses. Network
+  denied by default; Bubblewrap also confines writes to the workspace
+  (`--ro-bind / /` + `--bind <root>`). Verified live: Seatbelt net-deny on
+  macOS (parent stays free), and the exact `bwrap` arg shape enforces net-deny +
+  write-confinement in a real Linux container.
+- Evaluated the ready-made cross-platform crate **`birdcage`** and **rejected**
+  it here: its `spawn` applies the sandbox to the *calling* process (documented:
+  "restrictions applied to the current process… single-threaded only"). Verified
+  empirically — one benign sandboxed child killed the parent's network — so it's
+  unusable for per-command sandboxing from a persistent, multi-threaded agent.
+
 ## 0.0.23
 
 ### Added

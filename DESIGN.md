@@ -606,24 +606,33 @@ Hook 实现可以是 native Rust 函数、shell 脚本（兼容 Claude Code hook
 
 ---
 
-## 11. Sandbox — 两层内置隔离 + 扩展点
+## 11. Sandbox — 隔离后端 + 诚实的强制边界
 
 ```rust
 pub trait Sandbox: Send + Sync {
-    async fn spawn(&self, plan: &Blueprint) -> Result<SandboxHandle, SandboxError>;
-    fn fs_policy(&self) -> FsPolicy;
+    async fn spawn(&self) -> Result<SandboxHandle, SandboxError>;
+    fn fs_policy(&self) -> FsPolicy;   // 请求的策略
     fn net_policy(&self) -> NetPolicy;
+    fn isolation(&self) -> Isolation;  // 真正强制的隔离档位
 }
 
-pub struct WorktreeSandbox  { /* git worktree + ro 工具白名单 */ }
-pub struct ContainerSandbox { image: String, net: NetPolicy /* OCI 容器, 默认无网络 */ }
-// VM / microVM isolation is deployment-owned:
-// downstream crates can implement Sandbox for Firecracker, Kata, remote runners, etc.
+pub enum Isolation { None, Changes, Process }
+
+pub struct SeatbeltSandbox  { /* macOS: sandbox-exec, 内核级强制, 默认断网 */ }
+pub struct ContainerSandbox { /* docker run + docker exec, --network none */ }
+pub struct WorktreeSandbox  { /* git worktree: 只隔离改动, 不隔离能力 */ }
+pub struct NullSandbox      { /* 无隔离 */ }
 ```
 
-**核心原则**：权限不是运行时弹窗，而是 spawn 时一次性烧进沙箱。`Tool::risk()` 用于沙箱选择策略，而不是用于在每个 tool call 时打断用户。
+**核心原则**：权限在 *spawn 时* 决定，而不是每次 tool call 弹窗。
 
-> 例外：当用户运行交互模式 (`harness run -i`) 时，hook 仍可生成 `PermissionRequest` 走 CLI 提示——但这是 hook 的实现细节，不是核心模型。
+**但要对"强制"诚实**（这是本节重设计的重点）：
+- `fs_policy`/`net_policy` 是后端 *请求* 的策略；`isolation()` 才是它 *真正强制* 的档位。一个类型写着 `Confined` 而内核零强制，只会给虚假的安全感。
+- **`SeatbeltSandbox`**（macOS）用 Apple Seatbelt (`sandbox-exec`) 在内核层强制网络/文件策略——与 OpenAI Codex CLI 的 macOS 方案一致（Linux 对应 Landlock + seccomp + bubblewrap）。默认断网。`Isolation::Process`。
+- **`ContainerSandbox`** 把 `runner.exec` 路由进 `docker exec`（`--network none` 才是真断网）。隔离由容器/内核做，本 crate 只是编排。`Isolation::Process`。
+- **`WorktreeSandbox`** 只把改动隔离到一个 git 分支——`Isolation::Changes`，**不限制能力**。
+
+**已知边界（所有后端）**：沙箱包的是 `runner.exec`（shell 子进程）。agent 的进程内 fs 工具（`harness-tools-fs`）直接碰宿主，由它们自己的路径 jail 单独约束，**不走沙箱**。要整进程级隔离，就把 agent 二进制本身放进 OS 沙箱跑。彻底解法是把 `World` 做成 *capability*，让所有工具的副作用都过同一个被强制的咽喉点——这是未来工作，现状不假装已经做到。
 
 ---
 

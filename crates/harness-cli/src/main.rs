@@ -115,6 +115,11 @@ enum Cmd {
         /// confirmation. Default is NORMAL (confirm each mutating action).
         #[arg(long)]
         yolo: bool,
+        /// Run shell commands inside an OS sandbox (macOS Seatbelt / Linux
+        /// bubblewrap): network denied, writes confined to the workspace. No-op
+        /// if the OS sandbox tool is unavailable.
+        #[arg(long)]
+        sandbox: bool,
     },
 }
 
@@ -364,7 +369,8 @@ async fn main() -> anyhow::Result<()> {
             base_url,
             max_iters,
             yolo,
-        } => run_code(workspace, model, base_url, max_iters, yolo).await,
+            sandbox,
+        } => run_code(workspace, model, base_url, max_iters, yolo, sandbox).await,
     }
 }
 
@@ -577,12 +583,43 @@ fn fmt_tool_args(tool: &str, args: &serde_json::Value) -> String {
     }
 }
 
+/// Spawn the platform OS sandbox (macOS Seatbelt / Linux bubblewrap) rooted at
+/// `root` and return its `World` — its `runner.exec` confines shell commands
+/// (network denied, writes limited to the workspace). Falls back to a normal
+/// world (with a note) if the OS sandbox tool isn't available.
+async fn os_sandbox_world(root: &std::path::Path) -> (harness_core::World, String) {
+    use harness_sandbox::Sandbox;
+    #[cfg(target_os = "macos")]
+    let backend = harness_sandbox::SeatbeltSandbox::new(root).with_confine_writes(true);
+    #[cfg(target_os = "linux")]
+    let backend = harness_sandbox::BubblewrapSandbox::new(root);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        return (
+            harness_context::default_world(root.to_path_buf()),
+            "unsupported OS".into(),
+        );
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    match backend.spawn().await {
+        Ok(handle) => {
+            let desc = format!("on ({})", handle.label());
+            (handle.into_world(), desc)
+        }
+        Err(e) => {
+            eprintln!("\x1b[33m(sandbox unavailable: {e}; running without)\x1b[0m");
+            (harness_context::default_world(root.to_path_buf()), "off".into())
+        }
+    }
+}
+
 async fn run_code(
     workspace: Option<PathBuf>,
     model: Option<String>,
     base_url: Option<String>,
     max_iters: u32,
     yolo: bool,
+    sandbox: bool,
 ) -> anyhow::Result<()> {
     use harness_core::{Block, Task, Turn, TurnRole};
     use harness_loop::{AgentLoop, Outcome};
@@ -592,7 +629,14 @@ async fn run_code(
 
     let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
-    let mut world = harness_context::default_world(root.clone());
+    // With --sandbox, shell commands run inside an OS sandbox (network denied,
+    // writes confined to the workspace); falls back to a normal world if the OS
+    // sandbox tool is unavailable.
+    let (mut world, sandbox_desc) = if sandbox {
+        os_sandbox_world(&root).await
+    } else {
+        (harness_context::default_world(root.clone()), "off".to_string())
+    };
     let model = OpenAiCompat::with_key(base_url, model_id.clone(), key);
 
     let loop_ = AgentLoop::new(model)
@@ -613,7 +657,7 @@ async fn run_code(
         "\x1b[32mNORMAL\x1b[0m (approve writes)"
     };
     println!(
-        "\x1b[1mharness code\x1b[0m — {model_id}  ·  {}  ·  {mode}",
+        "\x1b[1mharness code\x1b[0m — {model_id}  ·  {}  ·  {mode}  ·  sandbox: {sandbox_desc}",
         root.display()
     );
     println!("tools: read · write · edit · list · grep · glob · shell    /reset · /exit\n");

@@ -1,15 +1,38 @@
 //! Filesystem tools.
 //!
-//! All paths are resolved relative to `world.repo.root`. Attempts to escape
-//! the repo root (via `..` or absolute paths) are rejected — this keeps the
-//! tool surface safe by default without needing a full sandbox.
+//! Every write/read/edit/list op goes through a **capability directory**
+//! ([`cap_std::fs::Dir`]) rooted at `world.repo.root`, so the workspace jail is
+//! **enforced by the OS** (`openat` semantics): `..`, absolute paths, and
+//! symlinks that escape the root are rejected by the kernel, not by a lexical
+//! string check. (`grep`/`glob` are read-only and walk from a jail-resolved
+//! base.)
 
 use async_trait::async_trait;
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
 use harness_core::{Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};
+
+/// Open the workspace `root` as a capability directory. Every path operation
+/// through the returned [`Dir`] is confined to it **by the OS** (`openat`
+/// semantics) — `..`, absolute paths, and symlinks that escape the root are
+/// rejected by the kernel, not by a string check.
+fn cap_dir(root: &Path) -> Result<Dir, ToolError> {
+    Dir::open_ambient_dir(root, ambient_authority())
+        .map_err(|e| ToolError::Exec(format!("open workspace {}: {e}", root.display())))
+}
+
+/// Map a capability-fs error, treating escape/permission rejections distinctly.
+fn cap_err(path: &str, e: std::io::Error) -> ToolError {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        ToolError::Permission(format!("{path}: {e}"))
+    } else {
+        ToolError::Exec(format!("{path}: {e}"))
+    }
+}
 
 // ---------- read_file ----------
 
@@ -60,11 +83,15 @@ impl Tool for ReadFile {
             name: self.name().into(),
             reason: e.to_string(),
         })?;
-        let abs = resolve(&world.repo.root, &a.path)?;
-        verify_no_symlink_escape(&world.repo.root, &abs)?;
-        let content = tokio::fs::read_to_string(&abs)
-            .await
-            .map_err(|e| ToolError::Exec(format!("{}: {e}", abs.display())))?;
+        let root = world.repo.root.clone();
+        let path = a.path.clone();
+        // OS-enforced jail: read only happens through the capability `Dir`.
+        let content = tokio::task::spawn_blocking(move || -> Result<String, ToolError> {
+            let dir = cap_dir(&root)?;
+            dir.read_to_string(&path).map_err(|e| cap_err(&path, e))
+        })
+        .await
+        .map_err(|e| ToolError::Exec(e.to_string()))??;
 
         let offset = a.offset.unwrap_or(0);
         let limit = a.limit.unwrap_or(2000);
@@ -83,7 +110,7 @@ impl Tool for ReadFile {
         Ok(ToolResult {
             ok: true,
             content: json!({
-                "path":      abs.strip_prefix(&world.repo.root).unwrap_or(&abs).display().to_string(),
+                "path":      a.path,
                 "lines":     returned,
                 "total":     total,
                 "offset":    offset,
@@ -139,27 +166,27 @@ impl Tool for WriteFile {
             name: self.name().into(),
             reason: e.to_string(),
         })?;
-        let abs = resolve(&world.repo.root, &a.path)?;
-        if let Some(parent) = abs.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ToolError::Exec(format!("mkdir {}: {e}", parent.display())))?;
-            verify_no_symlink_escape(&world.repo.root, parent)?;
-        }
-        // If file already exists, verify it's not a symlink-out before clobbering.
-        if abs.exists() {
-            verify_no_symlink_escape(&world.repo.root, &abs)?;
-        }
-        let bytes = a.content.len();
-        tokio::fs::write(&abs, &a.content)
-            .await
-            .map_err(|e| ToolError::Exec(format!("write {}: {e}", abs.display())))?;
+        let root = world.repo.root.clone();
+        let path = a.path.clone();
+        let content = a.content;
+        let bytes = content.len();
+        // OS-enforced jail: create parent dirs + write happen through the
+        // capability `Dir`, so a `..`/symlink escape can't reach outside root.
+        tokio::task::spawn_blocking(move || -> Result<(), ToolError> {
+            let dir = cap_dir(&root)?;
+            if let Some(parent) = Path::new(&path).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                dir.create_dir_all(parent).map_err(|e| cap_err(&path, e))?;
+            }
+            dir.write(&path, content.as_bytes())
+                .map_err(|e| cap_err(&path, e))
+        })
+        .await
+        .map_err(|e| ToolError::Exec(e.to_string()))??;
         Ok(ToolResult {
             ok: true,
-            content: json!({
-                "path":  abs.strip_prefix(&world.repo.root).unwrap_or(&abs).display().to_string(),
-                "bytes": bytes,
-            }),
+            content: json!({ "path": a.path, "bytes": bytes }),
             trace: None,
         })
     }
@@ -202,34 +229,37 @@ impl Tool for ListDir {
     ) -> Result<ToolResult, ToolError> {
         let a: ListArgs = serde_json::from_value(args).unwrap_or(ListArgs { path: None });
         let rel = a.path.unwrap_or_default();
-        let abs = if rel.is_empty() {
-            world.repo.root.clone()
-        } else {
-            resolve(&world.repo.root, &rel)?
-        };
-        verify_no_symlink_escape(&world.repo.root, &abs)?;
-        let mut entries = Vec::new();
-        let mut rd = tokio::fs::read_dir(&abs)
+        let root = world.repo.root.clone();
+        let rel_for_read = rel.clone();
+        let mut entries =
+            tokio::task::spawn_blocking(move || -> Result<Vec<serde_json::Value>, ToolError> {
+                let dir = cap_dir(&root)?;
+                // Empty path → the workspace root itself (".").
+                let target = if rel_for_read.is_empty() {
+                    ".".to_string()
+                } else {
+                    rel_for_read.clone()
+                };
+                let rd = dir
+                    .read_dir(&target)
+                    .map_err(|e| cap_err(&rel_for_read, e))?;
+                let mut out = Vec::new();
+                for e in rd {
+                    let e = e.map_err(|e| cap_err(&rel_for_read, e))?;
+                    let kind = match e.file_type() {
+                        Ok(ft) if ft.is_dir() => "dir",
+                        Ok(ft) if ft.is_file() => "file",
+                        _ => "other",
+                    };
+                    out.push(json!({
+                        "name": e.file_name().to_string_lossy(),
+                        "kind": kind,
+                    }));
+                }
+                Ok(out)
+            })
             .await
-            .map_err(|e| ToolError::Exec(format!("read_dir {}: {e}", abs.display())))?;
-        while let Some(e) = rd
-            .next_entry()
-            .await
-            .map_err(|e| ToolError::Exec(e.to_string()))?
-        {
-            let ft = e.file_type().await.ok();
-            let kind = if ft.is_some_and(|f| f.is_dir()) {
-                "dir"
-            } else if ft.is_some_and(|f| f.is_file()) {
-                "file"
-            } else {
-                "other"
-            };
-            entries.push(json!({
-                "name": e.file_name().to_string_lossy(),
-                "kind": kind,
-            }));
-        }
+            .map_err(|e| ToolError::Exec(e.to_string()))??;
         entries.sort_by(|a, b| {
             a["name"]
                 .as_str()
@@ -238,7 +268,7 @@ impl Tool for ListDir {
         });
         Ok(ToolResult {
             ok: true,
-            content: json!({ "path": abs.display().to_string(), "entries": entries }),
+            content: json!({ "path": if rel.is_empty() { ".".into() } else { rel }, "entries": entries }),
             trace: None,
         })
     }
@@ -294,43 +324,35 @@ impl Tool for EditFile {
             name: self.name().into(),
             reason: e.to_string(),
         })?;
-        let abs = resolve(&world.repo.root, &a.path)?;
-        verify_no_symlink_escape(&world.repo.root, &abs)?;
-        let content = tokio::fs::read_to_string(&abs)
-            .await
-            .map_err(|e| ToolError::Exec(format!("read {}: {e}", abs.display())))?;
-
-        if !content.contains(&a.old_string) {
-            return Err(ToolError::Exec(format!(
-                "old_string not found in {}",
-                abs.display()
-            )));
-        }
-        let new = if a.replace_all {
-            content.replace(&a.old_string, &a.new_string)
-        } else {
-            let n = content.matches(&a.old_string).count();
-            if n > 1 {
-                return Err(ToolError::Exec(format!(
-                    "old_string matches {n} times; pass replace_all or extend old_string for uniqueness"
-                )));
+        let root = world.repo.root.clone();
+        // Read → replace → write, all through the capability `Dir`.
+        let count = tokio::task::spawn_blocking(move || -> Result<usize, ToolError> {
+            let dir = cap_dir(&root)?;
+            let content = dir.read_to_string(&a.path).map_err(|e| cap_err(&a.path, e))?;
+            if !content.contains(&a.old_string) {
+                return Err(ToolError::Exec(format!("old_string not found in {}", a.path)));
             }
-            content.replacen(&a.old_string, &a.new_string, 1)
-        };
-        let count = if a.replace_all {
-            content.matches(&a.old_string).count()
-        } else {
-            1
-        };
-        tokio::fs::write(&abs, new)
-            .await
-            .map_err(|e| ToolError::Exec(format!("write {}: {e}", abs.display())))?;
+            let (new, count) = if a.replace_all {
+                let n = content.matches(&a.old_string).count();
+                (content.replace(&a.old_string, &a.new_string), n)
+            } else {
+                let n = content.matches(&a.old_string).count();
+                if n > 1 {
+                    return Err(ToolError::Exec(format!(
+                        "old_string matches {n} times; pass replace_all or extend old_string for uniqueness"
+                    )));
+                }
+                (content.replacen(&a.old_string, &a.new_string, 1), 1)
+            };
+            dir.write(&a.path, new.as_bytes())
+                .map_err(|e| cap_err(&a.path, e))?;
+            Ok(count)
+        })
+        .await
+        .map_err(|e| ToolError::Exec(e.to_string()))??;
         Ok(ToolResult {
             ok: true,
-            content: json!({
-                "path":         abs.strip_prefix(&world.repo.root).unwrap_or(&abs).display().to_string(),
-                "replacements": count,
-            }),
+            content: json!({ "replacements": count }),
             trace: None,
         })
     }
@@ -747,6 +769,30 @@ mod tests {
             err,
             Err(ToolError::Permission(_)) | Err(ToolError::Exec(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn write_cannot_escape_workspace() {
+        // The capability jail (cap-std) must reject a `..` write and leave no
+        // file outside the workspace root.
+        let (td, mut w) = tmp_world();
+        let outside = td.0.parent().unwrap().join(format!(
+            "cap-escape-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let rel = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        let res = WriteFile
+            .invoke(json!({"path": rel, "content": "LEAK"}), &mut w)
+            .await;
+        assert!(res.is_err(), "write with `..` must be rejected: {res:?}");
+        assert!(
+            !outside.exists(),
+            "no file may be created outside the workspace root"
+        );
     }
 
     #[tokio::test]
