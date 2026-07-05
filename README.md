@@ -141,10 +141,10 @@ per-task cost fields for cross-framework comparison.
 
 ## Status
 
-Latest: **v0.0.23** — `harness code` (interactive coding agent), `grep`/`glob`
-fs tools, and **[`examples/cap`](examples/cap)** — a full coding agent (hashline
-editing, subagents, memory, persistent-LSP, MCP, skills, model routing, sessions)
-with both a CLI and a ratatui TUI. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.24** — honest, OS-native sandboxing: `SeatbeltSandbox` (macOS) /
+`BubblewrapSandbox` (Linux), an `Isolation` enum that reports what's actually
+enforced, `harness code --sandbox`, and an OS-enforced (cap-std) filesystem jail.
+Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 
