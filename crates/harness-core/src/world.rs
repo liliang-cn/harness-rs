@@ -11,7 +11,10 @@ pub struct RepoView {
 
 /// Things the agent and its sensors can do that aren't covered by a Tool.
 ///
-/// This is intentionally tiny — most work flows through Tools.
+/// This is intentionally tiny — most work flows through Tools. `Clone` is cheap
+/// (all fields are `Arc` / small `Copy`-ish data), which lets the loop dispatch
+/// several read-only tools concurrently, each against its own `World`.
+#[derive(Clone)]
 pub struct World {
     pub repo: RepoView,
     pub runner: Arc<dyn ProcessRunner>,

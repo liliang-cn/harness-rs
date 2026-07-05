@@ -273,6 +273,31 @@ struct ChatUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+    /// DeepSeek: the cache-hit portion of the prompt (billed at ~10%). The
+    /// whole point of a stable prefix — surfaced so callers can see it work.
+    #[serde(default)]
+    prompt_cache_hit_tokens: u32,
+    /// OpenAI-style nested cache report.
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
+}
+
+impl ChatUsage {
+    /// Cached prompt tokens, from whichever field the provider populated.
+    fn cached(&self) -> u32 {
+        self.prompt_cache_hit_tokens.max(
+            self.prompt_tokens_details
+                .as_ref()
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
+        )
+    }
 }
 
 // ----------------------------------------------------------------
@@ -410,7 +435,7 @@ impl Model for OpenAiCompat {
             usage: Usage {
                 input_tokens: parsed.usage.prompt_tokens,
                 output_tokens: parsed.usage.completion_tokens,
-                cached_input_tokens: 0,
+                cached_input_tokens: parsed.usage.cached(),
             },
             stop_reason,
             reasoning,
@@ -571,13 +596,17 @@ fn decode_delta(
     // (Only fires when `stream_options.include_usage: true` was set on the
     // request.)
     if let Some(Value::Object(u)) = v.get("usage") {
-        let usage = Usage {
-            input_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-            output_tokens: u
-                .get("completion_tokens")
+        let field = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        let cached = field("prompt_cache_hit_tokens").max(
+            u.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
                 .and_then(|x| x.as_u64())
                 .unwrap_or(0) as u32,
-            cached_input_tokens: 0,
+        );
+        let usage = Usage {
+            input_tokens: field("prompt_tokens"),
+            output_tokens: field("completion_tokens"),
+            cached_input_tokens: cached,
         };
         if usage.input_tokens > 0 || usage.output_tokens > 0 {
             return Some(ModelDelta::Usage(usage));

@@ -11,5 +11,6 @@ pub mod jail;
 pub mod lsp;
 pub mod sensor;
 pub mod session;
+pub mod storm;
 pub mod tools;
 pub mod ui;
