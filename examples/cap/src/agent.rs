@@ -46,6 +46,7 @@ pub fn build_loop(model: DynModel, parts: LoopParts) -> AgentLoop<DynModel> {
         }))
         .with_tool(Arc::new(SkillManageTool::new(parts.skills_dir.clone())))
         .with_hook(parts.ui_hook)
+        .with_hook(Arc::new(crate::storm::StormGuard::new()))
         .with_hook(parts.trace_hook);
     for t in parts.mcp_tools {
         l = l.with_tool(t);

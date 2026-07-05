@@ -3,6 +3,37 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **Prefix-cache-friendly multi-turn: `AgentLoop::session()` → `Session`.** A
+  persistent conversation that re-runs the loop each turn against a **stable
+  prefix** (system + tool schemas), so a provider's prefix cache hits across
+  turns. Verified live against DeepSeek: turn 2 reported **768 cached input
+  tokens** (~10% price) instead of re-paying full price for the same bytes.
+- **Parallel read-only tool dispatch.** When one model response emits several
+  read-only tool calls, the loop now dispatches the *leading run* concurrently
+  (`join_all`, each on a cheap `World` clone); a mutating tool is a serial
+  barrier and all hooks/sensors/history stay ordered. `World` derives `Clone`;
+  `ToolRegistry::risk(name)` added. Proven by a timing test (3 × 150ms → ~150ms).
+- **`examples/cap`: tool-call storm guard** — a `StormGuard` hook fingerprints
+  each `(tool, args)` call and, on an exact repeat within a sliding window,
+  breaks the loop (`HookOutcome::Deny` with a "try a different approach"
+  reflection) and prints a visible ⚠ marker. Kills the fast-model "call → fail →
+  retry → same call" death loop and burns no extra tokens on it.
+
+### Changed
+
+- **Deterministic tool ordering** — `ToolRegistry::schemas()` now returns tools
+  **name-sorted** instead of in `HashMap` order, so the request's `tools` block
+  is byte-stable across turns (a prerequisite for prefix caching that was
+  silently broken for every agent).
+- **Cache tokens are surfaced** — `OpenAiCompat` now parses DeepSeek's
+  `prompt_cache_hit_tokens` (and OpenAI's `prompt_tokens_details.cached_tokens`)
+  into `Usage.cached_input_tokens` on both the `complete` and streaming paths;
+  previously hardcoded to 0, throwing the information away.
+
 ## 0.0.24
 
 ### Added

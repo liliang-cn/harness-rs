@@ -317,6 +317,21 @@ impl<M: Model> AgentLoop<M> {
         self.run_built_context(ctx, world).await
     }
 
+    /// Start a persistent multi-turn [`Session`]. Each `turn` re-runs the loop
+    /// against the accumulated history with a **stable prefix** (system +
+    /// name-sorted tool schemas), so a provider's prefix cache (e.g. DeepSeek's,
+    /// ~10% price on cache-hit tokens) hits across turns instead of paying full
+    /// price to re-read the same bytes every round. For maximum hit rate, keep
+    /// your guides' output stable (put per-turn volatile context in the message,
+    /// not a recomputed system guide).
+    pub fn session(&self) -> Session<'_, M> {
+        Session {
+            loop_: self,
+            history: Vec::new(),
+            max_iters: harness_core::Policy::default().max_iters,
+        }
+    }
+
     /// Inner ReAct loop on an already-prepared `Context`. Use the public
     /// `run*` methods unless you need to inject a non-standard `Context`
     /// (e.g. `run_with_response_format` does to apply a one-off
@@ -482,6 +497,47 @@ impl<M: Model> AgentLoop<M> {
                 });
             }
 
+            // Parallel-safe prefetch: dispatch the *leading run* of read-only
+            // tool calls concurrently (a mutating tool is a serial barrier).
+            // The sequential loop below still processes every call in order —
+            // hooks, sensors, and history stay ordered — only the dispatch IO
+            // overlaps. Reads before any write are safe; anything at/after the
+            // first mutating call runs on the normal path.
+            let mut prefetched: HashMap<String, ToolResult> = HashMap::new();
+            {
+                let lead: Vec<&_> = out
+                    .tool_calls
+                    .iter()
+                    .take_while(|c| {
+                        self.tools.risk(&c.name) == Some(harness_core::ToolRisk::ReadOnly)
+                    })
+                    .collect();
+                if lead.len() > 1 {
+                    let futs =
+                        lead.iter().map(|c| {
+                            let mut w = world.clone();
+                            let action = Action {
+                                tool: c.name.clone(),
+                                call_id: c.id.clone(),
+                                args: c.args.clone(),
+                            };
+                            async move {
+                                let r = self.tools.dispatch(&action, &mut w).await.unwrap_or_else(
+                                    |e| ToolResult {
+                                        ok: false,
+                                        content: serde_json::json!({"error": e.to_string()}),
+                                        trace: None,
+                                    },
+                                );
+                                (action.call_id, r)
+                            }
+                        });
+                    for (id, r) in futures::future::join_all(futs).await {
+                        prefetched.insert(id, r);
+                    }
+                }
+            }
+
             for call in &out.tool_calls {
                 let action = Action {
                     tool: call.name.clone(),
@@ -520,13 +576,19 @@ impl<M: Model> AgentLoop<M> {
                     continue;
                 }
 
-                let result = match self.tools.dispatch(&action, world).await {
-                    Ok(r) => r,
-                    Err(e) => ToolResult {
-                        ok: false,
-                        content: serde_json::json!({"error": e.to_string()}),
-                        trace: None,
-                    },
+                // Use the concurrently-prefetched result if we have one;
+                // otherwise dispatch now.
+                let result = if let Some(r) = prefetched.remove(&action.call_id) {
+                    r
+                } else {
+                    match self.tools.dispatch(&action, world).await {
+                        Ok(r) => r,
+                        Err(e) => ToolResult {
+                            ok: false,
+                            content: serde_json::json!({"error": e.to_string()}),
+                            trace: None,
+                        },
+                    }
                 };
                 tools_called += 1;
                 self.hooks.fire(
@@ -847,6 +909,72 @@ impl<M: Model> AgentLoop<M> {
             }
             Err(_) => None,
         }
+    }
+}
+
+/// A persistent multi-turn conversation over one [`AgentLoop`].
+///
+/// Holds the append-only history and, on each [`turn`](Session::turn), re-runs
+/// the loop against a **stable prefix** (system + name-sorted tool schemas).
+/// That byte-stable prefix is what lets a provider's prefix cache hit across
+/// turns — the difference between paying full price to re-read the same context
+/// every round and paying ~10% for the cached bytes (DeepSeek).
+pub struct Session<'a, M: Model> {
+    loop_: &'a AgentLoop<M>,
+    history: Vec<Turn>,
+    max_iters: u32,
+}
+
+impl<'a, M: Model> Session<'a, M> {
+    pub fn with_max_iters(mut self, n: u32) -> Self {
+        self.max_iters = n;
+        self
+    }
+    /// Preload prior turns (e.g. resumed from disk).
+    pub fn with_seed(mut self, seed: Vec<Turn>) -> Self {
+        self.history = seed;
+        self
+    }
+    /// The accumulated conversation so far.
+    pub fn history(&self) -> &[Turn] {
+        &self.history
+    }
+    /// Start over (branch): drop the accumulated turns.
+    pub fn reset(&mut self) {
+        self.history.clear();
+    }
+
+    /// Send one user message. Runs the ReAct loop against the accumulated
+    /// history, then appends this user turn + the assistant reply so the next
+    /// turn extends the same cached prefix.
+    pub async fn turn(
+        &mut self,
+        message: impl Into<String>,
+        world: &mut World,
+    ) -> Result<Outcome, HarnessError> {
+        let message = message.into();
+        let task = Task {
+            description: message.clone(),
+            source: None,
+            deadline: None,
+        };
+        let outcome = self
+            .loop_
+            .run_with_seed_history(task, self.history.clone(), world, self.max_iters)
+            .await?;
+        let reply = match &outcome {
+            Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
+            Outcome::BudgetExhausted { last_text, .. } => last_text.clone().unwrap_or_default(),
+        };
+        self.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text(message)],
+        });
+        self.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::Text(reply)],
+        });
+        Ok(outcome)
     }
 }
 
