@@ -3,7 +3,7 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.24
 
 ### Added
 
