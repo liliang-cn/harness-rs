@@ -39,10 +39,14 @@ scripta-server (axum)
         └── Git 存储（gix，每文档一 bare 库）：data/repos/<doc_id>.git
 ```
 
-三个 crate，放在 harness 仓库 `apps/scripta/` 下，以 path 依赖引用 harness-rs 各 crate：
-- `scripta-engine` — 纯 harness 逻辑，可脱离 web 用集成测试验证。
-- `scripta-server` — axum + 存储 + 计量。
+Scripta 是**独立项目**，位于 harness-rs 的上级目录 `../scripta`
+（即 `/Users/liliang/Things/AI/base-rs/scripta`），自己的 git 仓库与 Cargo workspace，
+通过 path 依赖引用 harness-rs 各 crate（`../harness/crates/...`），harness 发布后可切
+crates.io 版本。目录结构：
+- `scripta-engine/` — 纯 harness 逻辑，可脱离 web 用集成测试验证。
+- `scripta-server/` — axum + 存储 + 计量。
 - `web/` — 前端。
+- `data/repos/<doc_id>.git` — 每文档 git 存储。
 
 ## 3. harness 引擎（scripta-engine）
 
