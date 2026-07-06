@@ -6,10 +6,25 @@
 > turns an LLM into an autonomous agent. Any domain: research, ops, assistants,
 > data work, coding.
 
-A Rust framework for production agents, built on the *harness engineering*
-discipline (Böckeler/Thoughtworks, Lopopolo/OpenAI, 2026). Compile-time
-type-safe, deterministic-first, observable, governance built in.
-Full rationale in **[DESIGN.md](DESIGN.md)**.
+A Rust framework for production agents. A governed agent loop that earns
+autonomy in stages, an OS-enforced sandbox that's honest about what it isolates,
+and a three-layer local memory that makes the agent know more every session.
+Compile-time type-safe, deterministic-first, observable, governance built in.
+Built on the *harness engineering* discipline (Böckeler/Thoughtworks,
+Lopopolo/OpenAI, 2026). Full rationale in **[DESIGN.md](DESIGN.md)**.
+
+## What makes it
+
+- **A loop, not a call.** ReAct with tool dispatch, sensor feedback, and
+  auto-fix — running under a token budget until the task is verifiably done.
+- **Autonomy earned in stages.** L1 report → L2 assisted (human gate) → L3
+  unattended (allowlist only). Graduate the agent as you build trust.
+- **Honest isolation.** OS-enforced sandboxing (macOS Seatbelt / Linux
+  Bubblewrap) that reports what it *actually* enforces.
+- **Memory that compounds.** Three local layers — procedural (skills),
+  semantic (facts), episodic (searchable history) — so it knows more each run.
+- **Code does what code can.** lint · format · git run as Sensors and Hooks,
+  not model turns. Measured, not asserted.
 
 ## What you get
 
@@ -58,6 +73,8 @@ Scaffold a new project with `harness new`.
 
 ## Composable layers
 
+Start with one agent; compose upward as the work grows.
+
 - **`harness-loop`** runs *one* agent (ReAct: think → call tools → observe).
 - **`harness-loop-engine`** governs a *recurring* loop: it earns autonomy in
   stages — **L1 report** → **L2 assisted** (human gates every change) → **L3
@@ -85,17 +102,7 @@ let report = Orchestrator::new(Arc::new(SubagentJobRunner::new(model, ".")))
     .run(Run::new("run-1", "compare tools", dag)).await;
 ```
 
-## Examples
-
-See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
-**`experience-cortexdb`** (the learning layer over a CortexDB brain),
-**`cap`** (a coding agent reimplementing [oh-my-pi](https://github.com/can1357/oh-my-pi)'s
-**hashline editing** — content-hash line anchors instead of line numbers), and
-two end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
-(concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
-dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
-
-## Principles
+## Design principles
 
 - **Don't burn tokens on what code can do** — lint/format/git run via Sensors
   and Hooks, not the model. The Compactor manages scarce context.
@@ -120,6 +127,16 @@ any OpenAI-compatible model:
 HARNESS_API_KEY=… HARNESS_BASE_URL=… HARNESS_MODEL=… harness code            # NORMAL
 harness code --yolo --workspace .                                            # YOLO
 ```
+
+## Examples
+
+See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
+**`experience-cortexdb`** (the learning layer over a CortexDB brain),
+**`cap`** (a coding agent reimplementing [oh-my-pi](https://github.com/can1357/oh-my-pi)'s
+**hashline editing** — content-hash line anchors instead of line numbers), and
+two end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
+(concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
+dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
 ## Benchmarks
 
