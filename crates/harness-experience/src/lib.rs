@@ -43,9 +43,11 @@ mod guide;
 mod recorder;
 mod store;
 mod trace;
+mod transcript;
 
 pub use episode::Episode;
 pub use guide::ExperienceGuide;
 pub use recorder::ExperienceRecorder;
 pub use store::{EXPERIENCE_TAG, ExperienceStore};
 pub use trace::ToolTrace;
+pub use transcript::{CapturedTurn, TranscriptRecorder, spawn_transcript_writer};

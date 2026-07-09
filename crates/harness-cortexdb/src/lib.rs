@@ -20,6 +20,29 @@
 //! Harness `MemoryEntry` fields round-trip through CortexDB: `content` maps to
 //! the memory content; `tags` + `source` are stored under CortexDB's
 //! `metadata` and read back on recall.
+//!
+//! ## Record conversations, then distill them into the graph
+//!
+//! Pair the [`TranscriptRecorder`](harness_experience::TranscriptRecorder) hook
+//! (turns → CortexDB) with periodic [`CortexdbMemory::consolidate`] (memories →
+//! knowledge graph, server-side):
+//!
+//! ```ignore
+//! let mem = Arc::new(CortexdbMemory::connect_stdio("cortexdb-mcp-stdio", &[]).await?
+//!     .with_scope("session").with_namespace("myapp-chat"));
+//!
+//! // 1. capture every turn as it happens
+//! let (recorder, rx) = harness_experience::TranscriptRecorder::new("sess-1");
+//! harness_experience::spawn_transcript_writer(rx, mem.clone());
+//! let loop_ = AgentLoop::new(model).with_hook(Arc::new(recorder));
+//!
+//! // 2. every 10 min, let CortexDB distill accumulated turns into the graph
+//! let m = mem.clone();
+//! tokio::spawn(async move {
+//!     let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+//!     loop { tick.tick().await; let _ = m.consolidate(serde_json::Value::Null).await; }
+//! });
+//! ```
 
 use async_trait::async_trait;
 use harness_core::{Memory, MemoryEntry, MemoryError, Tool};
@@ -34,6 +57,9 @@ pub struct CortexdbMemory {
     _client: McpClient,
     save: Arc<dyn Tool>,
     search: Arc<dyn Tool>,
+    /// Optional server-side distillation tool (`knowledge_memory_consolidate`),
+    /// present only if the connected CortexDB exposes it. See [`consolidate`].
+    consolidate: Option<Arc<dyn Tool>>,
     scope: String,
     namespace: String,
     user_id: Option<String>,
@@ -56,10 +82,13 @@ impl CortexdbMemory {
         let search = find("memory_search").ok_or_else(|| {
             anyhow::anyhow!("CortexDB MCP server exposes no `memory_search` tool")
         })?;
+        // Optional — older/lighter CortexDB builds may not expose it.
+        let consolidate = find("knowledge_memory_consolidate");
         Ok(Self {
             _client: client,
             save,
             search,
+            consolidate,
             scope: "global".into(),
             namespace: "harness".into(),
             user_id: None,
@@ -81,6 +110,55 @@ impl CortexdbMemory {
     pub fn with_user_id(mut self, user: impl Into<String>) -> Self {
         self.user_id = Some(user.into());
         self
+    }
+
+    /// Whether the connected CortexDB exposes the graph-distillation tool.
+    pub fn can_consolidate(&self) -> bool {
+        self.consolidate.is_some()
+    }
+
+    /// Distill accumulated memories into CortexDB's **knowledge graph**
+    /// (entities + relations), server-side, via `knowledge_memory_consolidate`.
+    /// CortexDB does the extraction — harness just triggers it, so this costs no
+    /// tokens on our side. Run it periodically (e.g. from `harness-scheduler`)
+    /// after a batch of turns has been recorded.
+    ///
+    /// Operates on this instance's `scope`/`namespace`/`user_id`. Pass
+    /// `extra_args` to override or add fields the server expects (the exact
+    /// consolidation params vary by CortexDB version); pass `Value::Null` for the
+    /// defaults. Returns the raw tool result.
+    ///
+    /// Errors if the server doesn't expose the tool (check [`can_consolidate`]).
+    pub async fn consolidate(&self, extra_args: Value) -> Result<Value, MemoryError> {
+        let tool = self.consolidate.as_ref().ok_or_else(|| {
+            MemoryError::Backend(
+                "this CortexDB build exposes no `knowledge_memory_consolidate` tool".into(),
+            )
+        })?;
+        let mut args = json!({
+            "scope": self.scope,
+            "namespace": self.namespace,
+        });
+        if let Some(u) = &self.user_id {
+            args["user_id"] = json!(u);
+        }
+        if let Value::Object(extra) = extra_args {
+            if let Value::Object(base) = &mut args {
+                base.extend(extra);
+            }
+        }
+        let mut world = harness_context::default_world(".");
+        let res = tool
+            .invoke(args, &mut world)
+            .await
+            .map_err(|e| MemoryError::Backend(e.to_string()))?;
+        if !res.ok {
+            return Err(MemoryError::Backend(format!(
+                "knowledge_memory_consolidate: {}",
+                res.content
+            )));
+        }
+        Ok(res.content)
     }
 
     fn next_id(&self) -> String {
