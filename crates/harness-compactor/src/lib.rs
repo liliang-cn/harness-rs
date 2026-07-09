@@ -12,10 +12,28 @@ use harness_core::{
 };
 use std::sync::Arc;
 
+/// `Context::metadata` key under which the loop stores a *calibration factor* —
+/// the ratio of the model's real reported `input_tokens` to this compactor's
+/// char-based estimate on the previous turn. `budget()` multiplies its raw
+/// estimate by it, so the trigger auto-aligns to the actual model + language
+/// (a fixed `tokens_per_char` badly under-counts CJK, over-counts nothing).
+pub const CALIBRATION_KEY: &str = "compactor.correction";
+
+/// Read the calibration factor from context metadata (defaults to 1.0 — i.e.
+/// trust the raw estimate until the first real `input_tokens` arrives).
+fn calibration(ctx: &Context) -> f64 {
+    ctx.metadata
+        .get(CALIBRATION_KEY)
+        .and_then(|v| v.as_f64())
+        .filter(|f| f.is_finite() && *f > 0.0)
+        .unwrap_or(1.0)
+}
+
 /// Heuristic compactor — operates on the structure of the context only.
 pub struct DefaultCompactor {
     /// Approximate tokens per char. 0.30 ≈ 3.3 chars/token (a generous English
-    /// upper bound for non-Asian content).
+    /// upper bound for non-Asian content). Used as the *prior*; once the loop
+    /// records a real `input_tokens`, [`CALIBRATION_KEY`] corrects it.
     pub tokens_per_char: f32,
 }
 
@@ -50,8 +68,10 @@ impl DefaultCompactor {
 #[async_trait]
 impl Compactor for DefaultCompactor {
     fn budget(&self, ctx: &Context) -> Budget {
+        let raw = self.estimate_tokens(ctx);
+        let used = (raw as f64 * calibration(ctx)).round() as u32;
         Budget {
-            used: self.estimate_tokens(ctx),
+            used,
             window: ctx.policy.max_input_tokens,
         }
     }
@@ -539,6 +559,25 @@ mod tests {
             0,
             "model must not be called when history is short"
         );
+    }
+
+    #[test]
+    fn budget_applies_calibration_factor() {
+        let c = DefaultCompactor::new();
+        let mut ctx = mk_ctx(10);
+        let raw = c.budget(&ctx).used;
+        assert!(raw > 0);
+
+        // A model that reports 2× our estimate → correction 2.0 → used doubles.
+        ctx.metadata
+            .insert(CALIBRATION_KEY.into(), serde_json::json!(2.0));
+        let calibrated = c.budget(&ctx).used;
+        assert_eq!(calibrated, (raw as f64 * 2.0).round() as u32);
+
+        // Garbage / non-positive factors are ignored (fall back to raw).
+        ctx.metadata
+            .insert(CALIBRATION_KEY.into(), serde_json::json!(-1.0));
+        assert_eq!(c.budget(&ctx).used, raw);
     }
 
     #[tokio::test]
