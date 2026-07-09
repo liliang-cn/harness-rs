@@ -74,7 +74,7 @@ async fn deepseek_prefix_cache_hits_on_second_turn() {
 
     let usage = |o: &Outcome| match o {
         Outcome::Done { usage, .. } => usage.clone(),
-        Outcome::BudgetExhausted { usage, .. } => usage.clone(),
+        Outcome::BudgetExhausted { usage, .. } | Outcome::Stuck { usage, .. } => usage.clone(),
     };
     let (u1, u2) = (usage(&o1), usage(&o2));
     eprintln!(

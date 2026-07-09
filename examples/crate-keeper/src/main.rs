@@ -151,6 +151,12 @@ async fn main() -> anyhow::Result<()> {
             println!("\n✗ budget exhausted after {iters} iteration(s)");
             std::process::exit(2);
         }
+        Outcome::Stuck {
+            iters, reason, ..
+        } => {
+            println!("\n✗ stuck after {iters} iteration(s): {reason}");
+            std::process::exit(2);
+        }
     }
     Ok(())
 }

@@ -141,6 +141,12 @@ async fn main() -> anyhow::Result<()> {
             iters,
             usage,
             ..
+        }
+        | Outcome::Stuck {
+            last_text,
+            iters,
+            usage,
+            ..
         } => (last_text.clone().unwrap_or_default(), *iters, usage.clone()),
     };
 

@@ -883,8 +883,11 @@ async fn run_once(
         }
         Outcome::BudgetExhausted {
             iters, last_text, ..
+        }
+        | Outcome::Stuck {
+            iters, last_text, ..
         } => {
-            eprintln!("✗ budget exhausted after {iters} iteration(s)");
+            eprintln!("✗ stopped after {iters} iteration(s)");
             if let Some(t) = last_text {
                 eprintln!("\n— forced-synthesis answer (tool-less) —\n{t}");
             }
@@ -994,8 +997,11 @@ async fn run_repl(
             }
             Ok(Outcome::BudgetExhausted {
                 iters, last_text, ..
+            })
+            | Ok(Outcome::Stuck {
+                iters, last_text, ..
             }) => {
-                eprintln!("\nasst> ✗ ran out of budget after {iters} iterations.");
+                eprintln!("\nasst> ✗ stopped after {iters} iterations.");
                 if let Some(t) = last_text {
                     println!("\nasst (forced-synthesis)> {t}");
                 }

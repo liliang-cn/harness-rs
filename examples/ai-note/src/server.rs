@@ -1343,6 +1343,17 @@ async fn chat_handler(
             false,
             usage,
         ),
+        Outcome::Stuck {
+            iters,
+            last_text,
+            usage,
+            ..
+        } => (
+            last_text.unwrap_or_else(|| "(stuck)".into()),
+            iters,
+            false,
+            usage,
+        ),
     };
     if let Ok(db) = open_db_state(&s) {
         let _ = db.insert_audit(
@@ -1617,6 +1628,26 @@ async fn session_stream_handler(
                     );
                 }
                 let _ = tx_done.send(json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"budget_exhausted"}));
+            }
+            Ok(Outcome::Stuck {
+                iters,
+                last_text,
+                usage,
+                ..
+            }) => {
+                let reply = last_text.unwrap_or_else(|| "(stuck)".into());
+                if let Ok(db) = open_db_state(&s) {
+                    let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
+                    let _ = db.insert_audit(
+                        Some(&uid),
+                        "chat_message",
+                        Some(&sid),
+                        Some(&json!({"iters": iters, "warning":"stuck"}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
+                    );
+                }
+                let _ = tx_done.send(json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"stuck"}));
             }
             Err(e) => {
                 let _ = tx_done.send(json!({"type":"error","message": format!("agent: {e}")}));

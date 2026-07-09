@@ -593,14 +593,21 @@ async fn run_once(
             tools_called,
             usage,
             ..
+        }
+        | Outcome::Stuck {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
         } => {
             eprintln!(
-                "✗ budget exhausted after {iters} iter(s), {tools_called} tool call(s), \
+                "✗ stopped after {iters} iter(s), {tools_called} tool call(s), \
                        {} in / {} out tokens",
                 usage.input_tokens, usage.output_tokens
             );
             if let Some(t) = last_text {
-                eprintln!("\n— last assistant message before budget ran out —\n{t}");
+                eprintln!("\n— last assistant message before stopping —\n{t}");
             }
             eprintln!(
                 "\n→ partial findings preserved in {}. `investor --list` to recall.",
@@ -725,9 +732,16 @@ async fn run_repl(
                 tools_called,
                 usage,
                 ..
+            })
+            | Ok(Outcome::Stuck {
+                iters,
+                last_text,
+                tools_called,
+                usage,
+                ..
             }) => {
                 eprintln!(
-                    "\nasst> ✗ budget out after {iters} iter, {tools_called} tools, \
+                    "\nasst> ✗ stopped after {iters} iter, {tools_called} tools, \
                            {}/{} tok",
                     usage.input_tokens, usage.output_tokens
                 );

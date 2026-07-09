@@ -456,6 +456,20 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
                 usage.input_tokens,
                 usage.output_tokens,
             ),
+            Outcome::Stuck {
+                last_text,
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                "stuck",
+                last_text.clone(),
+                *iters,
+                *tools_called,
+                usage.input_tokens,
+                usage.output_tokens,
+            ),
         };
         println!(
             "{}",
@@ -477,6 +491,17 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
                 last_text, iters, ..
             } => {
                 eprintln!("(budget exhausted after {iters} iters)");
+                if let Some(t) = last_text {
+                    println!("{}", t.trim());
+                }
+            }
+            Outcome::Stuck {
+                last_text,
+                iters,
+                reason,
+                ..
+            } => {
+                eprintln!("(stuck after {iters} iters: {reason})");
                 if let Some(t) = last_text {
                     println!("{}", t.trim());
                 }
@@ -700,6 +725,12 @@ async fn run_code(
                 last_text, iters, ..
             }) => {
                 eprintln!("\x1b[33m(stopped at {iters}-iter budget)\x1b[0m");
+                last_text.unwrap_or_default()
+            }
+            Ok(Outcome::Stuck {
+                last_text, iters, reason, ..
+            }) => {
+                eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
                 last_text.unwrap_or_default()
             }
             Err(e) => {
