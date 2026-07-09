@@ -15,6 +15,7 @@ pub mod recall_layer;
 pub mod registry;
 pub mod replay;
 pub mod subagent;
+pub mod telemetry;
 
 pub use learning::*;
 pub use memory_layer::*;
@@ -23,6 +24,7 @@ pub use recall_layer::*;
 pub use registry::*;
 pub use replay::*;
 pub use subagent::*;
+pub use telemetry::*;
 
 use harness_compactor::DefaultCompactor;
 use harness_core::{

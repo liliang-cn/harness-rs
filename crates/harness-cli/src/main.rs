@@ -49,6 +49,23 @@ enum Cmd {
         #[arg(long, short)]
         verbose: bool,
     },
+    /// Deterministically re-execute a recorded session log (from
+    /// `SessionRecorder`) offline — no LLM calls. The recorded model outputs
+    /// drive a `MockModel`, and tool calls re-run against the workspace, so you
+    /// can reproduce a failure, verify a fix, or regression-test the loop for
+    /// free. Prints the reconstructed trace and the final Outcome.
+    Replay {
+        /// Path to the recorded .jsonl session log.
+        file: PathBuf,
+        /// Workspace to replay tool side effects against (default: a fresh temp
+        /// dir). Point at a copy of the original starting state for a faithful
+        /// replay.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Also print the per-event trace as it replays.
+        #[arg(long, short)]
+        verbose: bool,
+    },
     /// Run an MCP server over stdio. Exposes the framework's built-in tool
     /// registry (read_file, write_file, edit_file, list_dir, shell_read) to
     /// any MCP-compatible client (Claude Code, Cursor, Codex, …).
@@ -87,6 +104,9 @@ enum Cmd {
         /// Print the full Outcome as JSON instead of just the final text.
         #[arg(long)]
         json: bool,
+        /// Record the session to a JSONL log for later `harness replay`/`trace`.
+        #[arg(long)]
+        record: Option<PathBuf>,
     },
     /// Schedule agents to run on a recurring schedule. Jobs persist to a JSON
     /// file (default ~/.harness/jobs.json). `serve` runs the tick loop; `run`
@@ -335,6 +355,11 @@ async fn main() -> anyhow::Result<()> {
             summary,
             verbose,
         } => print_session_trace(file, summary, verbose),
+        Cmd::Replay {
+            file,
+            workspace,
+            verbose,
+        } => replay_session(file, workspace, verbose).await,
         Cmd::Mcp {
             cmd: McpCmd::Serve { workspace, skills },
         } => run_mcp_server(workspace, skills).await,
@@ -348,6 +373,7 @@ async fn main() -> anyhow::Result<()> {
             shell,
             progress,
             json,
+            record,
         } => {
             run_agent(RunOpts {
                 prompt,
@@ -359,6 +385,7 @@ async fn main() -> anyhow::Result<()> {
                 shell,
                 progress,
                 json,
+                record,
             })
             .await
         }
@@ -384,6 +411,7 @@ struct RunOpts {
     shell: bool,
     progress: bool,
     json: bool,
+    record: Option<PathBuf>,
 }
 
 async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
@@ -413,6 +441,12 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     }
     if opts.progress {
         loop_ = loop_.with_hook(Arc::new(LiveProgressHook::new()));
+    }
+    if let Some(path) = &opts.record {
+        match harness_loop::SessionRecorder::new(path) {
+            Ok(rec) => loop_ = loop_.with_hook(Arc::new(rec)),
+            Err(e) => eprintln!("warning: could not open record file {}: {e}", path.display()),
+        }
     }
 
     let task = Task {
@@ -979,6 +1013,95 @@ fn print_session_trace(file: PathBuf, summary_only: bool, verbose: bool) -> anyh
         stats.input_tokens, stats.output_tokens
     );
     println!("  duration:      {} ms", stats.duration_ms);
+    Ok(())
+}
+
+/// Deterministically re-execute a recorded session offline. The recorded
+/// `PostModel` outputs become a `MockModel` script, so the loop takes the exact
+/// same decisions it did live — but with zero LLM calls. Tool calls re-run
+/// against `workspace`, reproducing side effects. The reconstructed Outcome
+/// should match the original run, which is what makes this a free regression
+/// test: record once, replay in CI forever.
+async fn replay_session(
+    file: PathBuf,
+    workspace: Option<PathBuf>,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    use harness_core::Task;
+    use harness_loop::{AgentLoop, Outcome};
+    use std::sync::Arc;
+
+    let events = harness_loop::read_session(&file)
+        .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
+    let stats = harness_loop::SessionStats::from(&events);
+    if stats.model_calls == 0 {
+        anyhow::bail!(
+            "no model outputs in {} — nothing to replay",
+            file.display()
+        );
+    }
+
+    if verbose {
+        println!("── replaying {} ──", file.display());
+        for e in &events {
+            println!("{}", harness_loop::format_event_short(e));
+        }
+        println!();
+    }
+
+    let root = workspace.unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("harness-replay-{}", std::process::id()))
+    });
+    std::fs::create_dir_all(&root)
+        .map_err(|e| anyhow::anyhow!("create workspace {}: {e}", root.display()))?;
+    let mut world = harness_context::default_world(&root);
+
+    // The recorded model outputs drive the loop; the built-in tools re-execute
+    // their recorded calls against the workspace.
+    let model = harness_loop::replay_as_mock(&events);
+    let loop_ = AgentLoop::new(model)
+        .with_tool(Arc::new(harness_tools_fs::ReadFile))
+        .with_tool(Arc::new(harness_tools_fs::ListDir))
+        .with_tool(Arc::new(harness_tools_fs::Grep))
+        .with_tool(Arc::new(harness_tools_fs::Glob))
+        .with_tool(Arc::new(harness_tools_fs::WriteFile))
+        .with_tool(Arc::new(harness_tools_fs::EditFile))
+        .with_tool(Arc::new(harness_tools_shell::ShellRead));
+
+    // Generous iteration cap — the mock naturally terminates when its scripted
+    // outputs run out, so this only bounds a pathological log.
+    let max_iters = (stats.model_calls as u32) + 2;
+    let outcome = loop_
+        .run_with_max_iters(
+            Task {
+                description: "(replay)".into(),
+                source: None,
+                deadline: None,
+            },
+            &mut world,
+            max_iters,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("replay: {e}"))?;
+
+    println!("── replay result ──────────────────────────────────────────");
+    println!("  workspace:     {}", root.display());
+    println!("  model calls:   {} (from log)", stats.model_calls);
+    println!("  tool calls:    {} (from log)", stats.tool_calls);
+    match &outcome {
+        Outcome::Done { iters, text, .. } => {
+            println!("  outcome:       Done in {iters} iter(s)");
+            if let Some(t) = text {
+                println!("  final text:    {}", t.trim());
+            }
+        }
+        Outcome::BudgetExhausted { iters, .. } => {
+            println!("  outcome:       BudgetExhausted after {iters} iter(s)");
+        }
+        Outcome::Stuck { iters, reason, .. } => {
+            println!("  outcome:       Stuck after {iters} iter(s): {reason}");
+        }
+    }
     Ok(())
 }
 
