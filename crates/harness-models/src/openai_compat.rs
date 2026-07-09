@@ -187,11 +187,66 @@ fn build_response_format(
 /// `reasoning_content` because DeepSeek thinking mode demands it be echoed
 /// back; Ollama exposes the same thing under `reasoning`. Anything else we
 /// don't recognise is ignored.
+/// Chat message content: either a plain string (the common path — serializes as
+/// a bare JSON string, wire-identical to before) or an array of parts (used when
+/// a turn carries images, for vision models). Untagged so both round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Content {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl Content {
+    fn text(s: impl Into<String>) -> Self {
+        Content::Text(s.into())
+    }
+    /// Best-effort text extraction (used on the response path, which is always a
+    /// string, and when merging system messages).
+    fn into_text(self) -> Option<String> {
+        match self {
+            Content::Text(s) => Some(s),
+            Content::Parts(parts) => {
+                let joined = parts
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => Some(text),
+                        ContentPart::ImageUrl { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!joined.is_empty()).then_some(joined)
+            }
+        }
+    }
+    #[cfg(test)]
+    fn as_text(&self) -> Option<&str> {
+        match self {
+            Content::Text(s) => Some(s),
+            Content::Parts(_) => None,
+        }
+    }
+}
+
+/// One part of a multimodal message. OpenAI shape:
+/// `{"type":"text","text":...}` / `{"type":"image_url","image_url":{"url":...}}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImageUrl {
+    url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<Content>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     tool_calls: Vec<WireToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -420,7 +475,7 @@ impl Model for OpenAiCompat {
         // answer into the reasoning channel and return empty `content`. When
         // there's no content and no tool call, surface the reasoning so the
         // turn isn't blank.
-        let mut text = first.message.content;
+        let mut text = first.message.content.and_then(|c| c.into_text());
         if tool_calls.is_empty()
             && text.as_deref().map(str::trim).unwrap_or("").is_empty()
             && let Some(r) = &reasoning
@@ -714,19 +769,19 @@ fn provider_from_base_url(url: &str) -> String {
 /// existing system text.
 fn inject_schema_hint(messages: &mut Vec<ChatMessage>, hint: &str) {
     if let Some(sys) = messages.iter_mut().find(|m| m.role == "system") {
-        let existing = sys.content.take().unwrap_or_default();
+        let existing = sys.content.take().and_then(|c| c.into_text()).unwrap_or_default();
         let joined = if existing.trim().is_empty() {
             hint.to_string()
         } else {
             format!("{existing}\n\n{hint}")
         };
-        sys.content = Some(joined);
+        sys.content = Some(Content::text(joined));
     } else {
         messages.insert(
             0,
             ChatMessage {
                 role: "system".into(),
-                content: Some(hint.to_string()),
+                content: Some(Content::text(hint.to_string())),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
                 reasoning_content: None,
@@ -747,7 +802,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
     if !system_buf.trim().is_empty() {
         out.push(ChatMessage {
             role: "system".into(),
-            content: Some(system_buf),
+            content: Some(Content::text(system_buf)),
             tool_calls: Vec::new(),
             tool_call_id: None,
             reasoning_content: None,
@@ -768,7 +823,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
     if !has_user {
         out.push(ChatMessage {
             role: "user".into(),
-            content: Some(ctx.task.description.clone()),
+            content: Some(Content::text(ctx.task.description.clone())),
             tool_calls: Vec::new(),
             tool_call_id: None,
             reasoning_content: None,
@@ -797,7 +852,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                 };
                 out.push(ChatMessage {
                     role: "tool".into(),
-                    content: Some(s),
+                    content: Some(Content::text(s)),
                     tool_calls: Vec::new(),
                     tool_call_id: Some(call_id.clone()),
                     reasoning_content: None,
@@ -814,7 +869,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                 }
                 out.push(ChatMessage {
                     role: "user".into(),
-                    content: Some(s),
+                    content: Some(Content::text(s)),
                     tool_calls: Vec::new(),
                     tool_call_id: None,
                     reasoning_content: None,
@@ -825,10 +880,12 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         return;
     }
 
-    // Assistant turn: split text content from tool_calls into the proper wire shape.
+    // Assistant/user/system turn: split text from tool_calls, and collect any
+    // images (user turns only — vision input).
     let mut text = String::new();
     let mut tool_calls = Vec::new();
     let mut reasoning: Option<String> = None;
+    let mut images: Vec<ImageUrl> = Vec::new();
     for b in &turn.blocks {
         match b {
             Block::Text(s) => {
@@ -858,19 +915,35 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                         .unwrap_or_else(|| r.clone()),
                 );
             }
+            Block::Image { media_type, base64 } => {
+                images.push(ImageUrl {
+                    url: format!("data:{media_type};base64,{base64}"),
+                });
+            }
             Block::ToolResult { .. } | Block::Feedback(_) => {
                 // shouldn't appear in assistant/user turns; ignore
             }
             other => push_block_text(&mut text, other),
         }
     }
+
+    // With images, content must be a parts array (text part first, then images).
+    let content = if images.is_empty() {
+        (!text.trim().is_empty()).then(|| Content::text(text))
+    } else {
+        let mut parts = Vec::new();
+        if !text.trim().is_empty() {
+            parts.push(ContentPart::Text { text });
+        }
+        for image_url in images {
+            parts.push(ContentPart::ImageUrl { image_url });
+        }
+        Some(Content::Parts(parts))
+    };
+
     out.push(ChatMessage {
         role: role.into(),
-        content: if text.trim().is_empty() {
-            None
-        } else {
-            Some(text)
-        },
+        content,
         tool_calls,
         tool_call_id: None,
         reasoning_content: reasoning,
@@ -907,7 +980,7 @@ fn push_block_text(buf: &mut String, b: &Block) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::{Policy, Task};
+    use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
 
     #[tokio::test]
@@ -1035,12 +1108,62 @@ mod tests {
         assert!(
             msgs[0]
                 .content
-                .as_deref()
+                .as_ref()
+                .and_then(Content::as_text)
                 .unwrap()
                 .contains("helpful agent")
         );
-        assert!(msgs[0].content.as_deref().unwrap().contains("be concise"));
+        assert!(
+            msgs[0]
+                .content
+                .as_ref()
+                .and_then(Content::as_text)
+                .unwrap()
+                .contains("be concise")
+        );
         assert_eq!(msgs[1].role, "user");
-        assert_eq!(msgs[1].content.as_deref(), Some("say hi"));
+        assert_eq!(
+            msgs[1].content.as_ref().and_then(Content::as_text),
+            Some("say hi")
+        );
+    }
+
+    #[test]
+    fn user_turn_with_image_becomes_parts_array() {
+        let mut ctx = Context {
+            system: vec![],
+            guides: vec![],
+            history: vec![Turn {
+                role: TurnRole::User,
+                blocks: vec![
+                    Block::Text("what is in this image?".into()),
+                    Block::image_bytes("image/png", b"\x89PNG\r\n"),
+                ],
+            }],
+            task: Task {
+                description: "t".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
+            metadata: BTreeMap::new(),
+            tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
+        };
+        ctx.system.clear();
+        let msgs = build_messages(&ctx);
+        let user = msgs.iter().find(|m| m.role == "user").unwrap();
+        // Serializes to the OpenAI multimodal shape: content is an array with a
+        // text part and an image_url data-URI part.
+        let json = serde_json::to_value(&user.content).unwrap();
+        let arr = json.as_array().expect("content must be a parts array");
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[1]["type"], "image_url");
+        assert!(
+            arr[1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
     }
 }

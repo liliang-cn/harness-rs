@@ -246,6 +246,7 @@ fn snapshot_history(ctx: &Context) -> Vec<HistorySnapshot> {
                     Block::Skill { name, .. } => ("skill", name.clone()),
                     Block::Feedback(s) => ("feedback", format!("{} signal(s)", s.len())),
                     Block::Reasoning(s) => ("reasoning", s.clone()),
+                    Block::Image { media_type, .. } => ("image", media_type.clone()),
                     _ => ("unknown", String::new()),
                 };
                 kinds.push(kind);

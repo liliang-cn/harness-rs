@@ -175,9 +175,21 @@ enum GeminiPart {
         )]
         thought_signature: Option<String>,
     },
+    /// Inline image bytes (vision input): `{"inlineData":{"mimeType":...,"data":...}}`.
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: GeminiInlineData,
+    },
     /// Catch-all: any other part shape Gemini may emit (forward-compat). The
     /// raw JSON is preserved but not interpreted.
     Other(serde_json::Value),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct GeminiInlineData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1034,6 +1046,14 @@ fn build_contents(ctx: &Context) -> (Option<String>, Vec<GeminiContent>) {
                             thought_signature: None,
                         });
                     }
+                }
+                Block::Image { media_type, base64 } => {
+                    parts.push(GeminiPart::InlineData {
+                        inline_data: GeminiInlineData {
+                            mime_type: media_type.clone(),
+                            data: base64.clone(),
+                        },
+                    });
                 }
                 Block::Reasoning(_) => { /* handled via raw_parts_by_turn */ }
                 _ => {} // forward-compat

@@ -134,7 +134,7 @@ impl Tool for ReadDocument {
 
         // 2) LLM fallback.
         if let Some(model) = &self.fallback {
-            let text = llm_extract(model, &a.path, &full, max_chars).await?;
+            let text = llm_extract(model, &a.path, &full, &ext, max_chars).await?;
             return Ok(result(&a.path, "llm", &ext, text));
         }
 
@@ -200,35 +200,58 @@ fn local_extract(_path: &Path, _ext: &str) -> Option<String> {
     None
 }
 
-/// Hand the raw file to the model and ask it to extract readable text. Best for
-/// text-ish formats local parsers miss; binary/image extraction is only as good
-/// as the model (a vision model for images).
+/// MIME type for an image extension, or `None` if it isn't a known image.
+fn image_media_type(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => return None,
+    })
+}
+
+/// Hand the file to the model. For images, send a real `Block::Image` (vision);
+/// for anything else, send the raw content as text and ask for extraction.
 async fn llm_extract(
     model: &Arc<dyn Model>,
     filename: &str,
     path: &Path,
+    ext: &str,
     max_chars: usize,
 ) -> Result<String, ToolError> {
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| ToolError::Exec(format!("read {filename}: {e}")))?;
-    let raw: String = String::from_utf8_lossy(&bytes).chars().take(max_chars).collect();
 
-    let prompt = format!(
-        "Local parsers could not extract text from the file `{filename}`. Below is \
-         its raw content. Extract and return ONLY the readable text content, no \
-         preamble. If it is unreadable binary, reply exactly: (no extractable text).\n\n\
-         ---- RAW CONTENT ----\n{raw}\n---- END ----"
-    );
+    // Image → multimodal vision request.
+    let user_blocks = if let Some(media_type) = image_media_type(ext) {
+        vec![
+            Block::Text(format!(
+                "Extract and return ONLY the readable text/content of the image \
+                 `{filename}`. If there is no legible text, briefly describe the image."
+            )),
+            Block::image_bytes(media_type, &bytes),
+        ]
+    } else {
+        // Non-image → raw text extraction.
+        let raw: String = String::from_utf8_lossy(&bytes).chars().take(max_chars).collect();
+        vec![Block::Text(format!(
+            "Local parsers could not extract text from `{filename}`. Below is its \
+             raw content. Return ONLY the readable text; if it is unreadable binary, \
+             reply exactly: (no extractable text).\n\n---- RAW ----\n{raw}\n---- END ----"
+        ))]
+    };
 
     let mut ctx = Context::new(Task {
-        description: prompt.clone(),
+        description: format!("extract content from {filename}"),
         source: None,
         deadline: None,
     });
     ctx.history.push(Turn {
         role: TurnRole::User,
-        blocks: vec![Block::Text(prompt)],
+        blocks: user_blocks,
     });
 
     let out = model
@@ -273,11 +296,30 @@ mod tests {
         let (_d, mut world) = ws_with("note.bin", b"some bytes with no local parser");
         let model = Arc::new(MockModel::new().script(MockResponse::text("EXTRACTED-TEXT")))
             as Arc<dyn Model>;
-        let out = ReadDocument::with_llm_fallback(model)
+        let out = ReadDocument::with_llm_fallback(model.clone())
             .invoke(json!({"path": "note.bin"}), &mut world)
             .await
             .unwrap();
         assert_eq!(out.content["source"], "llm");
         assert_eq!(out.content["text"], "EXTRACTED-TEXT");
+    }
+
+    #[tokio::test]
+    async fn image_is_sent_to_the_model_as_vision() {
+        let (_d, mut world) = ws_with("photo.png", b"\x89PNG\r\n\x1a\nfake-bytes");
+        let mock = Arc::new(MockModel::new().script(MockResponse::text("a cat")));
+        let out = ReadDocument::with_llm_fallback(mock.clone() as Arc<dyn Model>)
+            .invoke(json!({"path": "photo.png"}), &mut world)
+            .await
+            .unwrap();
+        assert_eq!(out.content["source"], "llm");
+        // The model must have actually received an image block (vision), not text.
+        let calls = mock.calls();
+        let saw_image = calls.iter().any(|c| {
+            c.history_summary
+                .iter()
+                .any(|h| h.kinds.iter().any(|k| *k == "image"))
+        });
+        assert!(saw_image, "the image file must reach the model as a Block::Image");
     }
 }

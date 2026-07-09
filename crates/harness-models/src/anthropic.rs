@@ -120,6 +120,18 @@ enum AnthropicBlock {
     RedactedThinking {
         data: String,
     },
+    /// Inline image (vision). `{"type":"image","source":{"type":"base64",...}}`.
+    Image {
+        source: AnthropicImageSource,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    kind: String, // "base64"
+    media_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -258,7 +270,7 @@ impl Model for AnthropicNative {
                     }
                     reasoning.push_str(&packed.to_string());
                 }
-                AnthropicBlock::ToolResult { .. } => {} // shouldn't appear in assistant response
+                AnthropicBlock::ToolResult { .. } | AnthropicBlock::Image { .. } => {} // not in assistant responses
             }
         }
 
@@ -389,6 +401,15 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                     blocks.push(AnthropicBlock::ToolResult {
                         tool_use_id: call_id.clone(),
                         content: s,
+                    });
+                }
+                Block::Image { media_type, base64 } => {
+                    blocks.push(AnthropicBlock::Image {
+                        source: AnthropicImageSource {
+                            kind: "base64".into(),
+                            media_type: media_type.clone(),
+                            data: base64.clone(),
+                        },
                     });
                 }
                 Block::FileRef { path, excerpt, .. } => {

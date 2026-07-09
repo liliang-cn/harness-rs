@@ -271,6 +271,9 @@ fn block_chars(b: &Block) -> usize {
             .map(|s| s.message.len() + s.agent_hint.as_ref().map_or(0, String::len))
             .sum(),
         Block::Reasoning(s) => s.len(),
+        // Base64 image payloads are large; count them so the budget doesn't
+        // wildly under-estimate a context carrying an image.
+        Block::Image { base64, .. } => base64.len(),
         _ => 0,
     }
 }
