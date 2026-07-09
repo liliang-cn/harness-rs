@@ -26,11 +26,11 @@ pub use replay::*;
 pub use subagent::*;
 pub use telemetry::*;
 
-use harness_compactor::DefaultCompactor;
+use harness_compactor::{CALIBRATION_KEY, DefaultCompactor};
 use harness_core::{
-    Action, Block, Compactor, Context, Event, Guide, HarnessError, HookOutcome, Model, ModelDelta,
-    ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage, StopReason, Task,
-    ToolCall, ToolResult, Turn, TurnRole, Usage, World,
+    Action, Block, CompactionStage, Compactor, Context, Event, Guide, HarnessError, HookOutcome,
+    Model, ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage,
+    StopReason, Task, ToolCall, ToolResult, Turn, TurnRole, Usage, World,
 };
 use harness_hooks::HookBus;
 use std::collections::HashMap;
@@ -59,6 +59,30 @@ impl Default for StuckPolicy {
             enabled: true,
             nudge_after: 3,
             abort_after: 6,
+        }
+    }
+}
+
+/// Governs *when* and *how far* the loop compacts context. Hysteresis: only
+/// start compacting once usage crosses `high_water`, and stop as soon as it's
+/// back under `target` — instead of running every stage above a threshold on
+/// every turn. This avoids over-compacting (needlessly reaching the lossy,
+/// main-model `AutoCompact` stage) and, because compaction rewrites history and
+/// invalidates the provider prefix cache, avoids nibbling the context every
+/// single turn.
+#[derive(Debug, Clone)]
+pub struct CompactPolicy {
+    /// Start compacting when `used/window` exceeds this. Default 0.75.
+    pub high_water: f32,
+    /// Stop as soon as `used/window` is back at/under this. Default 0.55.
+    pub target: f32,
+}
+
+impl Default for CompactPolicy {
+    fn default() -> Self {
+        Self {
+            high_water: 0.75,
+            target: 0.55,
         }
     }
 }
@@ -139,6 +163,8 @@ pub struct AgentLoop<M: Model> {
     pub learning: Option<LearningConfig>,
     /// Loop-detection policy. Enabled by default — see [`StuckPolicy`].
     pub stuck: StuckPolicy,
+    /// Context-compaction hysteresis. See [`CompactPolicy`].
+    pub compaction: CompactPolicy,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -156,12 +182,19 @@ impl<M: Model> AgentLoop<M> {
             recall_auto_inject: false,
             learning: None,
             stuck: StuckPolicy::default(),
+            compaction: CompactPolicy::default(),
         }
     }
 
     /// Override the loop-detection policy (thresholds, or disable entirely).
     pub fn with_stuck_policy(mut self, policy: StuckPolicy) -> Self {
         self.stuck = policy;
+        self
+    }
+
+    /// Override the compaction hysteresis policy. See [`CompactPolicy`].
+    pub fn with_compact_policy(mut self, policy: CompactPolicy) -> Self {
+        self.compaction = policy;
         self
     }
 
@@ -505,12 +538,23 @@ impl<M: Model> AgentLoop<M> {
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
 
-            // Compaction: run every stage required by current budget.
-            let stages = self.compactor.budget(&ctx).required_stages();
-            for stage in stages {
-                self.hooks.fire(&Event::PreCompact { stage }, world);
-                self.compactor.compact(stage, &mut ctx).await?;
-                self.hooks.fire(&Event::PostCompact { stage }, world);
+            // Compaction with hysteresis: only once over the high-water mark,
+            // then escalate stage-by-stage, re-estimating after each, and stop
+            // the moment we're back under target. Avoids over-compacting to the
+            // lossy AutoCompact stage and avoids rewriting history (→ prefix
+            // cache miss) every turn. Token estimate is calibrated against the
+            // last real `input_tokens` via `CALIBRATION_KEY`.
+            let mut budget = self.compactor.budget(&ctx);
+            if budget.ratio() > self.compaction.high_water {
+                for stage in CompactionStage::ALL {
+                    if budget.ratio() <= self.compaction.target {
+                        break;
+                    }
+                    self.hooks.fire(&Event::PreCompact { stage }, world);
+                    self.compactor.compact(stage, &mut ctx).await?;
+                    self.hooks.fire(&Event::PostCompact { stage }, world);
+                    budget = self.compactor.budget(&ctx);
+                }
             }
 
             // Per-iteration guides — recall-style adapters that want to
@@ -533,6 +577,30 @@ impl<M: Model> AgentLoop<M> {
                 self.model.complete(&ctx).await?
             };
             self.hooks.fire(&Event::PostModel { out: &out }, world);
+
+            // Calibrate the compactor against ground truth: `ctx` still holds
+            // exactly what we just sent, so `budget().used` is the estimate for
+            // it. Nudge the stored correction so estimate·correction ≈ the
+            // model's real `input_tokens` next time. Self-correcting (converges
+            // even as the raw estimate drifts); clamped so one odd turn can't
+            // blow it up. This is what makes compaction fire at the right moment
+            // for *this* model + language instead of a blind char heuristic.
+            if out.usage.input_tokens > 0 {
+                let used = self.compactor.budget(&ctx).used;
+                if used > 0 {
+                    let prev = ctx
+                        .metadata
+                        .get(CALIBRATION_KEY)
+                        .and_then(|v| v.as_f64())
+                        .filter(|f| f.is_finite() && *f > 0.0)
+                        .unwrap_or(1.0);
+                    let next = (prev * out.usage.input_tokens as f64 / used as f64)
+                        .clamp(0.1, 10.0);
+                    ctx.metadata
+                        .insert(CALIBRATION_KEY.into(), serde_json::json!(next));
+                }
+            }
+
             // Accumulate usage even if the run later exhausts budget.
             total_usage.input_tokens += out.usage.input_tokens;
             total_usage.output_tokens += out.usage.output_tokens;
