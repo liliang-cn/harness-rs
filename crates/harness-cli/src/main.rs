@@ -445,7 +445,10 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     if let Some(path) = &opts.record {
         match harness_loop::SessionRecorder::new(path) {
             Ok(rec) => loop_ = loop_.with_hook(Arc::new(rec)),
-            Err(e) => eprintln!("warning: could not open record file {}: {e}", path.display()),
+            Err(e) => eprintln!(
+                "warning: could not open record file {}: {e}",
+                path.display()
+            ),
         }
     }
 
@@ -667,7 +670,10 @@ async fn os_sandbox_world(root: &std::path::Path) -> (harness_core::World, Strin
         }
         Err(e) => {
             eprintln!("\x1b[33m(sandbox unavailable: {e}; running without)\x1b[0m");
-            (harness_context::default_world(root.to_path_buf()), "off".into())
+            (
+                harness_context::default_world(root.to_path_buf()),
+                "off".into(),
+            )
         }
     }
 }
@@ -694,7 +700,10 @@ async fn run_code(
     let (mut world, sandbox_desc) = if sandbox {
         os_sandbox_world(&root).await
     } else {
-        (harness_context::default_world(root.clone()), "off".to_string())
+        (
+            harness_context::default_world(root.clone()),
+            "off".to_string(),
+        )
     };
     let model = OpenAiCompat::with_key(base_url, model_id.clone(), key);
 
@@ -762,7 +771,10 @@ async fn run_code(
                 last_text.unwrap_or_default()
             }
             Ok(Outcome::Stuck {
-                last_text, iters, reason, ..
+                last_text,
+                iters,
+                reason,
+                ..
             }) => {
                 eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
                 last_text.unwrap_or_default()
@@ -1035,10 +1047,7 @@ async fn replay_session(
         .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
     let stats = harness_loop::SessionStats::from(&events);
     if stats.model_calls == 0 {
-        anyhow::bail!(
-            "no model outputs in {} — nothing to replay",
-            file.display()
-        );
+        anyhow::bail!("no model outputs in {} — nothing to replay", file.display());
     }
 
     if verbose {

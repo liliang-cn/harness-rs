@@ -50,7 +50,8 @@ async fn deepseek_prefix_cache_hits_on_second_turn() {
         eprintln!("skip: set HARNESS_API_KEY to run the live prefix-cache test");
         return;
     };
-    let base = std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| "https://api.deepseek.com".into());
+    let base =
+        std::env::var("HARNESS_BASE_URL").unwrap_or_else(|_| "https://api.deepseek.com".into());
     let model = std::env::var("HARNESS_MODEL").unwrap_or_else(|_| "deepseek-chat".into());
 
     let loop_ = AgentLoop::new(OpenAiCompat::with_key(base, model, key))

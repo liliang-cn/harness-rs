@@ -462,8 +462,6 @@ impl harness_core::ProcessRunner for DockerExecRunner {
     }
 }
 
-
-
 // ============================================================
 // SeatbeltSandbox (macOS, OS-native — no Docker, per-command)
 // ============================================================
@@ -513,7 +511,9 @@ fn seatbelt_profile(root: &Path, allow_net: bool, confine_writes: bool) -> Strin
             "(allow file-write* (subpath \"{}\"))\n",
             root.display()
         ));
-        p.push_str("(allow file-write* (subpath \"/private/var/folders\") (subpath \"/private/tmp\"))\n");
+        p.push_str(
+            "(allow file-write* (subpath \"/private/var/folders\") (subpath \"/private/tmp\"))\n",
+        );
         p.push_str("(allow file-write* (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\") (literal \"/dev/dtracehelper\"))\n");
     }
     p
@@ -859,9 +859,17 @@ mod tests {
             return; // offline — skip
         }
 
-        let h = SeatbeltSandbox::new(".").spawn().await.expect("seatbelt spawns");
+        let h = SeatbeltSandbox::new(".")
+            .spawn()
+            .await
+            .expect("seatbelt spawns");
         // local child ok
-        let echo = h.world.runner.exec("/bin/echo", &["hi"], None).await.unwrap();
+        let echo = h
+            .world
+            .runner
+            .exec("/bin/echo", &["hi"], None)
+            .await
+            .unwrap();
         assert_eq!(echo.status, 0);
         // networked child blocked
         let blocked = h.world.runner.exec(curl, &probe, None).await.unwrap();

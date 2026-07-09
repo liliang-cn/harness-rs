@@ -276,7 +276,10 @@ async fn main() -> anyhow::Result<()> {
                 last_text.clone().unwrap_or_default()
             }
             Outcome::Stuck {
-                last_text, iters, reason, ..
+                last_text,
+                iters,
+                reason,
+                ..
             } => {
                 eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
                 last_text.clone().unwrap_or_default()

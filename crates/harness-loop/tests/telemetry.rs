@@ -58,7 +58,9 @@ async fn emits_structured_run_telemetry() {
         let mut world = default_world(&ws);
 
         let model = MockModel::new()
-            .script(MockResponse::tool_call("read_file", json!({"path": "x.txt"})).with_usage(100, 20))
+            .script(
+                MockResponse::tool_call("read_file", json!({"path": "x.txt"})).with_usage(100, 20),
+            )
             .script(MockResponse::text("done").with_usage(50, 10));
 
         let outcome = AgentLoop::new(model)
@@ -84,9 +86,6 @@ async fn emits_structured_run_telemetry() {
         "missing token field:\n{output}"
     );
     assert!(output.contains("tool.call"), "missing tool.call:\n{output}");
-    assert!(
-        output.contains("read_file"),
-        "missing tool name:\n{output}"
-    );
+    assert!(output.contains("read_file"), "missing tool name:\n{output}");
     assert!(output.contains("run.end"), "missing run.end:\n{output}");
 }

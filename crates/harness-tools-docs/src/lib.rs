@@ -236,7 +236,10 @@ async fn llm_extract(
         ]
     } else {
         // Non-image → raw text extraction.
-        let raw: String = String::from_utf8_lossy(&bytes).chars().take(max_chars).collect();
+        let raw: String = String::from_utf8_lossy(&bytes)
+            .chars()
+            .take(max_chars)
+            .collect();
         vec![Block::Text(format!(
             "Local parsers could not extract text from `{filename}`. Below is its \
              raw content. Return ONLY the readable text; if it is unreadable binary, \
@@ -318,8 +321,11 @@ mod tests {
         let saw_image = calls.iter().any(|c| {
             c.history_summary
                 .iter()
-                .any(|h| h.kinds.iter().any(|k| *k == "image"))
+                .any(|h| h.kinds.contains(&"image"))
         });
-        assert!(saw_image, "the image file must reach the model as a Block::Image");
+        assert!(
+            saw_image,
+            "the image file must reach the model as a Block::Image"
+        );
     }
 }

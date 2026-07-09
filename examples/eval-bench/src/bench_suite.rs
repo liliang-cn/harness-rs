@@ -52,7 +52,10 @@ const TASKS: &[BenchTask] = &[
         id: "rename-key",
         prompt: "In config.json, rename the JSON key \"old_name\" to \"new_name\". \
                  Keep its value and every other key unchanged.",
-        seed: &[("config.json", "{\"old_name\": \"server-1\", \"port\": 3477}\n")],
+        seed: &[(
+            "config.json",
+            "{\"old_name\": \"server-1\", \"port\": 3477}\n",
+        )],
         verify: r#"grep -q '"new_name"' config.json && ! grep -q '"old_name"' config.json && grep -q 'server-1' config.json"#,
     },
     BenchTask {
@@ -122,11 +125,7 @@ fn model_from_env() -> OpenAiCompat {
 
 async fn run_task(task: &BenchTask) -> Row {
     // Fresh, isolated workspace per task.
-    let ws = std::env::temp_dir().join(format!(
-        "bench-suite-{}-{}",
-        std::process::id(),
-        task.id
-    ));
+    let ws = std::env::temp_dir().join(format!("bench-suite-{}-{}", std::process::id(), task.id));
     let _ = std::fs::remove_dir_all(&ws);
     std::fs::create_dir_all(&ws).expect("create workspace");
     for (rel, body) in task.seed {

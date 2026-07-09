@@ -46,7 +46,11 @@ impl Compactor for StubCompactor {
             window: self.window,
         }
     }
-    async fn compact(&self, _stage: CompactionStage, _ctx: &mut Context) -> Result<(), CompactError> {
+    async fn compact(
+        &self,
+        _stage: CompactionStage,
+        _ctx: &mut Context,
+    ) -> Result<(), CompactError> {
         self.compactions.fetch_add(1, Ordering::SeqCst);
         let mut u = self.used.lock().unwrap();
         *u = u.saturating_sub(self.drop_per_stage);
