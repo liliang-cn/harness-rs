@@ -123,30 +123,33 @@ impl CortexdbMemory {
     /// tokens on our side. Run it periodically (e.g. from `harness-scheduler`)
     /// after a batch of turns has been recorded.
     ///
-    /// Operates on this instance's `scope`/`namespace`/`user_id`. Pass
-    /// `extra_args` to override or add fields the server expects (the exact
-    /// consolidation params vary by CortexDB version); pass `Value::Null` for the
-    /// defaults. Returns the raw tool result.
+    /// Operates on this instance's `scope`/`namespace`/`user_id`. The server
+    /// **requires** a `reflect.recall.query`; this method supplies a broad
+    /// default plus `promote_to_knowledge: true`, so `consolidate(Value::Null)`
+    /// works out of the box. Override either via `extra_args`, e.g.:
     ///
-    /// Errors if the server doesn't expose the tool (check [`can_consolidate`]).
+    /// ```ignore
+    /// mem.consolidate(serde_json::json!({
+    ///     "reflect": { "recall": { "query": "past tasks and tools", "max_memory_items": 30 } }
+    /// })).await?;
+    /// ```
+    ///
+    /// **Quality note:** in pure-lexical mode (no embedder configured on the
+    /// CortexDB side) entity extraction is poor — configure an embedder for a
+    /// clean graph. Returns the raw tool result. Errors if the server doesn't
+    /// expose the tool (check [`can_consolidate`](Self::can_consolidate)).
     pub async fn consolidate(&self, extra_args: Value) -> Result<Value, MemoryError> {
         let tool = self.consolidate.as_ref().ok_or_else(|| {
             MemoryError::Backend(
                 "this CortexDB build exposes no `knowledge_memory_consolidate` tool".into(),
             )
         })?;
-        let mut args = json!({
-            "scope": self.scope,
-            "namespace": self.namespace,
-        });
-        if let Some(u) = &self.user_id {
-            args["user_id"] = json!(u);
-        }
-        if let Value::Object(extra) = extra_args {
-            if let Value::Object(base) = &mut args {
-                base.extend(extra);
-            }
-        }
+        let args = build_consolidate_args(
+            &self.scope,
+            &self.namespace,
+            self.user_id.as_deref(),
+            extra_args,
+        );
         let mut world = harness_context::default_world(".");
         let res = tool
             .invoke(args, &mut world)
@@ -179,23 +182,13 @@ impl Memory for CortexdbMemory {
         } else {
             entry.id.clone()
         };
-        let mut metadata = serde_json::Map::new();
-        if !entry.tags.is_empty() {
-            metadata.insert("tags".into(), json!(entry.tags));
-        }
-        if let Some(s) = &entry.source {
-            metadata.insert("source".into(), json!(s));
-        }
-        let mut args = json!({
-            "memory_id": id,
-            "content": entry.content,
-            "scope": self.scope,
-            "namespace": self.namespace,
-            "metadata": Value::Object(metadata),
-        });
-        if let Some(u) = &self.user_id {
-            args["user_id"] = json!(u);
-        }
+        let args = build_save_args(
+            &id,
+            &entry,
+            &self.scope,
+            &self.namespace,
+            self.user_id.as_deref(),
+        );
 
         let mut world = harness_context::default_world(".");
         let res = self
@@ -276,5 +269,148 @@ impl Memory for CortexdbMemory {
             out.push(entry);
         }
         Ok(out)
+    }
+}
+
+/// Build the `memory_save` args for `entry`. Promotes `role:`/`session:` tags to
+/// CortexDB's first-class `role` / `session_id` columns (so a transcript can be
+/// queried and ordered by `session_id + role`, not just `json_extract` on
+/// metadata); all remaining tags + `source` go into `metadata`.
+fn build_save_args(
+    id: &str,
+    entry: &MemoryEntry,
+    scope: &str,
+    namespace: &str,
+    user_id: Option<&str>,
+) -> Value {
+    let mut role: Option<String> = None;
+    let mut session: Option<String> = None;
+    let mut other_tags: Vec<String> = Vec::new();
+    for t in &entry.tags {
+        if let Some(r) = t.strip_prefix("role:") {
+            role = Some(r.to_string());
+        } else if let Some(s) = t.strip_prefix("session:") {
+            session = Some(s.to_string());
+        } else {
+            other_tags.push(t.clone());
+        }
+    }
+
+    let mut metadata = serde_json::Map::new();
+    if !other_tags.is_empty() {
+        metadata.insert("tags".into(), json!(other_tags));
+    }
+    if let Some(s) = &entry.source {
+        metadata.insert("source".into(), json!(s));
+    }
+
+    let mut args = json!({
+        "memory_id": id,
+        "content": entry.content,
+        "scope": scope,
+        "namespace": namespace,
+        "metadata": Value::Object(metadata),
+    });
+    if let Some(r) = role {
+        args["role"] = json!(r);
+    }
+    if let Some(s) = session {
+        args["session_id"] = json!(s);
+    }
+    if let Some(u) = user_id {
+        args["user_id"] = json!(u);
+    }
+    args
+}
+
+/// Build the `knowledge_memory_consolidate` args: base scope/namespace/user_id,
+/// merge caller `extra_args`, then fill the server-required `reflect.recall.query`
+/// (+ `promote_to_knowledge`) defaults if the caller didn't supply them.
+fn build_consolidate_args(
+    scope: &str,
+    namespace: &str,
+    user_id: Option<&str>,
+    extra_args: Value,
+) -> Value {
+    let mut args = json!({ "scope": scope, "namespace": namespace });
+    if let Some(u) = user_id {
+        args["user_id"] = json!(u);
+    }
+    if let Value::Object(extra) = extra_args
+        && let Value::Object(base) = &mut args
+    {
+        base.extend(extra);
+    }
+    if args.get("reflect").is_none() {
+        args["reflect"] = json!({
+            "recall": {
+                "query": "key facts, entities, decisions, tasks, and tools from recent conversations",
+                "max_memory_items": 30
+            }
+        });
+    }
+    if args.get("promote_to_knowledge").is_none() {
+        args["promote_to_knowledge"] = json!(true);
+    }
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consolidate_null_fills_required_reflect_defaults() {
+        let args = build_consolidate_args("global", "harness", Some("u1"), Value::Null);
+        assert_eq!(args["scope"], "global");
+        assert_eq!(args["user_id"], "u1");
+        // Server-required reflect.recall.query is supplied.
+        assert!(args["reflect"]["recall"]["query"].is_string());
+        assert_eq!(args["reflect"]["recall"]["max_memory_items"], 30);
+        assert_eq!(args["promote_to_knowledge"], true);
+    }
+
+    #[test]
+    fn consolidate_extra_args_override_defaults() {
+        let extra = json!({
+            "reflect": { "recall": { "query": "custom", "max_memory_items": 5 } },
+            "promote_to_knowledge": false
+        });
+        let args = build_consolidate_args("session", "app", None, extra);
+        assert_eq!(args["reflect"]["recall"]["query"], "custom");
+        assert_eq!(args["reflect"]["recall"]["max_memory_items"], 5);
+        assert_eq!(args["promote_to_knowledge"], false);
+        assert!(args.get("user_id").is_none());
+    }
+
+    #[test]
+    fn role_and_session_promoted_to_native_params() {
+        let entry = MemoryEntry::new("hi there")
+            .with_source("transcript")
+            .with_tags(["role:assistant", "session:sess-1", "topic:deploy"]);
+        let args = build_save_args("m1", &entry, "session", "myapp", Some("u42"));
+
+        // Promoted to first-class columns.
+        assert_eq!(args["role"], "assistant");
+        assert_eq!(args["session_id"], "sess-1");
+        assert_eq!(args["user_id"], "u42");
+        assert_eq!(args["scope"], "session");
+        assert_eq!(args["namespace"], "myapp");
+
+        // role:/session: stripped from metadata tags; unrelated tag kept.
+        let tags = args["metadata"]["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0], "topic:deploy");
+        assert_eq!(args["metadata"]["source"], "transcript");
+    }
+
+    #[test]
+    fn no_role_session_tags_omits_native_params() {
+        let entry = MemoryEntry::new("note").with_tags(["misc"]);
+        let args = build_save_args("m2", &entry, "global", "harness", None);
+        assert!(args.get("role").is_none());
+        assert!(args.get("session_id").is_none());
+        assert!(args.get("user_id").is_none());
+        assert_eq!(args["metadata"]["tags"][0], "misc");
     }
 }
