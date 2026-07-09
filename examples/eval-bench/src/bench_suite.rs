@@ -169,6 +169,9 @@ async fn run_task(task: &BenchTask) -> Row {
         Ok(Ok(Outcome::BudgetExhausted { iters, usage, .. })) => {
             ("budget", iters, usage.input_tokens, usage.output_tokens)
         }
+        Ok(Ok(Outcome::Stuck { iters, usage, .. })) => {
+            ("stuck", iters, usage.input_tokens, usage.output_tokens)
+        }
         Ok(Err(e)) => {
             eprintln!("  ! run error: {e}");
             ("error", 0, 0, 0)
@@ -189,6 +192,7 @@ async fn run_task(task: &BenchTask) -> Row {
         (_, true) => "resolved",
         ("timeout", false) => "timeout",
         ("error", false) => "error",
+        ("stuck", false) => "stuck",
         (_, false) => "wrong",
     };
 

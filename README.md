@@ -140,8 +140,25 @@ dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
 
 ## Benchmarks
 
-Measured cost on a fixed task set — `deepseek-v4-flash` via Aliyun MaaS,
-2026-07-04. Every task finished (`Done`) with side effects verified
+**Completion rate.** `bench-suite` runs a task set where each task carries a
+machine verifier (a shell assertion the harness runs *outside* the agent), so
+"resolved" is objective — not the model grading itself. `qwen3.7-plus` via
+Aliyun MaaS, 2026-07-09:
+
+| task | status | iters | tools | in tok | out tok |
+|---|---|--:|--:|--:|--:|
+| sum-file | resolved | 3 | 2 | 2793 | 214 |
+| rename-key | resolved | 3 | 2 | 2805 | 261 |
+| count-lines | resolved | 3 | 2 | 2730 | 156 |
+| fix-typo | resolved | 3 | 2 | 2782 | 219 |
+| create-readme | resolved | 2 | 1 | 1733 | 144 |
+
+**pass@1 = 5/5 (100%)** on the Rust-native set. Reproduce with
+`HARNESS_API_KEY=… HARNESS_BASE_URL=… HARNESS_MODEL=… cargo run -p eval-bench --bin bench-suite`
+(exits non-zero on any failure, so CI can gate on it).
+
+**Cost.** Measured token cost on a fixed task set — `deepseek-v4-flash` via
+Aliyun MaaS, 2026-07-04. Every task finished (`Done`) with side effects verified
 (`sum.txt` = 42, etc.). Reproduce any row with `harness run "<task>" --json`:
 
 | task | iters | tool calls | in tok | out tok |
