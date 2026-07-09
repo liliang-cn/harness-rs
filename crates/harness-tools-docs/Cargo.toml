@@ -1,0 +1,40 @@
+[package]
+name = "harness-rs-tools-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Document-extraction tool (read_document) for harness-rs — parse PDF/Word/Excel/PowerPoint locally in pure Rust, and fall back to an LLM for anything local parsing can't handle."
+
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+[lib]
+name = "harness_tools_docs"
+path = "src/lib.rs"
+
+[features]
+# Local pure-Rust extractors are on by default (no native deps — builds on every
+# platform). The LLM fallback needs no extra deps (it uses the harness `Model`),
+# so it's always available when you construct the tool with a fallback model.
+default = ["local"]
+local = ["dep:pdf-extract", "dep:office_oxide"]
+
+[dependencies]
+harness-core = { workspace = true }
+async-trait  = { workspace = true }
+tokio        = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+once_cell    = { workspace = true }
+# Pure-Rust local extraction. Optional so a minimal build can drop them and rely
+# on the LLM fallback alone.
+pdf-extract  = { version = "0.12", optional = true }
+office_oxide = { version = "0.1", optional = true }
+
+[dev-dependencies]
+harness-models  = { workspace = true }
+harness-context = { workspace = true }
+tokio           = { workspace = true, features = ["macros", "rt-multi-thread"] }
