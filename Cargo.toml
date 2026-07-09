@@ -18,6 +18,7 @@ members = [
     "crates/harness-skills",
     "crates/harness-tools-fs",
     "crates/harness-tools-shell",
+    "crates/harness-tools-docs",
     "crates/harness-tools-web",
     "crates/harness-tools-tasks",
     "crates/harness-tools-memory",
@@ -78,6 +79,7 @@ harness-permissions= { package = "harness-rs-permissions",path = "crates/harness
 harness-skills     = { package = "harness-rs-skills",     path = "crates/harness-skills",     version = "0.0.24" }
 harness-tools-fs   = { package = "harness-rs-tools-fs",   path = "crates/harness-tools-fs",   version = "0.0.24" }
 harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness-tools-shell",version = "0.0.24" }
+harness-tools-docs = { package = "harness-rs-tools-docs", path = "crates/harness-tools-docs", version = "0.0.24" }
 harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.24" }
 harness-tools-tasks= { package = "harness-rs-tools-tasks",path = "crates/harness-tools-tasks",version = "0.0.24" }
 harness-tools-memory= { package = "harness-rs-tools-memory",path = "crates/harness-tools-memory",version = "0.0.24" }
