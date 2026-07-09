@@ -3,10 +3,43 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.25
 
 ### Added
 
+- **Completion-rate benchmark: `eval-bench --bin bench-suite`.** A verifier-driven
+  `pass@1` runner — each task carries a machine verifier (a shell assertion the
+  harness runs *outside* the agent), so "resolved" is objective. Rust-native task
+  set; **pass@1 = 5/5** measured with `qwen3.7-plus`. Emits a markdown table + JSON
+  and exits non-zero on any failure for CI gating.
+- **Stuck detection (`StuckPolicy`, `Outcome::Stuck`).** The loop fingerprints
+  each round's tool calls; on repeated identical calls it injects a "change your
+  approach" nudge (`nudge_after`, default 3) then terminates cleanly
+  (`abort_after`, default 6) instead of burning the whole budget spinning.
+  Enabled by default; `with_stuck_policy()` to tune or disable.
+- **Observability: `TelemetryHook` + `harness replay` / `run --record`.**
+  `TelemetryHook` maps the lifecycle event stream onto structured `tracing`
+  spans (`agent_run` → `model.complete` / `tool.call` / …); attach
+  `tracing-opentelemetry` to export to OTLP. `harness run --record run.jsonl`
+  captures a session; `harness replay run.jsonl` re-executes it offline from the
+  recorded model outputs (zero API cost), reproducing the exact Outcome — a free
+  CI regression test.
+- **Vision / image input: `Block::Image { media_type, base64 }`** + a
+  dependency-free base64 encoder (`Block::image_bytes`). All three provider
+  adapters render it: OpenAI `image_url` data-URI parts, Anthropic `image`/base64
+  source, Gemini `inlineData`.
+- **`harness-rs-tools-docs` (new crate): `read_document`.** Reads external
+  documents — local pure-Rust extraction first (`pdf-extract` for PDF,
+  `office_oxide` for docx/xlsx/pptx/doc/xls/ppt; feature `local`, on by default,
+  no native deps), then an **LLM fallback** for anything local can't parse.
+  Image files route to a real `Block::Image` vision request. Read-only, jailed to
+  the workspace.
+- **Conversation → CortexDB → knowledge graph.** `harness-experience`'s
+  `TranscriptRecorder` (a sync hook → channel → background writer) persists every
+  turn to any `Memory`; `CortexdbMemory::consolidate()` triggers CortexDB's
+  server-side `knowledge_memory_consolidate` to distill memories into the graph
+  (zero tokens on our side). `role`/`session` are promoted to `memory_save`'s
+  first-class `role`/`session_id` columns.
 - **Prefix-cache-friendly multi-turn: `AgentLoop::session()` → `Session`.** A
   persistent conversation that re-runs the loop each turn against a **stable
   prefix** (system + tool schemas), so a provider's prefix cache hits across
@@ -25,6 +58,13 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Changed
 
+- **Compaction tuning: real-token calibration + hysteresis (`CompactPolicy`).**
+  The loop now calibrates the compactor's char-based token estimate against the
+  model's real reported `input_tokens` each turn (fixes the fixed 0.30 tok/char
+  heuristic badly under-counting CJK), and only compacts above a `high_water`
+  mark, stopping as soon as usage is back under `target` — instead of running
+  every stage over a threshold on every turn (avoids over-compacting to the lossy
+  `AutoCompact` stage and needless prefix-cache invalidation).
 - **Deterministic tool ordering** — `ToolRegistry::schemas()` now returns tools
   **name-sorted** instead of in `HashMap` order, so the request's `tools` block
   is byte-stable across turns (a prerequisite for prefix caching that was

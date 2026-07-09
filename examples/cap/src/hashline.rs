@@ -174,7 +174,7 @@ mod tests {
 
     const SRC: &str = "fn main() {\n    println!(\"hi\");\n}\n";
 
-    fn anchor_for<'a>(content: &'a str, needle: &str) -> String {
+    fn anchor_for(content: &str, needle: &str) -> String {
         anchors(content)
             .into_iter()
             .find(|(_, l)| l.contains(needle))

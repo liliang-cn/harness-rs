@@ -769,7 +769,11 @@ fn provider_from_base_url(url: &str) -> String {
 /// existing system text.
 fn inject_schema_hint(messages: &mut Vec<ChatMessage>, hint: &str) {
     if let Some(sys) = messages.iter_mut().find(|m| m.role == "system") {
-        let existing = sys.content.take().and_then(|c| c.into_text()).unwrap_or_default();
+        let existing = sys
+            .content
+            .take()
+            .and_then(|c| c.into_text())
+            .unwrap_or_default();
         let joined = if existing.trim().is_empty() {
             hint.to_string()
         } else {

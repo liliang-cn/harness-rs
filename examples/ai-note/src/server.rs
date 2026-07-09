@@ -1647,7 +1647,9 @@ async fn session_stream_handler(
                         usage.output_tokens as i64,
                     );
                 }
-                let _ = tx_done.send(json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"stuck"}));
+                let _ = tx_done.send(
+                    json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"stuck"}),
+                );
             }
             Err(e) => {
                 let _ = tx_done.send(json!({"type":"error","message": format!("agent: {e}")}));

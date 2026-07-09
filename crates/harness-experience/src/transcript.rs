@@ -113,7 +113,10 @@ pub fn spawn_transcript_writer(
         while let Some(turn) = rx.recv().await {
             let entry = MemoryEntry::new(turn.content)
                 .with_source("transcript")
-                .with_tags([format!("role:{}", turn.role), format!("session:{}", turn.session)]);
+                .with_tags([
+                    format!("role:{}", turn.role),
+                    format!("session:{}", turn.session),
+                ]);
             if let Err(e) = memory.write(entry).await {
                 tracing::warn!(error = %e, "transcript write failed");
             }
@@ -171,7 +174,13 @@ mod tests {
             content: serde_json::json!({"content": "data"}),
             trace: None,
         };
-        recorder.fire(&Event::PostToolUse { action: &action, result: &result }, &mut world);
+        recorder.fire(
+            &Event::PostToolUse {
+                action: &action,
+                result: &result,
+            },
+            &mut world,
+        );
 
         // Close the channel so the writer task finishes, then join.
         drop(recorder);
@@ -187,6 +196,10 @@ mod tests {
         assert!(roles.contains(&"role:user"));
         assert!(roles.contains(&"role:assistant"));
         assert!(roles.contains(&"role:tool"));
-        assert!(stored.iter().all(|e| e.tags.iter().any(|t| t == "session:sess-1")));
+        assert!(
+            stored
+                .iter()
+                .all(|e| e.tags.iter().any(|t| t == "session:sess-1"))
+        );
     }
 }

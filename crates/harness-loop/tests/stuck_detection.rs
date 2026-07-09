@@ -115,9 +115,18 @@ async fn distinct_calls_do_not_trip_detector() {
     let mut world = default_world(&ws);
     // Each round asks for a *different* path, then finishes — never a repeat.
     let model = MockModel::new()
-        .script(MockResponse::tool_call("read_file", json!({"path": "a.txt"})))
-        .script(MockResponse::tool_call("read_file", json!({"path": "b.txt"})))
-        .script(MockResponse::tool_call("read_file", json!({"path": "c.txt"})))
+        .script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "a.txt"}),
+        ))
+        .script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "b.txt"}),
+        ))
+        .script(MockResponse::tool_call(
+            "read_file",
+            json!({"path": "c.txt"}),
+        ))
         .script(MockResponse::text("done"));
 
     let outcome = AgentLoop::new(model)

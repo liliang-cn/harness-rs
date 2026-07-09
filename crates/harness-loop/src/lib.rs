@@ -594,8 +594,8 @@ impl<M: Model> AgentLoop<M> {
                         .and_then(|v| v.as_f64())
                         .filter(|f| f.is_finite() && *f > 0.0)
                         .unwrap_or(1.0);
-                    let next = (prev * out.usage.input_tokens as f64 / used as f64)
-                        .clamp(0.1, 10.0);
+                    let next =
+                        (prev * out.usage.input_tokens as f64 / used as f64).clamp(0.1, 10.0);
                     ctx.metadata
                         .insert(CALIBRATION_KEY.into(), serde_json::json!(next));
                 }
@@ -658,9 +658,8 @@ impl<M: Model> AgentLoop<M> {
                 }
 
                 if repeat_count >= self.stuck.abort_after {
-                    let reason = format!(
-                        "repeated the same tool call {repeat_count}× without progress"
-                    );
+                    let reason =
+                        format!("repeated the same tool call {repeat_count}× without progress");
                     tracing::warn!(repeated = repeat_count, "stuck: aborting run");
                     self.hooks.fire(&Event::SessionEnd, world);
                     return Ok(Outcome::Stuck {
@@ -674,7 +673,10 @@ impl<M: Model> AgentLoop<M> {
                 }
 
                 if repeat_count == self.stuck.nudge_after {
-                    tracing::warn!(repeated = repeat_count, "stuck: nudging model to change approach");
+                    tracing::warn!(
+                        repeated = repeat_count,
+                        "stuck: nudging model to change approach"
+                    );
                     ctx.push_feedback(vec![harness_core::Signal {
                         severity: harness_core::Severity::Warn,
                         origin: "stuck-detector".into(),
