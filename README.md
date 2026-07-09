@@ -38,7 +38,8 @@ Lopopolo/OpenAI, 2026). Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
-| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · OS-native sandbox (macOS Seatbelt) · git-worktree / Docker · `harness code` / `run` / `sched` / `new` / `mcp serve` | — |
+| **Observability** | `TelemetryHook` (structured `tracing` spans → OTLP) · JSONL session record + deterministic offline `replay` | `harness-loop` |
+| **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · OS-native sandbox (macOS Seatbelt) · git-worktree / Docker · `harness code` / `run` / `replay` / `trace` / `sched` / `new` / `mcp serve` | — |
 
 ## Quick start
 
@@ -137,6 +138,26 @@ See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
 two end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
 (concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
 dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
+
+## Observability
+
+Two seams, one instrumentation. **`TelemetryHook`** projects the agent's
+lifecycle onto structured `tracing` spans (`agent_run` → `model.complete` /
+`tool.call` / `budget.warning`, with token, latency, and ok/err fields).
+Attach `tracing-opentelemetry` and they export to Jaeger / Tempo / any OTLP
+backend unchanged; attach `tracing_subscriber::fmt().json()` for a log pipeline.
+
+**Record + replay** makes a run reproducible for free:
+
+```sh
+harness run "…" --workspace ./ws --write --record run.jsonl   # capture live
+harness replay run.jsonl --workspace ./ws                      # re-run offline, no LLM
+harness trace  run.jsonl --verbose                             # inspect the timeline
+```
+
+`replay` drives the loop from the recorded model outputs (a `MockModel`) and
+re-executes the tool calls, so it reproduces the exact Outcome with zero API
+cost — record once, regression-test in CI forever.
 
 ## Benchmarks
 
