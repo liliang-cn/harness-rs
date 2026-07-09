@@ -75,7 +75,9 @@ impl harness_core::Tool for ClockTool {
 fn outcome_text(o: &Outcome) -> Option<&str> {
     match o {
         Outcome::Done { text, .. } => text.as_deref(),
-        Outcome::BudgetExhausted { last_text, .. } => last_text.as_deref(),
+        Outcome::BudgetExhausted { last_text, .. } | Outcome::Stuck { last_text, .. } => {
+            last_text.as_deref()
+        }
     }
 }
 

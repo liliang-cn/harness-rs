@@ -34,8 +34,46 @@ use harness_hooks::HookBus;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Where a run finished. Marked `#[non_exhaustive]` so future fields don't break
-/// downstream matches — always include `..` when destructuring.
+/// Governs the loop's stuck-detector. When the model repeats the *same* tool
+/// call (name + args) round after round without making progress, the loop first
+/// nudges it to change approach, then terminates cleanly with [`Outcome::Stuck`]
+/// rather than burning the rest of the budget spinning on a loop.
+///
+/// Enabled by default with conservative thresholds — the calls must be
+/// *byte-identical*, so genuine "read the same file twice" work never trips it.
+#[derive(Debug, Clone)]
+pub struct StuckPolicy {
+    pub enabled: bool,
+    /// Consecutive identical tool-call rounds before injecting a "you are
+    /// repeating yourself, change your approach" feedback signal.
+    pub nudge_after: u32,
+    /// Consecutive identical rounds before terminating with [`Outcome::Stuck`].
+    pub abort_after: u32,
+}
+
+impl Default for StuckPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            nudge_after: 3,
+            abort_after: 6,
+        }
+    }
+}
+
+/// A stable fingerprint of a round's tool calls (names + args, ignoring the
+/// volatile call id). Two rounds with the same fingerprint asked for the exact
+/// same actions — the signal the stuck-detector keys on.
+fn tool_call_fingerprint(calls: &[ToolCall]) -> String {
+    calls
+        .iter()
+        .map(|c| format!("{}({})", c.name, c.args))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Where a run finished. Each variant is `#[non_exhaustive]` so new *fields*
+/// don't break downstream matches — always include `..` when destructuring.
 #[derive(Debug, Clone)]
 pub enum Outcome {
     /// Model returned text with no tool calls (natural end).
@@ -52,6 +90,21 @@ pub enum Outcome {
     /// instead of seeing a single bare "budget out" string.
     #[non_exhaustive]
     BudgetExhausted {
+        iters: u32,
+        last_text: Option<String>,
+        tools_called: u32,
+        usage: harness_core::Usage,
+    },
+    /// The agent got stuck: it repeated the *same* tool call for
+    /// `StuckPolicy::abort_after` consecutive rounds without progress, so the
+    /// loop terminated early to save the rest of the budget. Carries partial
+    /// work (last text, files already written by tools) like `BudgetExhausted`.
+    #[non_exhaustive]
+    Stuck {
+        /// Human-readable reason, e.g. "repeated `read_file(...)` 6× without progress".
+        reason: String,
+        /// How many consecutive identical rounds were observed.
+        repeated: u32,
         iters: u32,
         last_text: Option<String>,
         tools_called: u32,
@@ -82,6 +135,8 @@ pub struct AgentLoop<M: Model> {
     /// past context at session start.
     pub recall_auto_inject: bool,
     pub learning: Option<LearningConfig>,
+    /// Loop-detection policy. Enabled by default — see [`StuckPolicy`].
+    pub stuck: StuckPolicy,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -98,7 +153,14 @@ impl<M: Model> AgentLoop<M> {
             recall: None,
             recall_auto_inject: false,
             learning: None,
+            stuck: StuckPolicy::default(),
         }
+    }
+
+    /// Override the loop-detection policy (thresholds, or disable entirely).
+    pub fn with_stuck_policy(mut self, policy: StuckPolicy) -> Self {
+        self.stuck = policy;
+        self
     }
 
     /// Opt in to streaming the model's terminal turn token-by-token via
@@ -243,10 +305,20 @@ impl<M: Model> AgentLoop<M> {
             Outcome::Done { text: Some(t), .. }
             | Outcome::BudgetExhausted {
                 last_text: Some(t), ..
+            }
+            | Outcome::Stuck {
+                last_text: Some(t), ..
             } => t,
             Outcome::Done { text: None, .. } => {
                 return Err(HarnessError::Other(
                     "run_typed: model returned no text".into(),
+                ));
+            }
+            Outcome::Stuck {
+                last_text: None, ..
+            } => {
+                return Err(HarnessError::Other(
+                    "run_typed: agent stuck with no text".into(),
                 ));
             }
             Outcome::BudgetExhausted {
@@ -423,6 +495,11 @@ impl<M: Model> AgentLoop<M> {
         let mut total_usage = harness_core::Usage::default();
         let mut last_text: Option<String> = None;
 
+        // Stuck-detector state: the previous round's tool-call fingerprint and
+        // how many consecutive rounds have repeated it.
+        let mut last_fingerprint: Option<String> = None;
+        let mut repeat_count: u32 = 0;
+
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
 
@@ -495,6 +572,55 @@ impl<M: Model> AgentLoop<M> {
                     tools_called,
                     usage: total_usage,
                 });
+            }
+
+            // ── stuck detection ─────────────────────────────────────────
+            // The model asked for tools again. If it's the *same* request as
+            // last round, it's spinning: nudge it to change tack, then abort
+            // cleanly rather than burn the rest of the budget on the loop.
+            if self.stuck.enabled {
+                let fp = tool_call_fingerprint(&out.tool_calls);
+                if last_fingerprint.as_ref() == Some(&fp) {
+                    repeat_count += 1;
+                } else {
+                    repeat_count = 1;
+                    last_fingerprint = Some(fp);
+                }
+
+                if repeat_count >= self.stuck.abort_after {
+                    let reason = format!(
+                        "repeated the same tool call {repeat_count}× without progress"
+                    );
+                    tracing::warn!(repeated = repeat_count, "stuck: aborting run");
+                    self.hooks.fire(&Event::SessionEnd, world);
+                    return Ok(Outcome::Stuck {
+                        reason,
+                        repeated: repeat_count,
+                        iters: iter + 1,
+                        last_text,
+                        tools_called,
+                        usage: total_usage,
+                    });
+                }
+
+                if repeat_count == self.stuck.nudge_after {
+                    tracing::warn!(repeated = repeat_count, "stuck: nudging model to change approach");
+                    ctx.push_feedback(vec![harness_core::Signal {
+                        severity: harness_core::Severity::Warn,
+                        origin: "stuck-detector".into(),
+                        message: format!(
+                            "You have issued the same tool call {repeat_count} rounds in a row \
+                             without making progress."
+                        ),
+                        agent_hint: Some(
+                            "Stop repeating it. Inspect the actual tool result/error, try a \
+                             different approach, or give your final answer with no tool call."
+                                .into(),
+                        ),
+                        auto_fix: None,
+                        location: None,
+                    }]);
+                }
             }
 
             // Parallel-safe prefetch: dispatch the *leading run* of read-only
@@ -964,7 +1090,9 @@ impl<'a, M: Model> Session<'a, M> {
             .await?;
         let reply = match &outcome {
             Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
-            Outcome::BudgetExhausted { last_text, .. } => last_text.clone().unwrap_or_default(),
+            Outcome::BudgetExhausted { last_text, .. } | Outcome::Stuck { last_text, .. } => {
+                last_text.clone().unwrap_or_default()
+            }
         };
         self.history.push(Turn {
             role: TurnRole::User,

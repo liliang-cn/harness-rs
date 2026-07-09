@@ -109,6 +109,12 @@ impl<M: Model> Subagent<M> {
                 last_text,
                 usage,
                 ..
+            }
+            | Outcome::Stuck {
+                iters,
+                last_text,
+                usage,
+                ..
             } => SubagentReport {
                 name,
                 status: SubagentStatus::Blocked,

@@ -275,6 +275,12 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("\x1b[33m(stopped at {iters}-iter budget)\x1b[0m");
                 last_text.clone().unwrap_or_default()
             }
+            Outcome::Stuck {
+                last_text, iters, reason, ..
+            } => {
+                eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
+                last_text.clone().unwrap_or_default()
+            }
         };
         recorder.record(situation, reply.clone()).await;
         sess.push("user", &p);
@@ -355,7 +361,8 @@ async fn main() -> anyhow::Result<()> {
             .await
         {
             Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),
-            Ok(Outcome::BudgetExhausted { last_text, .. }) => last_text.unwrap_or_default(),
+            Ok(Outcome::BudgetExhausted { last_text, .. })
+            | Ok(Outcome::Stuck { last_text, .. }) => last_text.unwrap_or_default(),
             Err(e) => {
                 eprintln!("\n\x1b[31merror:\x1b[0m {e}");
                 continue;
