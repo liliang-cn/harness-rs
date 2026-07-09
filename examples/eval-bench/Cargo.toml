@@ -12,6 +12,11 @@ description = "Run a fixed agentic task through harness-rs; emit an eval-go Samp
 name = "eval-bench"
 path = "src/main.rs"
 
+# Task-completion (pass@1) runner — resolved vs not, verified by machine.
+[[bin]]
+name = "bench-suite"
+path = "src/bench_suite.rs"
+
 [dependencies]
 harness         = { workspace = true }
 harness-core    = { workspace = true }
