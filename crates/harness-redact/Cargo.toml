@@ -1,0 +1,22 @@
+[package]
+name = "harness-rs-redact"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PII detection + redaction (label / mask / hash / block) for harness-rs. Regex detectors with checksum validators (Luhn), policy-driven actions, redact-not-drop by default."
+
+keywords     = ["pii", "redaction", "privacy", "ai", "harness"]
+categories   = ["text-processing", "development-tools"]
+readme       = "README.md"
+
+[lib]
+name = "harness_redact"
+path = "src/lib.rs"
+
+[dependencies]
+regex = { workspace = true }
+
+[dev-dependencies]

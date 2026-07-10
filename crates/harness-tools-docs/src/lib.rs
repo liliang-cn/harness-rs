@@ -5,9 +5,14 @@
 //! 1. **Local, pure Rust** (feature `local`, on by default) — `pdf-extract` for
 //!    PDF and `office_oxide` for docx/xlsx/pptx/doc/xls/ppt. No native deps,
 //!    zero tokens, deterministic.
-//! 2. **LLM fallback** — whatever local parsing can't handle (unknown formats,
-//!    empty extraction from a scanned/image doc, a file the parser choked on) is
-//!    handed to a `Model` you inject via [`ReadDocument::with_llm_fallback`].
+//! 2. **Offline OCR** (feature `ocr-tesseract`, off by default) — a scanned /
+//!    image-only PDF has no text layer, so step 1 comes back empty. If the
+//!    feature is on, the pages are rasterised (`pdftoppm`) and OCR'd
+//!    (`tesseract`) locally — still zero tokens, still deterministic. Needs
+//!    those two binaries on PATH at runtime.
+//! 3. **LLM fallback** — whatever the above can't handle (unknown formats, an
+//!    image file, a parser that choked) is handed to a `Model` you inject via
+//!    [`ReadDocument::with_llm_fallback`].
 //!
 //! Construct it local-only, or with a fallback model:
 //! ```ignore
@@ -29,12 +34,21 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "ocr-tesseract")]
+mod ocr;
+
 #[derive(Deserialize)]
 struct ReadDocArgs {
     path: String,
     /// Cap on characters returned (default 100_000).
     #[serde(default)]
     max_chars: Option<usize>,
+    /// Tesseract language spec for OCR of scanned PDFs, e.g. `"eng"` or
+    /// `"eng+chi_sim"`. Default `"eng"`. Only used with the `ocr-tesseract`
+    /// feature; the named language packs must be installed.
+    #[serde(default)]
+    #[cfg_attr(not(feature = "ocr-tesseract"), allow(dead_code))]
+    ocr_lang: Option<String>,
 }
 
 /// Extract text from a document. Tries local parsers first, then an optional LLM.
@@ -74,7 +88,8 @@ static READ_DOCUMENT_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
         "type": "object",
         "properties": {
             "path":      {"type": "string", "description": "Path to the document, relative to the workspace root."},
-            "max_chars": {"type": "integer", "minimum": 1, "description": "Max characters to return (default 100000)."}
+            "max_chars": {"type": "integer", "minimum": 1, "description": "Max characters to return (default 100000)."},
+            "ocr_lang":  {"type": "string", "description": "Tesseract language(s) for OCR of scanned PDFs, e.g. 'eng' or 'eng+chi_sim'. Default 'eng'."}
         },
         "required": ["path"]
     }),
@@ -132,17 +147,35 @@ impl Tool for ReadDocument {
             return Ok(result(&a.path, "local", &ext, text));
         }
 
-        // 2) LLM fallback.
+        // 2) Offline OCR for scanned/image PDFs (no text layer → step 1 empty).
+        #[cfg(feature = "ocr-tesseract")]
+        if ext == "pdf" {
+            let lang = a.ocr_lang.as_deref().unwrap_or("eng");
+            let text = ocr::ocr_pdf(&full, lang, max_chars).await?;
+            if !text.trim().is_empty() {
+                return Ok(result(&a.path, "ocr", &ext, cap(text, max_chars)));
+            }
+            // Empty OCR (blank scan) → fall through to LLM fallback if any.
+        }
+
+        // 3) LLM fallback. A scanned PDF has already been through OCR above (or
+        // OCR is compiled out); either way, do NOT hand raw PDF bytes to the
+        // model as text — `llm_extract` guards that.
         if let Some(model) = &self.fallback {
             let text = llm_extract(model, &a.path, &full, &ext, max_chars).await?;
             return Ok(result(&a.path, "llm", &ext, text));
         }
 
         Err(ToolError::Exec(format!(
-            "could not parse `{}` locally (format: {}) and no LLM fallback is \
+            "could not parse `{}` locally (format: {}){} and no LLM fallback is \
              configured — construct the tool with ReadDocument::with_llm_fallback(model)",
             a.path,
-            if ext.is_empty() { "unknown" } else { &ext }
+            if ext.is_empty() { "unknown" } else { &ext },
+            if ext == "pdf" {
+                " — looks like a scanned PDF; enable the `ocr-tesseract` feature for offline OCR"
+            } else {
+                ""
+            }
         )))
     }
 }
@@ -225,6 +258,18 @@ async fn llm_extract(
         .await
         .map_err(|e| ToolError::Exec(format!("read {filename}: {e}")))?;
 
+    // A binary PDF that reached here has no text layer (a scan). Its raw bytes
+    // are meaningless as text, and we can't rasterise it without the
+    // `ocr-tesseract` feature — sending `from_utf8_lossy` garbage to the model
+    // only burns tokens. Fail with an actionable message instead.
+    if ext == "pdf" {
+        return Err(ToolError::Exec(format!(
+            "`{filename}` is a scanned/image PDF with no text layer. Enable the \
+             `ocr-tesseract` feature (needs `pdftoppm` + `tesseract` on PATH) for \
+             offline OCR, or convert its pages to images first."
+        )));
+    }
+
     // Image → multimodal vision request.
     let user_blocks = if let Some(media_type) = image_media_type(ext) {
         vec![
@@ -235,7 +280,8 @@ async fn llm_extract(
             Block::image_bytes(media_type, &bytes),
         ]
     } else {
-        // Non-image → raw text extraction.
+        // Non-image, non-PDF → raw text extraction (e.g. an unknown text-ish
+        // format the local parsers don't cover).
         let raw: String = String::from_utf8_lossy(&bytes)
             .chars()
             .take(max_chars)
