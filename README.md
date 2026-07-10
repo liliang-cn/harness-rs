@@ -196,9 +196,10 @@ per-task cost fields for cross-framework comparison.
 
 ## Status
 
-Latest: **v0.0.24** — honest, OS-native sandboxing: `SeatbeltSandbox` (macOS) /
-`BubblewrapSandbox` (Linux), an `Isolation` enum that reports what's actually
-enforced, `harness code --sandbox`, and an OS-enforced (cap-std) filesystem jail.
+Latest: **v0.0.25** — verifier-driven completion-rate benchmark
+(`eval-bench --bin bench-suite`, objective `pass@1` via machine verifiers) and
+stuck detection (`StuckPolicy` / `Outcome::Stuck`: nudge on repeated identical
+tool calls, then terminate cleanly instead of burning the budget).
 Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License

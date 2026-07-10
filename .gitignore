@@ -22,5 +22,8 @@ cortexdb.db-shm
 cortexdb.db-wal
 # superpowers tooling cache
 .superpowers/
-# stray npm lockfile (this is a Cargo workspace, not npm)
-package-lock.json
+# stray npm lockfile at repo root (this is a Cargo workspace, not npm);
+# example UIs (examples/ai-note/*) keep their own committed lockfiles
+/package-lock.json
+# local article/export output
+/out/
