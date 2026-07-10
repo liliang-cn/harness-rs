@@ -318,11 +318,9 @@ mod tests {
         assert_eq!(out.content["source"], "llm");
         // The model must have actually received an image block (vision), not text.
         let calls = mock.calls();
-        let saw_image = calls.iter().any(|c| {
-            c.history_summary
-                .iter()
-                .any(|h| h.kinds.contains(&"image"))
-        });
+        let saw_image = calls
+            .iter()
+            .any(|c| c.history_summary.iter().any(|h| h.kinds.contains(&"image")));
         assert!(
             saw_image,
             "the image file must reach the model as a Block::Image"
