@@ -1,19 +1,22 @@
-//! Memory write-time guards: dedup + sensitivity filter.
+//! Memory write-time guards: redact + dedup.
 //!
 //! `GuardedMemory` wraps any `Arc<dyn Memory>` and runs two cheap checks
 //! before letting `write` through to the inner store:
 //!
-//! 1. **Sensitivity gate** — regex match against a configurable set of
-//!    patterns (credit card numbers, emails, phone, monetary amounts). If
-//!    the entry content trips any pattern, the write is silently dropped
-//!    (logged at info level). Defaults aim for "do no harm in personal /
-//!    financial contexts"; turn them off with `.without_default_sensitivity()`.
+//! 1. **PII redaction** — runs the entry content through a
+//!    [`harness_redact::Redactor`] (default policy: [`Policy::memory_hygiene`]).
+//!    Card numbers are masked to the last 4 digits, emails / phones replaced
+//!    with `<EMAIL>` / `<PHONE>`, and monetary amounts *block* the whole entry
+//!    (transaction figures belong in a ledger, not long-term memory). Redacted
+//!    text is what gets stored — we keep the surrounding fact instead of
+//!    dropping the whole record. A hard block-list (`with_blocked_substring` /
+//!    `with_sensitivity_pattern`) still drops matching entries outright.
 //!
 //! 2. **Dedup** — calls `inner.recall(entry.content, 5)` and compares each
-//!    candidate's content tokens against the new entry's tokens. If the
-//!    Jaccard similarity exceeds `dedup_threshold` (default 0.6) for ANY
-//!    candidate, the write is dropped — the existing entry already covers
-//!    this fact, no need to inflate the file.
+//!    candidate's content tokens against the (already redacted) new entry's
+//!    tokens. If the Jaccard similarity exceeds `dedup_threshold` (default 0.6)
+//!    for ANY candidate, the write is dropped — the existing entry already
+//!    covers this fact.
 //!
 //! `recall` and the underlying file ops are pass-through.
 //!
@@ -30,51 +33,67 @@
 
 use async_trait::async_trait;
 use harness_core::{Memory, MemoryEntry, MemoryError};
+use harness_redact::{Policy, Redactor};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Wraps any `Arc<dyn Memory>` and adds dedup + sensitivity filtering on
-/// `write`. `recall` is pass-through.
+/// Wraps any `Arc<dyn Memory>` and adds PII redaction + dedup on `write`.
+/// `recall` is pass-through.
 pub struct GuardedMemory {
     inner: Arc<dyn Memory>,
-    sensitivity_patterns: Vec<Regex>,
+    redactor: Redactor,
+    /// Hard block-list: an entry whose content matches ANY of these is dropped
+    /// outright (not redacted). For secrets that must never reach the store.
+    block_patterns: Vec<Regex>,
     blocked_substrings: Vec<String>,
     dedup_threshold: f32,
     dedup_recall_k: usize,
 }
 
 impl GuardedMemory {
-    /// Wrap `inner` with the default sensitivity patterns (credit-card-like
-    /// 13-19 digit runs, emails, common monetary patterns) and a dedup
-    /// threshold of 0.6 Jaccard token overlap.
+    /// Wrap `inner` with the memory-hygiene redaction policy (mask cards,
+    /// label email/phone, block monetary amounts) and a dedup threshold of
+    /// 0.6 Jaccard token overlap.
     pub fn new(inner: Arc<dyn Memory>) -> Self {
         Self {
             inner,
-            sensitivity_patterns: default_sensitivity_patterns(),
+            redactor: Redactor::new().with_policy(Policy::memory_hygiene()),
+            block_patterns: Vec::new(),
             blocked_substrings: Vec::new(),
             dedup_threshold: 0.6,
             dedup_recall_k: 5,
         }
     }
 
-    /// Drop the default sensitivity patterns — useful for tests or when
-    /// callers know they're storing already-redacted content.
+    /// Turn off all built-in PII detection — nothing gets redacted or blocked
+    /// by pattern. Useful for tests or when callers know they're storing
+    /// already-redacted content. The explicit block-list
+    /// (`with_blocked_substring` / `with_sensitivity_pattern`) still applies.
     pub fn without_default_sensitivity(mut self) -> Self {
-        self.sensitivity_patterns.clear();
+        self.redactor = Redactor::empty();
         self
     }
 
-    /// Add an extra regex pattern. If the entry content matches ANY
-    /// pattern, the write is dropped.
+    /// Override the redactor wholesale — supply your own detector set / policy
+    /// (e.g. `Redactor::new()` to redact-but-keep money instead of blocking it).
+    pub fn with_redactor(mut self, redactor: Redactor) -> Self {
+        self.redactor = redactor;
+        self
+    }
+
+    /// Add a hard-drop regex: an entry matching this is dropped outright,
+    /// **not** redacted. (Historically `sensitivity` meant drop-on-match; that
+    /// behaviour lives here now, while PII is redacted via the [`Redactor`].)
     pub fn with_sensitivity_pattern(mut self, pat: impl AsRef<str>) -> Result<Self, regex::Error> {
-        self.sensitivity_patterns.push(Regex::new(pat.as_ref())?);
+        self.block_patterns.push(Regex::new(pat.as_ref())?);
         Ok(self)
     }
 
-    /// Add a literal substring to the block-list (case-insensitive contains).
-    /// Cheaper than a regex; use for app-specific terms that should never
-    /// hit memory (e.g. `"password"`, `"内部秘钥"`).
+    /// Add a literal substring to the hard block-list (case-insensitive
+    /// contains). An entry containing it is dropped outright. Use for
+    /// app-specific terms that should never hit memory (e.g. `"password"`,
+    /// `"内部秘钥"`).
     pub fn with_blocked_substring(mut self, s: impl Into<String>) -> Self {
         self.blocked_substrings.push(s.into().to_lowercase());
         self
@@ -96,14 +115,13 @@ impl GuardedMemory {
         self
     }
 
-    fn is_sensitive(&self, content: &str) -> bool {
+    /// Whether `content` trips the hard block-list (drop outright).
+    fn is_blocked(&self, content: &str) -> bool {
         let lower = content.to_lowercase();
         if self.blocked_substrings.iter().any(|s| lower.contains(s)) {
             return true;
         }
-        self.sensitivity_patterns
-            .iter()
-            .any(|r| r.is_match(content))
+        self.block_patterns.iter().any(|r| r.is_match(content))
     }
 
     async fn is_duplicate(&self, entry: &MemoryEntry) -> bool {
@@ -134,14 +152,34 @@ impl Memory for GuardedMemory {
         self.inner.recall(query, k).await
     }
 
-    async fn write(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
-        if self.is_sensitive(&entry.content) {
+    async fn write(&self, mut entry: MemoryEntry) -> Result<(), MemoryError> {
+        if self.is_blocked(&entry.content) {
             tracing::info!(
                 content_preview = %entry.content.chars().take(40).collect::<String>(),
-                "guarded memory: dropping sensitive entry"
+                "guarded memory: dropping blocked entry"
             );
             return Ok(());
         }
+
+        // Redact PII in place. A policy-level block (e.g. monetary amounts
+        // under memory_hygiene) drops the whole entry; otherwise store the
+        // redacted text.
+        let redaction = self.redactor.scrub(&entry.content);
+        if redaction.blocked {
+            tracing::info!(
+                content_preview = %entry.content.chars().take(40).collect::<String>(),
+                "guarded memory: dropping entry blocked by redaction policy"
+            );
+            return Ok(());
+        }
+        if redaction.changed() {
+            tracing::info!(
+                spans = redaction.spans.len(),
+                "guarded memory: redacted PII before write"
+            );
+            entry.content = redaction.text;
+        }
+
         if self.is_duplicate(&entry).await {
             tracing::info!(
                 content_preview = %entry.content.chars().take(40).collect::<String>(),
@@ -151,25 +189,6 @@ impl Memory for GuardedMemory {
         }
         self.inner.write(entry).await
     }
-}
-
-fn default_sensitivity_patterns() -> Vec<Regex> {
-    [
-        // 13-19 consecutive digits (credit card-ish — covers most PANs)
-        r"\b\d{13,19}\b",
-        // Emails
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-        // Chinese mainland mobile (1 + 10 digits)
-        r"\b1[3-9]\d{9}\b",
-        // Common monetary amount mentions — ¥1234.56, $1234, USD 1234,
-        // CNY 1234.56 (account flows that should live in the txns table,
-        // not in long-term memory)
-        r"[¥$€£₹]\s?\d+(?:[.,]\d+)?",
-        r"\b(?:USD|CNY|EUR|RMB|HKD|JPY)\s?\d+(?:[.,]\d+)?\b",
-    ]
-    .iter()
-    .filter_map(|p| Regex::new(p).ok())
-    .collect()
 }
 
 fn jaccard_tokens(s: &str) -> HashSet<String> {
@@ -232,7 +251,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sensitive_credit_card_is_dropped() {
+    async fn credit_card_is_masked_not_dropped() {
         let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
         let mem = GuardedMemory::new(inner.clone());
         mem.write(MemoryEntry::new(
@@ -241,18 +260,39 @@ mod tests {
         .await
         .unwrap();
         let all = inner.recall("card", 10).await.unwrap();
-        assert!(all.is_empty(), "credit-card-like content should be dropped");
+        assert_eq!(all.len(), 1, "the fact is kept, just redacted");
+        assert!(
+            all[0].content.contains("************1111"),
+            "card masked to last 4: {}",
+            all[0].content
+        );
+        assert!(!all[0].content.contains("4111111111111111"));
     }
 
     #[tokio::test]
-    async fn sensitive_email_is_dropped() {
+    async fn email_is_labelled_not_dropped() {
         let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
         let mem = GuardedMemory::new(inner.clone());
         mem.write(MemoryEntry::new("user's email is ll_faw@hotmail.com"))
             .await
             .unwrap();
         let all = inner.recall("email", 10).await.unwrap();
-        assert!(all.is_empty());
+        assert_eq!(all.len(), 1);
+        assert!(all[0].content.contains("<EMAIL>"));
+        assert!(!all[0].content.contains("ll_faw@hotmail.com"));
+    }
+
+    #[tokio::test]
+    async fn non_card_long_number_survives() {
+        // Regression: bare \d{13,19} used to nuke any long id. Luhn now spares it.
+        let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
+        let mem = GuardedMemory::new(inner.clone());
+        mem.write(MemoryEntry::new("order 1234567890123456 was shipped"))
+            .await
+            .unwrap();
+        let all = inner.recall("order", 10).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].content.contains("1234567890123456"));
     }
 
     #[tokio::test]
@@ -268,7 +308,7 @@ mod tests {
         let all = inner.recall("user", 10).await.unwrap();
         assert!(
             all.is_empty(),
-            "monetary patterns should be filtered: {all:?}"
+            "monetary entries block under memory_hygiene: {all:?}"
         );
     }
 
@@ -286,6 +326,23 @@ mod tests {
         .unwrap();
         let all = inner.recall("用户", 10).await.unwrap();
         assert_eq!(all.len(), 1, "preference about 用户 should be kept");
+    }
+
+    #[tokio::test]
+    async fn dedup_runs_on_redacted_text() {
+        let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
+        let mem = GuardedMemory::new(inner.clone()).with_dedup_threshold(0.6);
+        mem.write(MemoryEntry::new(
+            "contact user at ll_faw@hotmail.com please",
+        ))
+        .await
+        .unwrap();
+        // Same fact, different email → both redact to "<EMAIL>" → dedup drops #2.
+        mem.write(MemoryEntry::new("contact user at other@example.org please"))
+            .await
+            .unwrap();
+        let all = inner.recall("contact", 10).await.unwrap();
+        assert_eq!(all.len(), 1, "redacted duplicates collapse: {all:?}");
     }
 
     #[tokio::test]
@@ -320,5 +377,18 @@ mod tests {
             .unwrap();
         let all = inner.recall("password", 10).await.unwrap();
         assert!(all.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sensitivity_pattern_drops_outright() {
+        let inner: Arc<dyn Memory> = Arc::new(VecMemory::default());
+        let mem = GuardedMemory::new(inner.clone())
+            .with_sensitivity_pattern(r"(?i)internal-key")
+            .unwrap();
+        mem.write(MemoryEntry::new("the internal-key rotation is monthly"))
+            .await
+            .unwrap();
+        let all = inner.recall("rotation", 10).await.unwrap();
+        assert!(all.is_empty(), "sensitivity pattern drops the whole entry");
     }
 }

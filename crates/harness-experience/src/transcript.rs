@@ -105,6 +105,11 @@ impl Hook for TranscriptRecorder {
 /// Spawn the background writer: drains `rx` and persists each turn to `memory`.
 /// `role` and `session` ride along as tags (`role:…`, `session:…`), so a
 /// metadata-aware backend (e.g. CortexDB) can filter/aggregate on them.
+///
+/// Transcripts are the biggest PII surface — tool results and model output flow
+/// in verbatim. Redact at this boundary by handing in a redacting `memory`:
+/// `spawn_transcript_writer(rx, Arc::new(RedactingMemory::new(cortex)))`
+/// (see `harness_context::RedactingMemory`).
 pub fn spawn_transcript_writer(
     mut rx: mpsc::UnboundedReceiver<CapturedTurn>,
     memory: Arc<dyn Memory>,

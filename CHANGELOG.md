@@ -3,6 +3,47 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.26
+
+### Added
+
+- **`harness-rs-redact` (new crate): PII detection + redaction.** Three
+  orthogonal axes mirroring Presidio / cloud DLP — `Detector`s find `Span`s
+  (`RegexDetector` + a checksum `validator`, so `luhn_valid` spares 16-digit
+  order numbers), a `Policy` maps each `PiiKind` to an `Action`
+  (`Label` `<EMAIL>` · `Mask` `************1111` · `Hash` stable pseudonym ·
+  `Block` · `Keep`), and `Redactor::scrub` applies them, returning
+  `Redaction { text, spans, blocked }`. **Redact-not-drop:** the surrounding
+  fact is kept. Built-in `Policy::default()` / `Policy::memory_hygiene()`.
+- **`RedactingMemory` (new, `harness-context`): redact-only `Memory` decorator.**
+  Scrubs PII on `write` but *never drops* an entry — the right fit for the
+  persistence boundary (transcript / experience → CortexDB). Wrap the `Memory`
+  the transcript writer and episode store target and the biggest PII leak closes
+  in one place. `redaction-demo` example shows the full picture.
+- **Offline OCR for scanned PDFs: `harness-rs-tools-docs` feature `ocr-tesseract`.**
+  A scanned, image-only PDF has no text layer, so local extraction comes back
+  empty; with the feature on, `read_document` rasterises pages (`pdftoppm`) and
+  recognises them (`tesseract`) — offline, deterministic, zero tokens. New
+  `ocr_lang` arg (default `eng`, e.g. `eng+chi_sim`); result `source` is now
+  `local` | `ocr` | `llm`. CLI-shell, so the crate still compiles everywhere;
+  the two binaries are only needed at runtime.
+
+### Changed
+
+- **`GuardedMemory` now redacts instead of dropping.** Previously any entry
+  matching a sensitivity regex was silently discarded; it now runs content
+  through a `Redactor` (default `Policy::memory_hygiene`: cards masked,
+  email/phone labelled, monetary amounts blocked) and stores the *redacted* text.
+  Hard block-list (`with_blocked_substring` / `with_sensitivity_pattern`) still
+  drops outright. Luhn-checked cards fix the old `\d{13,19}` false positives.
+
+### Fixed
+
+- **Scanned-PDF fallback no longer feeds binary-as-text to the model.**
+  `read_document`'s LLM fallback used to hand a scanned PDF's raw bytes to the
+  model as `from_utf8_lossy` garbage; it now returns an actionable error pointing
+  at the `ocr-tesseract` feature instead of burning tokens.
+
 ## 0.0.25
 
 ### Added

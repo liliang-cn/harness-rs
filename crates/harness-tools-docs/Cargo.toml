@@ -21,6 +21,11 @@ path = "src/lib.rs"
 # so it's always available when you construct the tool with a fallback model.
 default = ["local"]
 local = ["dep:pdf-extract", "dep:office_oxide"]
+# Offline OCR for scanned / image-only PDFs (no text layer). Compiles with no
+# extra Rust deps, but at RUNTIME shells out to two binaries that must be on
+# PATH: `pdftoppm` (poppler-utils, rasterises pages → PNG) and `tesseract`
+# (the OCR engine + language packs). Zero LLM tokens, deterministic, offline.
+ocr-tesseract = []
 
 [dependencies]
 harness-core = { workspace = true }

@@ -38,6 +38,8 @@ Lopopolo/OpenAI, 2026). Full rationale in **[DESIGN.md](DESIGN.md)**.
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
 | **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
+| **Privacy** | PII detect + redact (label/mask/hash/block, Luhn-checked cards) · redact-on-write `Memory` decorators | `harness-redact`, `harness-context` |
+| **Documents** | `read_document` — PDF/Word/Excel/PPT locally (pure Rust) · offline OCR for scanned PDFs (`pdftoppm` + `tesseract`) · LLM/vision fallback | `harness-tools-docs` |
 | **Observability** | `TelemetryHook` (structured `tracing` spans → OTLP) · JSONL session record + deterministic offline `replay` | `harness-loop` |
 | **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · OS-native sandbox (macOS Seatbelt) · git-worktree / Docker · `harness code` / `run` / `replay` / `trace` / `sched` / `new` / `mcp serve` | — |
 
@@ -132,12 +134,53 @@ harness code --yolo --workspace .                                            # Y
 ## Examples
 
 See **[examples/](examples/)** — memory, recall, the scheduler, MCP,
+**`redaction-demo`** (PII redaction: the engine + `GuardedMemory` / `RedactingMemory`),
 **`experience-cortexdb`** (the learning layer over a CortexDB brain),
 **`cap`** (a coding agent reimplementing [oh-my-pi](https://github.com/can1357/oh-my-pi)'s
 **hashline editing** — content-hash line anchors instead of line numbers), and
 two end-to-end agents over a live PostgreSQL database: **`ecommerce-analyst`**
 (concurrent analysis DAG) and **`ecommerce-ops-agent`** (the full stack —
 dynamic replanning, L1/L2/L3 governed DB writes, cross-run memory).
+
+## Privacy & documents
+
+**Redact PII before it persists.** `harness-redact` detects card numbers
+(Luhn-checked, so order numbers survive), emails, phones, and money, then
+rewrites them — `Label` (`<EMAIL>`), `Mask` (`************1111`), `Hash` (a
+stable pseudonym), or `Block`. It's *redact-not-drop*: the surrounding fact is
+kept. Two `Memory` decorators wire it to the two write boundaries that leak:
+
+```rust
+use harness_context::{GuardedMemory, RedactingMemory};
+
+// (1) agent long-term memory — redact on write; money/secrets drop
+let memory: Arc<dyn Memory> = Arc::new(
+    GuardedMemory::new(file_mem).with_blocked_substring("password"),
+);
+
+// (2) transcript / experience → CortexDB — redact-only, never drops a turn
+let safe: Arc<dyn Memory> = Arc::new(RedactingMemory::new(cortex_mem));
+spawn_transcript_writer(rx, safe);   // every captured turn is scrubbed
+```
+
+Or use the engine directly on any text: `Redactor::new().scrub(text).text`.
+
+**Read documents, including scanned PDFs.** `read_document` extracts text from
+PDF/Word/Excel/PowerPoint locally in pure Rust (zero tokens). A scanned,
+image-only PDF has no text layer — enable the `ocr-tesseract` feature for
+offline OCR (rasterise with `pdftoppm`, recognise with `tesseract`; still zero
+tokens, still deterministic):
+
+```toml
+harness-rs-tools-docs = { version = "0.0.25", features = ["ocr-tesseract"] }
+```
+
+```rust
+let tool = ReadDocument::new();                    // local + OCR
+let tool = ReadDocument::with_llm_fallback(model); // + vision fallback for images
+// model call: {"path": "scan.pdf", "ocr_lang": "eng+chi_sim"}
+// result carries source = "local" | "ocr" | "llm"
+```
 
 ## Observability
 
