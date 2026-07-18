@@ -4,6 +4,12 @@
 //! happens around tool calls, model calls, compaction, sensor runs, and so on.
 //! Long async work belongs in a sensor or tool, not a hook.
 
+pub mod audit;
+pub use audit::{
+    ACTOR_KEY, AuditHook, AuditRecord, AuditSink, ChainVerification, ChainedRecord, HashChainSink,
+    JsonlAuditSink, REQUEST_KEY, SESSION_KEY, new_request_id, verify_chain,
+};
+
 #[cfg(feature = "otel")]
 pub mod otel;
 

@@ -1,0 +1,25 @@
+[package]
+name = "manufacturing-quality-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "manufacturing-quality-agent"
+path = "src/main.rs"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-models  = { workspace = true }
+harness-hooks   = { workspace = true }
+harness-redact  = { workspace = true }
+harness-context = { workspace = true }
+vertical-common = { path = "../vertical-common" }
+async-trait     = { workspace = true }
+serde_json      = { workspace = true }
+tokio           = { workspace = true, features = ["macros", "rt-multi-thread"] }

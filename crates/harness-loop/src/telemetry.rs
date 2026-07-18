@@ -11,19 +11,35 @@
 //! and you get newline-delimited JSON for log pipelines. One instrumentation,
 //! many backends.
 //!
+//! Field names follow the OpenTelemetry **GenAI semantic conventions**
+//! (`gen_ai.*`), so any OTel-aware backend — Logfire, SigNoz, Langfuse via OTLP,
+//! Grafana — recognizes token counts, model, and finish reason automatically and
+//! computes cost/latency with zero mapping. The pre-convention flat names
+//! (`input_tokens`, `tool`, …) are kept alongside as aliases for existing
+//! consumers.
+//!
 //! Span/event shape (target `harness.telemetry`):
 //!
 //! ```text
-//! agent_run (span, fields: source)
+//! agent_run (span, fields: source, gen_ai.operation.name=invoke_agent)
 //!   ├─ run.start
 //!   ├─ iter            (iter)
-//!   ├─ model.complete  (input_tokens, output_tokens, cached_input_tokens, tool_calls, stop)
-//!   ├─ tool.call       (tool, ok, duration_ms)
+//!   ├─ model.complete  (gen_ai.operation.name=chat,
+//!   │                   gen_ai.usage.input_tokens, gen_ai.usage.output_tokens,
+//!   │                   gen_ai.usage.cached_input_tokens,
+//!   │                   gen_ai.response.finish_reasons
+//!   │                   + aliases: input_tokens, output_tokens,
+//!   │                     cached_input_tokens, tool_calls, stop)
+//!   ├─ tool.call       (gen_ai.operation.name=execute_tool, gen_ai.tool.name,
+//!   │                   ok, duration_ms + alias: tool)
 //!   ├─ sensor          (sensor, signals)
 //!   ├─ compact         (stage)
 //!   ├─ budget.warning  (ratio)
 //!   └─ run.end
 //! ```
+//!
+//! To export over OTLP, enable the crate's `otel` feature and call
+//! [`crate::otel::init_tracing_with_otlp`] from your binary; see that module.
 //!
 //! Wire it like any hook:
 //! ```ignore
@@ -85,6 +101,7 @@ impl Hook for TelemetryHook {
                 let span = tracing::info_span!(
                     target: "harness.telemetry",
                     "agent_run",
+                    "gen_ai.operation.name" = "invoke_agent",
                     source = format!("{source:?}")
                 );
                 span.in_scope(|| {
@@ -96,14 +113,22 @@ impl Hook for TelemetryHook {
                 tracing::info!(target: "harness.telemetry", event = "iter", iter = *iter);
             }),
             Event::PostModel { out } => self.in_run(|| {
+                let stop = format!("{:?}", out.stop_reason);
                 tracing::info!(
                     target: "harness.telemetry",
                     event = "model.complete",
+                    // OTel GenAI semantic conventions:
+                    "gen_ai.operation.name" = "chat",
+                    "gen_ai.usage.input_tokens" = out.usage.input_tokens,
+                    "gen_ai.usage.output_tokens" = out.usage.output_tokens,
+                    "gen_ai.usage.cached_input_tokens" = out.usage.cached_input_tokens,
+                    "gen_ai.response.finish_reasons" = %stop,
+                    // pre-convention aliases:
                     input_tokens = out.usage.input_tokens,
                     output_tokens = out.usage.output_tokens,
                     cached_input_tokens = out.usage.cached_input_tokens,
                     tool_calls = out.tool_calls.len(),
-                    stop = format!("{:?}", out.stop_reason),
+                    stop = %stop,
                 );
             }),
             Event::PreToolUse { action } => {
@@ -124,9 +149,11 @@ impl Hook for TelemetryHook {
                     tracing::info!(
                         target: "harness.telemetry",
                         event = "tool.call",
-                        tool = %action.tool,
+                        "gen_ai.operation.name" = "execute_tool",
+                        "gen_ai.tool.name" = %action.tool,
                         ok = result.ok,
                         duration_ms,
+                        tool = %action.tool, // alias
                     );
                 });
             }

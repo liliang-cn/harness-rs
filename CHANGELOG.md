@@ -3,6 +3,44 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.27
+
+### Added
+
+- **`harness-rs-serve` (new crate): multi-session serving core.** `ChatService`
+  ties model + tools + audit + sessions behind one call — `chat` (unary) and
+  `chat_stream` (token stream). Pluggable `Authenticator` (`StaticTokenAuth` /
+  dev `OpenAuth`), `SessionStore` (`InMemorySessions`), and a wired per-request
+  `AuditHook`. Optional `http` feature (an axum router: `POST /chat`,
+  `POST /chat/stream` over SSE, `GET /healthz`) and `grpc` feature (a tonic
+  service: unary `Say` + server-streaming `SayStream`).
+- **`harness-rs-tools-sql` (new crate): safe read-only SQL tool.** SELECT-only
+  guard, auto-`LIMIT`, result redaction, and a driver-pluggable `SqlExecutor`
+  (optional `sqlite` backend). Documented as a *fallback* — correctness-critical
+  BI should sit behind a governed semantic layer, not raw text-to-SQL.
+- **`ModelRouter` (`harness-models`): local-first, cloud-fallback routing.** Itself
+  a `Model`. Reads `Context.metadata`: `router.keep_local` pins a request to the
+  local leg (data never leaves the intranet), `router.prefer_fallback` prefers the
+  cloud leg; single-retry failover onto the other leg on error.
+- **Tamper-evident audit trail (`harness-hooks`).** `AuditHook` records
+  `request` / `response` / `tool_use` / `session_end` with actor/session/request
+  identity and optional PII redaction, via a pluggable `AuditSink`
+  (`JsonlAuditSink`, or hash-chained `HashChainSink` that `verify_chain` checks
+  for deletion / edits / reordering). `new_request_id()` mints the correlation id
+  that ties an audit line to its OTel trace and replay recording.
+- **OTLP export (`harness-loop`, `otel` feature)** with telemetry aligned to the
+  OpenTelemetry **GenAI semantic conventions** (`gen_ai.*`), so backends recognize
+  token usage / model / finish reason automatically. Legacy flat field names kept
+  as aliases.
+- **`AgentLoop::run_with_seed_and_metadata`** — seed per-request `ctx.metadata`
+  (caller identity + routing flags) into a shared, reused loop; the seam a serving
+  layer uses. Session recording is wired for deterministic replay of served runs.
+
+### Changed
+
+- `harness-loop`'s `TelemetryHook` fields now follow the `gen_ai.*` GenAI
+  conventions alongside the pre-existing flat aliases.
+
 ## 0.0.26
 
 ### Added

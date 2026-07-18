@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package harness.serve.v1;
+
+// Mirrors harness_serve::ChatService. The bearer token travels in gRPC request
+// metadata (`authorization: Bearer <token>`), not in the message body.
+service Chat {
+  // Unary: run one turn, return the full answer.
+  rpc Say(ChatRequest) returns (ChatReply);
+  // Server-streaming: token fragments as they arrive, ending with a `done`.
+  rpc SayStream(ChatRequest) returns (stream ChatChunk);
+}
+
+message ChatRequest {
+  string session_id = 1;
+  string message = 2;
+}
+
+message ChatReply {
+  string answer = 1;
+  string actor = 2;
+  // Correlation id: look it up in the audit trail / trace / replay recording.
+  string request_id = 3;
+}
+
+message ChatChunk {
+  oneof kind {
+    // An incremental text fragment.
+    string token = 1;
+    // Terminal chunk: the full answer + actor. Always last.
+    ChatReply done = 2;
+  }
+}
