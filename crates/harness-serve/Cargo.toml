@@ -1,0 +1,53 @@
+[package]
+name = "harness-rs-serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Multi-session serving core for harness-rs agents: pluggable auth, session store, per-request identity, and wired audit trail. Optional axum HTTP layer."
+
+keywords     = ["agent", "ai", "llm", "harness"]
+categories   = ["asynchronous", "web-programming"]
+readme       = "README.md"
+
+[lib]
+name = "harness_serve"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-loop    = { workspace = true }
+harness-models  = { workspace = true }
+harness-hooks   = { workspace = true }
+harness-redact  = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tracing         = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true }
+futures         = { workspace = true }
+
+# Optional HTTP transport.
+axum = { version = "0.8", optional = true }
+# Optional gRPC transport.
+tonic = { version = "0.12", optional = true }
+prost = { version = "0.13", optional = true }
+
+[build-dependencies]
+# Only compiled when the `grpc` feature is enabled (see build.rs).
+tonic-build = { version = "0.12", optional = true }
+
+[features]
+default = []
+# Expose `http::router()` — an axum Router with /chat, /chat/stream (SSE), /healthz.
+http = ["dep:axum"]
+# Expose `grpc::service()` — a tonic Chat service (unary Say + server-streaming
+# SayStream). Requires `protoc` at build time.
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,37 @@
+[package]
+name = "harness-rs-tools-sql"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Safe read-only SQL query tool for harness-rs agents: SELECT-only guard, auto-LIMIT, result redaction, and a driver-pluggable executor for BI / ERP / MES. Optional SQLite backend."
+
+keywords     = ["agent", "ai", "llm", "sql"]
+categories   = ["database", "development-tools"]
+readme       = "README.md"
+
+[lib]
+name = "harness_tools_sql"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core   = { workspace = true }
+harness-redact = { workspace = true }
+async-trait    = { workspace = true }
+serde_json     = { workspace = true }
+regex          = { workspace = true }
+tracing        = { workspace = true }
+thiserror      = { workspace = true }
+
+# Optional SQLite backend (the in-CI reference executor).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"], optional = true }
+
+[features]
+default = []
+sqlite = ["dep:sqlx"]
+
+[dev-dependencies]
+harness-context = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

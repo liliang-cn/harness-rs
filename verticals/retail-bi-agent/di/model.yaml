@@ -1,0 +1,84 @@
+# Semantic model for the appliance-retail vertical (家电零售).
+# sales live at the transaction grain; inventory at the store×sku snapshot grain
+# — so sell_through exercises the compiler's chasm-safe aggregate-then-join path.
+
+entities:
+  - {name: store,     table: stores,    primary_key: store_id}
+  - {name: product,   table: products,  primary_key: sku}
+  - {name: sale,      table: sales,      primary_key: sale_id}
+  - {name: inventory, table: inventory,  primary_key: inventory_id}
+
+joins:
+  - {from: sale,      to: store,   from_key: store_id, to_key: store_id, cardinality: many_to_one}
+  - {from: sale,      to: product, from_key: sku,      to_key: sku,      cardinality: many_to_one}
+  - {from: inventory, to: store,   from_key: store_id, to_key: store_id, cardinality: many_to_one}
+  - {from: inventory, to: product, from_key: sku,      to_key: sku,      cardinality: many_to_one}
+
+dimensions:
+  - {name: store_name,        entity: store,   column: name,     type: categorical, synonyms: [店名, 门店名称]}
+  - {name: store_city,        entity: store,   column: city,     type: categorical, synonyms: [城市]}
+  - {name: store_region,      entity: store,   column: region,   type: categorical, synonyms: [大区, 区域, 地区]}   # RLS key
+  - {name: product_category,  entity: product, column: category, type: categorical, synonyms: [品类, 类别]}
+  - {name: product_name,      entity: product, column: name,     type: categorical, synonyms: [商品名, 产品]}
+  - {name: member_phone,      entity: sale,    column: member_phone, type: categorical, mask: "'***'"}  # PII
+  - {name: sold_time,         entity: sale,    column: sold_at,  type: time}
+
+metrics:
+  - name: units_sold
+    description: "Total units sold."
+    synonyms: [销量, 台数, units]
+    entity: sale
+    agg: sum
+    expr: "qty"
+
+  - name: transactions
+    description: "Number of sales transactions."
+    synonyms: [订单数, 单量]
+    entity: sale
+    agg: count
+    expr: "sale_id"
+
+  - name: trade_in_units
+    description: "Units sold via trade-in."
+    synonyms: [以旧换新数]
+    entity: sale
+    agg: sum
+    expr: "(is_trade_in)::int"
+
+  - name: revenue
+    description: "Total sales amount (RMB)."
+    synonyms: [销售额, 营收, sales, income]
+    entity: sale
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+
+  - name: stock_on_hand
+    description: "On-hand inventory units across stores (snapshot grain)."
+    synonyms: [库存, 在库量]
+    entity: inventory
+    agg: sum
+    expr: "qty"
+
+  # --- ratios across grains (chasm-safe: each base aggregates in its own CTE) ---
+  - name: avg_ticket
+    description: "Average revenue per transaction. A ratio — never summed."
+    synonyms: [客单价]
+    formula: "revenue::numeric / nullif(transactions, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+
+  - name: sell_through
+    description: "Units sold as a share of (units sold + on-hand). Sales grain vs inventory grain."
+    synonyms: [动销率, sell-through]
+    formula: "units_sold::numeric / nullif(units_sold + stock_on_hand, 0)"
+    additivity: non_additive
+
+  # --- time intelligence ---
+  - name: revenue_ytd
+    description: "Year-to-date revenue: running total that restarts each calendar year."
+    synonyms: [年累计营收, ytd revenue]
+    of: revenue
+    window: cumulative
+    reset: year
+    roles: [finance, admin]

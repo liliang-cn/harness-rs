@@ -1,0 +1,23 @@
+[package]
+name = "supermarket-bi-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "supermarket-bi-agent"
+path = "src/main.rs"
+
+[dependencies]
+harness-core       = { workspace = true }
+harness-loop       = { workspace = true }
+harness-hooks      = { workspace = true }
+harness-context    = { workspace = true }
+harness-mcp-client = { workspace = true }
+vertical-common    = { path = "../vertical-common" }
+tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow             = { workspace = true }

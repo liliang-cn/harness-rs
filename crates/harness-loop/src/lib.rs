@@ -10,6 +10,8 @@
 
 pub mod learning;
 pub mod memory_layer;
+#[cfg(feature = "otel")]
+pub mod otel;
 pub mod profile_guide;
 pub mod recall_layer;
 pub mod registry;
@@ -416,10 +418,30 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         max_iters: u32,
     ) -> Result<Outcome, HarnessError> {
+        self.run_with_seed_and_metadata(task, seed, Default::default(), world, max_iters)
+            .await
+    }
+
+    /// Like [`run_with_seed_history`](Self::run_with_seed_history) but also seeds
+    /// `ctx.metadata` with per-request key/values. Hooks and a
+    /// [`ModelRouter`](harness_models::ModelRouter) read this map — e.g.
+    /// `audit.actor` / `audit.session` for the audit trail, or
+    /// `router.keep_local` to pin a request to the local model. This is the
+    /// entry point a serving layer uses to pass caller identity and routing
+    /// flags into a single, shared, reused loop.
+    pub async fn run_with_seed_and_metadata(
+        &self,
+        task: Task,
+        seed: Vec<Turn>,
+        metadata: std::collections::BTreeMap<String, serde_json::Value>,
+        world: &mut World,
+        max_iters: u32,
+    ) -> Result<Outcome, HarnessError> {
         let mut ctx = Context::new(task);
         ctx.policy.max_iters = max_iters;
         ctx.tools = self.tools.schemas();
         ctx.history = seed;
+        ctx.metadata = metadata;
         ctx.response_format = self.response_format.clone();
         self.run_built_context(ctx, world).await
     }

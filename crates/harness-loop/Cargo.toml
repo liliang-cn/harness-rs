@@ -29,6 +29,26 @@ tokio             = { workspace = true }
 schemars          = { workspace = true }
 futures           = { workspace = true }
 
+# OTLP export (feature `otel`) — optional, single-crate blast radius. The library
+# instruments with plain `tracing`; these turn spans into OpenTelemetry only when
+# the binary opts in.
+opentelemetry         = { version = "0.32", optional = true }
+opentelemetry_sdk     = { version = "0.32", optional = true }
+opentelemetry-otlp    = { version = "0.32", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
+tracing-subscriber    = { workspace = true, optional = true }
+
+[features]
+# Export the agent's `tracing` telemetry over OTLP (Jaeger / Tempo / SigNoz /
+# Logfire / Langfuse). See `src/otel.rs`.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
+
 [dev-dependencies]
 harness-skills       = { workspace = true }
 harness-tools-fs     = { workspace = true }

@@ -29,6 +29,7 @@ pub mod kind;
 pub mod mock;
 pub mod openai_compat;
 pub mod retry;
+pub mod router;
 
 pub use anthropic::*;
 pub use config::*;
@@ -40,3 +41,4 @@ pub use embed_ollama::OllamaEmbed;
 pub use gemini::*;
 pub use mock::*;
 pub use openai_compat::*;
+pub use router::*;

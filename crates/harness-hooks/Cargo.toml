@@ -16,11 +16,19 @@ name = "harness_hooks"
 path = "src/lib.rs"
 
 [dependencies]
-harness-core = { workspace = true }
-inventory    = { workspace = true }
-tracing      = { workspace = true }
-async-trait  = { workspace = true }
+harness-core   = { workspace = true }
+harness-redact = { workspace = true }
+inventory      = { workspace = true }
+tracing        = { workspace = true }
+async-trait    = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+chrono         = { workspace = true }
+sha2           = "0.10"
 opentelemetry        = { version = "0.27", optional = true }
+
+[dev-dependencies]
+harness-context = { workspace = true }
 
 [features]
 default = []

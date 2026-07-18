@@ -1,0 +1,19 @@
+[package]
+name = "vertical-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "vertical_common"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core   = { workspace = true }
+harness-hooks  = { workspace = true }
+harness-models = { workspace = true }
+serde_json     = { workspace = true }

@@ -85,6 +85,20 @@ async fn emits_structured_run_telemetry() {
         output.contains("input_tokens=100"),
         "missing token field:\n{output}"
     );
+    // OTel GenAI semantic conventions ride alongside the legacy aliases, so an
+    // OTLP backend recognizes usage/finish-reason/tool without any mapping.
+    assert!(
+        output.contains("gen_ai.usage.input_tokens=100"),
+        "missing gen_ai usage convention:\n{output}"
+    );
+    assert!(
+        output.contains("gen_ai.tool.name=read_file"),
+        "missing gen_ai.tool.name convention:\n{output}"
+    );
+    assert!(
+        output.contains("gen_ai.operation.name=\"invoke_agent\""),
+        "missing invoke_agent on run span:\n{output}"
+    );
     assert!(output.contains("tool.call"), "missing tool.call:\n{output}");
     assert!(output.contains("read_file"), "missing tool name:\n{output}");
     assert!(output.contains("run.end"), "missing run.end:\n{output}");
