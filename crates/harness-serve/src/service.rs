@@ -75,6 +75,7 @@ pub struct ChatService {
     audit: Option<Arc<dyn AuditSink>>,
     redactor_factory: Option<RedactorFactory>,
     replay_dir: Option<PathBuf>,
+    instruction: Option<String>,
     data_dir: PathBuf,
     max_iters: u32,
 }
@@ -100,9 +101,20 @@ impl ChatService {
             audit: None,
             redactor_factory: None,
             replay_dir: None,
+            instruction: None,
             data_dir: data_dir.into(),
             max_iters: harness_core::Policy::default().max_iters,
         }
+    }
+
+    /// A system instruction applied to every request (via the loop's
+    /// `Context.system`) — how the agent should behave (e.g. "only answer via the
+    /// governed tools; never claim you can't access data; never invent numbers").
+    /// Essential for small local models, which otherwise sometimes refuse or
+    /// hallucinate instead of calling a tool.
+    pub fn with_instruction(mut self, s: impl Into<String>) -> Self {
+        self.instruction = Some(s.into());
+        self
     }
 
     /// Register a tool the agent may call (policy search, SQL, MCP bridge, …).
@@ -168,6 +180,9 @@ impl ChatService {
     /// streaming / a forward hook on top.
     fn build_agent(&self, session_id: &str, request_id: &str) -> AgentLoop<DynModel> {
         let mut agent = AgentLoop::new(DynModel(self.model.clone()));
+        if let Some(system) = &self.instruction {
+            agent = agent.with_system(system.clone());
+        }
         for tool in &self.tools {
             agent = agent.with_tool(tool.clone());
         }

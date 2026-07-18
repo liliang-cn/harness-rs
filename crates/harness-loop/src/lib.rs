@@ -167,6 +167,9 @@ pub struct AgentLoop<M: Model> {
     pub stuck: StuckPolicy,
     /// Context-compaction hysteresis. See [`CompactPolicy`].
     pub compaction: CompactPolicy,
+    /// System instruction injected into every run's `Context.system` (unless the
+    /// built context already carries its own). Set via [`with_system`](Self::with_system).
+    pub system: Vec<Block>,
 }
 
 impl<M: Model> AgentLoop<M> {
@@ -185,7 +188,18 @@ impl<M: Model> AgentLoop<M> {
             learning: None,
             stuck: StuckPolicy::default(),
             compaction: CompactPolicy::default(),
+            system: Vec::new(),
         }
+    }
+
+    /// Set a system instruction applied to every run (into `Context.system`) —
+    /// e.g. "answer only via the governed tools; never claim you can't access
+    /// data; never invent numbers". This is the first-class seam for a system
+    /// prompt; small local models in particular need it to reliably call tools
+    /// instead of refusing or hallucinating.
+    pub fn with_system(mut self, text: impl Into<String>) -> Self {
+        self.system = vec![Block::Text(text.into())];
+        self
     }
 
     /// Override the loop-detection policy (thresholds, or disable entirely).
@@ -470,6 +484,9 @@ impl<M: Model> AgentLoop<M> {
         mut ctx: Context,
         world: &mut World,
     ) -> Result<Outcome, HarnessError> {
+        if ctx.system.is_empty() && !self.system.is_empty() {
+            ctx.system = self.system.clone();
+        }
         self.hooks.fire(
             &Event::SessionStart {
                 source: SessionSource::Startup,
