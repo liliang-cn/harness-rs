@@ -367,6 +367,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bi-server"
+version = "0.0.27"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "harness-rs-core",
+ "harness-rs-hooks",
+ "harness-rs-mcp-client",
+ "harness-rs-serve",
+ "tokio",
+ "vertical-common",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

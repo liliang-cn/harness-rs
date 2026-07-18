@@ -1,22 +1,28 @@
 use crate::proxy::McpProxyTool;
 use harness_core::{Tool, ToolRisk};
 use rmcp::ServiceExt;
-use rmcp::service::{Peer, RoleClient, RunningService};
+use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use std::sync::Arc;
 use tokio::process::Command;
 
 /// A live MCP client session over a spawned child stdio server. Owns the
-/// `RunningService` so the child stays alive for as long as this is held.
+/// `RunningService` so the child stays alive for as long as this — *or any tool
+/// it produced* — is held. The service is `Arc`-shared into every
+/// [`McpProxyTool`], so you can drop the `McpClient` after wiring its tools into
+/// a long-lived agent/server and the session keeps working.
 pub struct McpClient {
-    service: RunningService<RoleClient, ()>,
+    service: Arc<RunningService<RoleClient, ()>>,
     tools: Vec<rmcp::model::Tool>,
 }
 
 impl McpClient {
     async fn from_service(service: RunningService<RoleClient, ()>) -> anyhow::Result<Self> {
         let tools = service.list_all_tools().await?;
-        Ok(Self { service, tools })
+        Ok(Self {
+            service: Arc::new(service),
+            tools,
+        })
     }
 
     /// Spawn `program args...` as an MCP stdio server and initialize a session.
@@ -90,10 +96,6 @@ impl McpClient {
         Self::from_service(service).await
     }
 
-    fn peer(&self) -> Peer<RoleClient> {
-        self.service.peer().clone()
-    }
-
     /// Remote tool names discovered at connect time.
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|t| t.name.to_string()).collect()
@@ -106,7 +108,6 @@ impl McpClient {
 
     /// As `tools`, but names in `read_only` are marked `ReadOnly`.
     pub fn tools_with_read_only(&self, read_only: &[&str]) -> Vec<Arc<dyn Tool>> {
-        let peer = self.peer();
         self.tools
             .iter()
             .map(|t| {
@@ -115,7 +116,8 @@ impl McpClient {
                 } else {
                     ToolRisk::Destructive
                 };
-                Arc::new(McpProxyTool::new(t, peer.clone(), risk)) as Arc<dyn Tool>
+                // Each tool holds the Arc'd session, keeping the child alive.
+                Arc::new(McpProxyTool::new(t, self.service.clone(), risk)) as Arc<dyn Tool>
             })
             .collect()
     }

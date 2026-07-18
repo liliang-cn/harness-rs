@@ -3,7 +3,8 @@ use harness_core::tool::Tool;
 use harness_core::{ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParams, CallToolResult, RawContent};
-use rmcp::service::Peer;
+use rmcp::service::RunningService;
+use std::sync::Arc;
 
 type JsonObject = serde_json::Map<String, serde_json::Value>;
 
@@ -108,13 +109,23 @@ pub(crate) fn map_call_result(res: CallToolResult) -> ToolResult {
 pub struct McpProxyTool {
     schema: ToolSchema,
     risk: ToolRisk,
-    peer: Peer<RoleClient>,
+    // Holds the running MCP session (the child stdio server) alive for the tool's
+    // lifetime — so dropping the originating `McpClient` doesn't break the tool.
+    service: Arc<RunningService<RoleClient, ()>>,
 }
 
 impl McpProxyTool {
-    pub(crate) fn new(tool: &rmcp::model::Tool, peer: Peer<RoleClient>, risk: ToolRisk) -> Self {
+    pub(crate) fn new(
+        tool: &rmcp::model::Tool,
+        service: Arc<RunningService<RoleClient, ()>>,
+        risk: ToolRisk,
+    ) -> Self {
         let schema = build_schema(tool);
-        Self { schema, risk, peer }
+        Self {
+            schema,
+            risk,
+            service,
+        }
     }
 }
 
@@ -141,7 +152,7 @@ impl Tool for McpProxyTool {
         params.arguments = to_arguments(&self.schema.name, &args)?;
 
         let res =
-            self.peer.call_tool(params).await.map_err(|e| {
+            self.service.peer().call_tool(params).await.map_err(|e| {
                 ToolError::Exec(format!("mcp tool `{}` failed: {e}", self.schema.name))
             })?;
 

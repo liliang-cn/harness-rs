@@ -59,6 +59,7 @@ members = [
     "verticals/forge-ops-agent",
     "verticals/teahouse-bi-agent",
     "verticals/supermarket-bi-agent",
+    "verticals/bi-server",
 ]
 
 [workspace.package]
@@ -81,6 +82,7 @@ harness-redact     = { package = "harness-rs-redact",     path = "crates/harness
 harness-compactor  = { package = "harness-rs-compactor",  path = "crates/harness-compactor",  version = "0.0.27" }
 harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness-hooks",      version = "0.0.27" }
 harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.27" }
+harness-serve      = { package = "harness-rs-serve",      path = "crates/harness-serve",      version = "0.0.27" }
 harness-loop-engine= { package = "harness-rs-loop-engine", path = "crates/harness-loop-engine", version = "0.0.27" }
 harness-orchestrator= { package = "harness-rs-orchestrator", path = "crates/harness-orchestrator", version = "0.0.27" }
 harness-experience = { package = "harness-rs-experience",   path = "crates/harness-experience",   version = "0.0.27" }
