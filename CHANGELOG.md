@@ -3,6 +3,18 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.28
+
+### Fixed
+
+- **`harness-rs-models`: tolerate `"tool_calls": null` in OpenAI-compatible
+  responses.** Some providers (e.g. `cpa.superleo.app`) send `tool_calls: null`
+  on a plain text answer instead of omitting the key; the non-streaming parser
+  rejected it with `invalid type: null, expected a sequence`. Now decoded as an
+  empty list, so `complete()` works against these endpoints.
+- **`harness-rs-mcp-client`: keep the MCP session alive after `McpClient` drop;**
+  add a first-class system prompt + bi-server wiring.
+
 ## 0.0.27
 
 ### Added
