@@ -247,7 +247,13 @@ struct ChatMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<Content>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    // Providers vary on empty tool calls: OpenAI omits the key, some send `[]`,
+    // and others (e.g. cpa.superleo.app) send `null`. Tolerate all three.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        default,
+        deserialize_with = "de_null_seq"
+    )]
     tool_calls: Vec<WireToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
@@ -273,6 +279,16 @@ fn normalize_tool_args(args: &serde_json::Value) -> String {
         Ok(Value::Object(_)) => s,
         _ => "{}".to_string(),
     }
+}
+
+/// Deserialize a possibly-`null` `tool_calls` array as an empty vec. `#[serde(default)]`
+/// alone only covers a missing key; a literal `null` value would still error with
+/// "invalid type: null, expected a sequence".
+fn de_null_seq<'de, D>(d: D) -> Result<Vec<WireToolCall>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<WireToolCall>>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -986,6 +1002,21 @@ mod tests {
     use super::*;
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn parses_response_with_null_tool_calls() {
+        // Some OpenAI-compatible providers send `"tool_calls": null` on a plain
+        // text answer instead of omitting the key. It must not fail parsing.
+        let body = r#"{
+            "choices": [{
+                "message": {"role": "assistant", "content": "hi", "tool_calls": null},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+        }"#;
+        let parsed: ChatResponse = serde_json::from_str(body).expect("null tool_calls must parse");
+        assert!(parsed.choices[0].message.tool_calls.is_empty());
+    }
 
     #[tokio::test]
     async fn sse_stream_parses_text_then_done() {
