@@ -1,0 +1,59 @@
+# Semantic model for a larger supermarket. sales grain vs inventory grain, so
+# sell_through is chasm-safe. revenue / gross_margin are finance-gated; member
+# phone is masked.
+
+entities:
+  - {name: department, table: departments, primary_key: dept_id}
+  - {name: product,    table: products,    primary_key: sku}
+  - {name: member,     table: members,     primary_key: member_id}
+  - {name: inventory,  table: inventory,   primary_key: sku}
+  - {name: sale,       table: sales,       primary_key: sale_id}
+
+joins:
+  - {from: sale,      to: product,    from_key: sku,       to_key: sku,       cardinality: many_to_one}
+  - {from: sale,      to: member,     from_key: member_id, to_key: member_id, cardinality: many_to_one}
+  - {from: product,   to: department, from_key: dept_id,   to_key: dept_id,   cardinality: many_to_one}
+  - {from: inventory, to: product,    from_key: sku,       to_key: sku,       cardinality: many_to_one}
+
+dimensions:
+  - {name: dept_name,     entity: department, column: name,     type: categorical, synonyms: [部门, 品类部门]}
+  - {name: category,      entity: product,    column: category, type: categorical, synonyms: [品类, 类别]}
+  - {name: member_tier,   entity: member,     column: tier,     type: categorical, synonyms: [会员等级, 等级]}
+  - {name: member_phone,  entity: member,     column: phone,    type: categorical, mask: "'***'"}  # PII
+  - {name: sold_time,     entity: sale,       column: sold_at,  type: time}
+
+metrics:
+  - {name: units_sold,   entity: sale, agg: sum,   expr: "qty"}
+  - {name: transactions, entity: sale, agg: count, expr: "sale_id"}
+  - name: revenue
+    description: "Total sales amount (RMB)."
+    synonyms: [销售额, 营收, sales]
+    entity: sale
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+  - name: gross_margin
+    description: "Revenue minus cost of goods sold."
+    synonyms: [毛利, 毛利额]
+    entity: sale
+    agg: sum
+    expr: "(amount - cost_amount)"
+    roles: [finance, admin]
+  - {name: stock_on_hand, entity: inventory, agg: sum, expr: "qty"}
+
+  - name: margin_rate
+    description: "Gross margin as a share of revenue."
+    synonyms: [毛利率]
+    formula: "gross_margin::numeric / nullif(revenue, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: basket_size
+    description: "Units per transaction."
+    synonyms: [客单件数, 连带率]
+    formula: "units_sold::numeric / nullif(transactions, 0)"
+    additivity: non_additive
+  - name: sell_through
+    description: "Units sold as a share of (units sold + on-hand). Sales grain vs inventory grain."
+    synonyms: [动销率, sell-through]
+    formula: "units_sold::numeric / nullif(units_sold + stock_on_hand, 0)"
+    additivity: non_additive

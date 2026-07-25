@@ -1,0 +1,65 @@
+# Semantic model for a teahouse (茶馆). orders (per sitting) and order_items
+# (per tea) are different grains — so tea_revenue by 茶类 and items_per_order are
+# chasm-safe, and revenue (order grain) must NOT be grouped through the item join.
+
+entities:
+  - {name: room,       table: rooms,       primary_key: room_id}
+  - {name: tea,        table: teas,        primary_key: tea_id}
+  - {name: staff,      table: staff,       primary_key: staff_id}
+  - {name: order,      table: orders,      primary_key: order_id}
+  - {name: order_item, table: order_items, primary_key: item_id}
+
+joins:
+  - {from: order,      to: room,  from_key: room_id,  to_key: room_id,  cardinality: many_to_one}
+  - {from: order,      to: staff, from_key: staff_id, to_key: staff_id, cardinality: many_to_one}
+  - {from: order_item, to: order, from_key: order_id, to_key: order_id, cardinality: many_to_one}
+  - {from: order_item, to: tea,   from_key: tea_id,   to_key: tea_id,   cardinality: many_to_one}
+
+dimensions:
+  - {name: room_type,    entity: room,  column: room_type,    type: categorical, synonyms: [包间类型, 房型]}
+  - {name: tea_category, entity: tea,   column: category,     type: categorical, synonyms: [茶类, 茶叶类别]}
+  - {name: staff_name,   entity: staff, column: name,         type: categorical, synonyms: [员工, 服务员]}
+  - {name: staff_role,   entity: staff, column: role,         type: categorical, synonyms: [岗位, 职位]}
+  - {name: order_time,   entity: order, column: order_at,     type: time}
+  - {name: member_phone, entity: order, column: member_phone, type: categorical, mask: "'***'"}  # PII
+
+metrics:
+  # order grain
+  - {name: orders_count, entity: order, agg: count, expr: "order_id"}
+  - {name: guest_count,  entity: order, agg: sum,   expr: "party_size"}
+  - name: revenue
+    description: "Total order amount (RMB). Group by room/staff — NOT through the tea join."
+    synonyms: [营收, 营业额, 流水]
+    entity: order
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+
+  # order_item grain
+  - {name: tea_units, entity: order_item, agg: sum, expr: "qty"}
+  - name: tea_revenue
+    description: "Tea line revenue — group by 茶类 (tea_category) safely at item grain."
+    synonyms: [茶品营收, 单品营收]
+    entity: order_item
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+
+  # ratios
+  - name: avg_ticket
+    description: "Average revenue per sitting."
+    synonyms: [客单价]
+    formula: "revenue::numeric / nullif(orders_count, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: spend_per_guest
+    description: "Revenue per guest (order grain ÷ guest count)."
+    synonyms: [人均消费]
+    formula: "revenue::numeric / nullif(guest_count, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: items_per_order
+    description: "Teas per sitting (item grain ÷ order grain — chasm-safe)."
+    synonyms: [客单件数, 连带率]
+    formula: "tea_units::numeric / nullif(orders_count, 0)"
+    additivity: non_additive

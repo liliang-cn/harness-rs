@@ -1,0 +1,27 @@
+[package]
+name = "advisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "advisor"
+path = "src/main.rs"
+
+[dependencies]
+harness-core   = { workspace = true }
+harness-serve  = { workspace = true, features = ["http", "cors"] }
+harness-hooks  = { workspace = true }
+harness-models = { workspace = true }
+tokio          = { workspace = true, features = ["macros", "rt-multi-thread", "net", "fs"] }
+axum           = "0.8"
+tower-http     = { version = "0.6", features = ["fs", "cors"] }
+async-trait    = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+sqlx           = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "json"] }
+anyhow         = { workspace = true }

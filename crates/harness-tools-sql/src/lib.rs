@@ -31,7 +31,7 @@
 //! between the agent and the warehouse: the agent asks for a *metric by
 //! dimensions*, and a compiler produces fan-out/chasm-safe SQL. harness-rs talks
 //! to such a layer (e.g. DataIntelligence) over MCP with no code here at all —
-//! see `verticals/warehouse-bi-agent`. Reach for `SqlQueryTool` only when there
+//! see `projects/datainside/warehouse-bi-agent`. Reach for `SqlQueryTool` only when there
 //! is no semantic model yet and approximate ad-hoc reads are acceptable.
 
 pub mod executor;

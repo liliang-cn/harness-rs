@@ -1,0 +1,19 @@
+[briefing]
+title = "AI行业老板内参 · 演示"
+industry = "人工智能与企业软件"
+audience = "CEO"
+lookback_hours = 48
+max_items = 10
+output_dir = "fixtures/out"
+focus_keywords = ["AI Agent", "智能体", "自动化", "企业"]
+competitor_keywords = ["OpenAI"]
+risk_keywords = ["安全", "漏洞", "泄露"]
+
+[ai]
+enabled = false
+
+[[sources]]
+name = "本地演示数据"
+url = "file://REPLACE_WITH_ABSOLUTE_FIXTURE_PATH"
+priority = 0.9
+tags = ["AI Agent"]

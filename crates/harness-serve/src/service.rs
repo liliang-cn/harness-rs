@@ -46,13 +46,23 @@ pub struct ChatReply {
 pub enum ChatChunk {
     /// An incremental text fragment — append it to what you've shown so far.
     Token { text: String },
+    /// Progress marker emitted around each governed tool call. The answer-token
+    /// stream is silent during the agent's tool-calling loop (discovery +
+    /// `query_metric` round-trips), so a UI can show this to prove it's working
+    /// instead of a frozen spinner. Purely advisory — not part of the answer.
+    Step { label: String },
     /// Terminal chunk: the full answer, resolved actor, and correlation id.
-    /// Always emitted last.
+    /// Emitted last on success.
     Done {
         answer: String,
         actor: String,
         request_id: String,
     },
+    /// Terminal chunk when the run fails, emitted instead of [`ChatChunk::Done`].
+    /// Clients parse every frame's `data:` as JSON, so a failure has to arrive on
+    /// that same path — otherwise it is silently dropped and the stream just ends,
+    /// leaving the UI unable to tell "finished" from "died".
+    Error { message: String },
 }
 
 /// Failure from a chat request.
@@ -148,6 +158,12 @@ impl ChatService {
     pub fn with_max_iters(mut self, n: u32) -> Self {
         self.max_iters = n;
         self
+    }
+
+    /// The underlying model's identifier (e.g. `gpt-5.6-terra`, `qwen3.5:latest`).
+    /// Surfaced over HTTP at `GET /model` so a UI can show which model is live.
+    pub fn model_name(&self) -> String {
+        self.model.info().model
     }
 
     /// Record each served run so it can be **replayed** deterministically. Every
@@ -326,15 +342,34 @@ impl Hook for StreamForwardHook {
     }
 
     fn matches(&self, ev: &Event<'_>) -> bool {
-        matches!(ev, Event::ModelTokenDelta { .. })
+        matches!(
+            ev,
+            Event::ModelTokenDelta { .. } | Event::PreToolUse { .. } | Event::PostToolUse { .. }
+        )
     }
 
     fn fire(&self, ev: &Event<'_>, _world: &mut World) -> HookOutcome {
-        if let Event::ModelTokenDelta { text } = ev {
-            // Non-blocking; a dropped receiver (client gone) just errors — ignore.
-            let _ = self.tx.send(Ok(ChatChunk::Token {
-                text: text.to_string(),
-            }));
+        // Non-blocking; a dropped receiver (client gone) just errors — ignore.
+        match ev {
+            Event::ModelTokenDelta { text } => {
+                let _ = self.tx.send(Ok(ChatChunk::Token {
+                    text: text.to_string(),
+                }));
+            }
+            // Surface the tool-calling loop as progress so the stream isn't silent
+            // until the final answer tokens arrive.
+            Event::PreToolUse { action } => {
+                let _ = self.tx.send(Ok(ChatChunk::Step {
+                    label: format!("调用 {} 查数中…", action.tool),
+                }));
+            }
+            Event::PostToolUse { action, result } => {
+                let mark = if result.ok { "已返回" } else { "被拒绝" };
+                let _ = self.tx.send(Ok(ChatChunk::Step {
+                    label: format!("{} {}", action.tool, mark),
+                }));
+            }
+            _ => {}
         }
         HookOutcome::Allow
     }

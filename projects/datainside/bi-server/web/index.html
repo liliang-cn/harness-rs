@@ -1,0 +1,1147 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>EduMind AI · 智学与经营智能 Agent</title>
+<style>
+/* ── design tokens ─────────────────────────────────────── */
+
+/* ── Theme variables ─────────────────────────────────── */
+[data-theme="dark"] {
+  --bg:#0f1117;--surface:#181c25;--surface2:#1e2330;--surface3:#252b3a;
+  --line:#2a3040;--line2:#323c52;
+  --fg:#e2e6ef;--fg2:#9ba3b8;--fg3:#5a6278;
+  --accent:#4f7cff;--accent-dim:#2a3d7a;--accent-fg:#fff;
+  --ok:#22c55e;--ok-dim:rgba(34,197,94,.12);
+  --warn:#f59e0b;--warn-dim:rgba(245,158,11,.12);
+  --err:#ef4444;--err-dim:rgba(239,68,68,.12);
+  --purple:#a78bfa;--purple-dim:rgba(167,139,250,.12);
+}
+
+[data-theme="light"] {
+  --bg:#f8fafc;--surface:#ffffff;--surface2:#f1f5f9;--surface3:#e2e8f0;
+  --line:#e2e8f0;--line2:#cbd5e1;
+  --fg:#0f172a;--fg2:#475569;--fg3:#94a3b8;
+  --accent:#2563eb;--accent-dim:#dbeafe;--accent-fg:#fff;
+  --ok:#16a34a;--ok-dim:rgba(22,163,74,.12);
+  --warn:#d97706;--warn-dim:rgba(217,119,6,.12);
+  --err:#dc2626;--err-dim:rgba(220,38,38,.12);
+  --purple:#7c3aed;--purple-dim:rgba(124,58,237,.12);
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  height: -webkit-fill-available;
+  display: flex;
+  overflow: hidden;
+}
+
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.view {
+  flex: 1;
+  height: 100%;
+  display: none;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.view.active {
+  display: flex;
+}
+
+#chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0; /* Critical flex fix for full height scrolling */
+  padding: 16px 0;
+}
+
+:root{
+  --bg:#0f1117;--surface:#181c25;--surface2:#1e2330;--surface3:#252b3a;
+  --line:#2a3040;--line2:#323c52;
+  --fg:#e2e6ef;--fg2:#9ba3b8;--fg3:#5a6278;
+  --accent:#4f7cff;--accent-dim:#2a3d7a;--accent-fg:#fff;
+  --ok:#22c55e;--ok-dim:rgba(34,197,94,.12);
+  --warn:#f59e0b;--warn-dim:rgba(245,158,11,.12);
+  --err:#ef4444;--err-dim:rgba(239,68,68,.12);
+  --purple:#a78bfa;--purple-dim:rgba(167,139,250,.12);
+  --sidebar-w:260px;--header-h:54px;
+  --font:-apple-system,"PingFang SC","HarmonyOS Sans",Segoe UI,Roboto,sans-serif;
+  --mono:"JetBrains Mono","SF Mono",Menlo,monospace;
+  --r4:4px;--r6:6px;--r8:8px;--r12:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font:14px/1.6 var(--font);background:var(--bg);color:var(--fg);height:100vh;height:-webkit-fill-available;display:flex;flex-direction:column;overflow:hidden}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit;touch-action:manipulation}
+button:disabled{opacity:.4;cursor:default}
+input,textarea,select{font:inherit;color:var(--fg);background:var(--surface2);border:1px solid var(--line2);border-radius:var(--r6);padding:8px 12px;outline:none}
+input:focus,textarea:focus{border-color:var(--accent)}
+a{color:var(--accent);text-decoration:none}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:2px}
+
+/* ── layout ────────────────────────────────────────────── */
+#app{display:flex;flex:1;overflow:hidden;position:relative}
+
+/* ── sidebar ───────────────────────────────────────────── */
+#sidebar{
+  width:var(--sidebar-w);min-width:var(--sidebar-w);
+  background:var(--surface);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;overflow:hidden;z-index:100;
+  transition:transform .25s cubic-bezier(.16,1,.3,1);
+}
+.logo{
+  padding:0 16px;height:var(--header-h);display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid var(--line);flex-shrink:0;
+}
+.logo-icon{
+  width:28px;height:28px;border-radius:7px;
+  background:linear-gradient(135deg,var(--accent) 0%,var(--purple) 100%);
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0;
+}
+.logo-text{font-size:15px;font-weight:700;letter-spacing:-.3px;color:var(--fg)}
+.logo-badge{font-size:9px;font-weight:600;padding:1px 5px;background:var(--accent-dim);color:var(--accent);border-radius:3px;margin-left:2px}
+
+.sidebar-nav{flex:1;overflow-y:auto;padding:8px 0}
+.nav-group-label{
+  padding:12px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.8px;
+  color:var(--fg3);text-transform:uppercase;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:9px 14px;
+  border-radius:var(--r6);margin:0 6px;cursor:pointer;
+  color:var(--fg2);transition:background .12s,color .12s;
+  font-size:13.5px;
+}
+.nav-item:hover{background:var(--surface2);color:var(--fg)}
+.nav-item.active{background:var(--accent-dim);color:var(--accent);font-weight:500}
+.nav-item .ni-icon{width:16px;height:16px;opacity:.7;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.nav-item.active .ni-icon{opacity:1}
+.nav-item .ni-tag{
+  margin-left:auto;font-size:10px;padding:1px 6px;border-radius:10px;
+  background:var(--surface3);color:var(--fg3);font-weight:500;
+}
+.nav-item.active .ni-tag{background:var(--accent-dim);color:var(--accent)}
+
+.workspace-section{flex:1;overflow-y:auto;padding:4px 0 8px}
+.ws-item{
+  display:flex;align-items:center;gap:10px;padding:8px 14px;
+  border-radius:var(--r6);margin:1px 6px;cursor:pointer;
+  color:var(--fg2);font-size:13px;transition:background .1s,color .1s;
+}
+.ws-item:hover{background:var(--surface2);color:var(--fg)}
+.ws-item.active{background:var(--surface3);color:var(--fg);font-weight:500}
+.ws-dot{width:7px;height:7px;border-radius:50%;background:var(--line2);flex-shrink:0}
+.ws-item.active .ws-dot{background:var(--ok)}
+.ws-item .ws-port{margin-left:auto;font-size:10px;color:var(--fg3);font-variant-numeric:tabular-nums}
+
+.sidebar-footer{
+  border-top:1px solid var(--line);padding:10px 12px;
+  display:flex;align-items:center;gap:8px;flex-shrink:0;
+  padding-bottom:max(10px, env(safe-area-inset-bottom));
+}
+.model-pill{
+  flex:1;display:flex;align-items:center;gap:6px;padding:6px 10px;
+  background:var(--surface2);border:1px solid var(--line2);border-radius:var(--r6);font-size:11.5px;
+}
+.model-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;
+  box-shadow:0 0 0 0 rgba(34,197,94,.4);animation:pulse-ok 2s infinite}
+@keyframes pulse-ok{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{box-shadow:0 0 0 4px rgba(34,197,94,0)}}
+.model-name{color:var(--fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* sidebar overlay for mobile */
+#sidebar-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(2px);
+  z-index:90;opacity:0;pointer-events:none;transition:opacity .2s;
+}
+
+/* ── main area ─────────────────────────────────────────── */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;width:100%}
+#topbar{
+  height:var(--header-h);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 12px;gap:10px;flex-shrink:0;
+  background:var(--surface);z-index:10;
+}
+.menu-btn{
+  display:none;width:34px;height:34px;border-radius:var(--r6);
+  align-items:center;justify-content:center;color:var(--fg);
+  flex-shrink:0;background:var(--surface2);border:1px solid var(--line2);
+}
+.topbar-title-wrap{flex:1;overflow:hidden}
+.topbar-title{font-size:14.5px;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-sub{font-size:11.5px;color:var(--fg3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tab-bar{display:flex;gap:2px}
+.tab-btn{
+  padding:5px 10px;border-radius:var(--r6);font-size:12px;color:var(--fg2);
+  cursor:pointer;transition:background .1s,color .1s;white-space:nowrap;
+}
+.tab-btn:hover{background:var(--surface2);color:var(--fg)}
+.tab-btn.active{background:var(--surface3);color:var(--fg);font-weight:500}
+.topbar-actions{display:flex;gap:4px}
+.icon-btn{
+  width:32px;height:32px;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--r6);color:var(--fg2);cursor:pointer;transition:background .1s,color .1s;
+}
+.icon-btn:hover{background:var(--surface2);color:var(--fg)}
+
+/* ── view panels ───────────────────────────────────────── */
+.view{flex:1;display:none;overflow:hidden;flex-direction:column}
+.view.active{display:flex}
+
+/* ── chat view ─────────────────────────────────────────── */
+#chat-view{gap:0;height:100%}
+#messages{flex:1;overflow-y:auto;padding:16px 0}
+.msg-wrap{max-width:820px;margin:0 auto;padding:0 12px 14px}
+.msg-row{display:flex;gap:10px;align-items:flex-start}
+.msg-row.user-row{flex-direction:row-reverse}
+.avatar{
+  width:28px;height:28px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;margin-top:2px;
+}
+.avatar.ai{background:linear-gradient(135deg,var(--accent) 0%,var(--purple) 100%);color:#fff}
+.avatar.user{background:var(--surface3);color:var(--fg2)}
+.bubble{
+  max-width:calc(100% - 44px);padding:10px 14px;border-radius:var(--r8);
+  font-size:13.5px;line-height:1.65;word-break:break-word;
+}
+.user-row .bubble{background:var(--surface2);color:var(--fg);border-radius:var(--r8) 4px var(--r8) var(--r8)}
+.ai-row .bubble{background:transparent;padding:4px 0;flex:1;max-width:100%}
+
+/* ── markdown inside bubble ────────────────────────────── */
+.bubble table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px;display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.bubble th,.bubble td{border:1px solid var(--line2);padding:6px 10px;text-align:left;white-space:nowrap}
+.bubble th{background:var(--surface2);color:var(--fg2);font-weight:600;font-size:12px}
+.bubble tr:nth-child(even) td{background:rgba(255,255,255,.018)}
+.bubble h3{font-size:14px;margin:14px 0 6px;color:var(--fg)}
+.bubble code{font:12.5px var(--mono);background:var(--surface2);padding:1px 5px;border-radius:3px;color:var(--purple)}
+.bubble pre{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r6);padding:12px;overflow-x:auto;margin:8px 0}
+.bubble pre code{background:none;padding:0;color:var(--fg2)}
+.bubble strong{color:var(--fg);font-weight:600}
+.bubble p{margin-bottom:6px}
+.bubble ul,.bubble ol{padding-left:20px;margin-bottom:6px}
+.bubble li{margin-bottom:2px}
+
+/* chart card */
+.chart-card{
+  position:relative;background:var(--surface2);border:1px solid var(--line2);
+  border-radius:var(--r8);margin:10px 0;overflow:hidden;
+}
+.chart-card-toolbar{
+  display:flex;align-items:center;gap:6px;padding:6px 10px;
+  border-bottom:1px solid var(--line);background:var(--surface);
+}
+.chart-card-label{font-size:11px;color:var(--fg3);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pin-btn{
+  font-size:11px;padding:4px 8px;border-radius:4px;
+  background:var(--surface3);color:var(--fg2);border:1px solid var(--line2);
+  cursor:pointer;transition:all .1s;display:flex;align-items:center;gap:4px;white-space:nowrap;
+}
+.pin-btn:hover{background:var(--accent-dim);color:var(--accent);border-color:var(--accent)}
+.pin-btn.pinned{background:var(--ok-dim);color:var(--ok);border-color:var(--ok)}
+[data-aigui-card-loading]{display:flex;align-items:center;justify-content:center;height:180px;color:var(--fg3);font-size:12px}
+[data-aigui-mount]{min-height:200px;width:100%}
+
+/* step indicator */
+.step-row{display:flex;align-items:center;gap:6px;padding:4px 0;color:var(--fg3);font-size:12px}
+.step-spinner{width:12px;height:12px;border:1.5px solid var(--line2);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── input bar ─────────────────────────────────────────── */
+#input-bar{
+  border-top:1px solid var(--line);background:var(--surface);
+  padding:10px 12px;padding-bottom:max(10px, env(safe-area-inset-bottom));
+  flex-shrink:0;
+}
+.input-wrap{
+  max-width:820px;margin:0 auto;
+  background:var(--surface2);border:1px solid var(--line2);
+  border-radius:var(--r8);display:flex;align-items:flex-end;gap:8px;padding:6px 6px 6px 12px;
+  transition:border-color .15s;
+}
+.input-wrap:focus-within{border-color:var(--accent)}
+#q{
+  flex:1;background:none;border:none;resize:none;outline:none;color:var(--fg);
+  font-size:14px;line-height:1.45;max-height:120px;min-height:24px;overflow-y:auto;
+  padding:2px 0;
+}
+#q::placeholder{color:var(--fg3)}
+.send-btn{
+  width:34px;height:34px;border-radius:var(--r6);
+  background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:opacity .1s;
+}
+.send-btn:hover{opacity:.88}
+.send-btn:disabled{opacity:.3}
+.input-hints{max-width:820px;margin:6px auto 0;display:flex;flex-wrap:wrap;gap:6px;max-height:64px;overflow-y:auto}
+.hint-chip{
+  font-size:11.5px;padding:4px 10px;border-radius:20px;
+  border:1px solid var(--line2);color:var(--fg3);cursor:pointer;transition:all .1s;
+  white-space:nowrap;
+}
+.hint-chip:hover{border-color:var(--accent);color:var(--accent)}
+.input-meta{max-width:820px;margin:4px auto 0;font-size:11px;color:var(--fg3);display:flex;gap:12px}
+
+/* ── dashboard view ────────────────────────────────────── */
+#dashboard-view{padding:14px;overflow-y:auto;gap:14px}
+.dash-header{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.dash-title{font-size:16px;font-weight:600}
+.dash-sub{font-size:12px;color:var(--fg3)}
+.dash-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+  gap:12px;
+}
+.dash-card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r8);overflow:hidden;
+}
+.dash-card-header{
+  display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);
+}
+.dash-card-title{font-size:12.5px;font-weight:500;flex:1;color:var(--fg2)}
+.dash-card-remove{
+  width:24px;height:24px;border-radius:4px;color:var(--fg3);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;
+}
+.dash-card-remove:hover{background:var(--err-dim);color:var(--err)}
+.dash-empty{
+  grid-column:1/-1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:60px 20px;color:var(--fg3);gap:8px;
+}
+.dash-empty-icon{font-size:36px;opacity:.3}
+.dash-empty-text{font-size:13px}
+
+/* ── sources view ──────────────────────────────────────── */
+#sources-view{overflow-y:auto;padding:14px}
+.src-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:12px}
+.src-card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r8);
+  padding:12px;display:flex;flex-direction:column;gap:8px;
+}
+.src-card-head{display:flex;align-items:center;gap:8px}
+.src-card-name{font-weight:600;font-size:13px;flex:1}
+.src-status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.src-status-dot.ok{background:var(--ok);box-shadow:0 0 0 0 rgba(34,197,94,.4);animation:pulse-ok 2s infinite}
+.src-status-dot.warn{background:var(--warn)}
+.src-status-dot.err{background:var(--err)}
+.src-card-meta{font-size:11.5px;color:var(--fg3);display:flex;gap:12px;flex-wrap:wrap}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:2px}
+.metric-tile{
+  background:var(--surface2);border-radius:var(--r6);padding:6px 10px;
+}
+.metric-tile .mn{font-size:15px;font-weight:700;line-height:1.3;font-variant-numeric:tabular-nums}
+.metric-tile .ml{font-size:10px;color:var(--fg3);margin-top:1px}
+
+/* ── history sidebar in chat ───────────────────────────── */
+#hist-panel{
+  width:0;overflow:hidden;border-left:1px solid var(--line);
+  background:var(--surface);transition:width .2s;display:flex;flex-direction:column;
+}
+#hist-panel.open{width:220px}
+.hist-header{padding:12px 14px;border-bottom:1px solid var(--line);font-size:12px;font-weight:600;color:var(--fg2)}
+.hist-list{flex:1;overflow-y:auto;padding:6px 0}
+.hist-item{
+  padding:8px 12px;cursor:pointer;font-size:12px;color:var(--fg2);
+  border-left:2px solid transparent;transition:all .1s;
+}
+.hist-item:hover{background:var(--surface2);color:var(--fg);border-left-color:var(--line2)}
+.hist-item.active{background:var(--surface2);color:var(--fg);border-left-color:var(--accent)}
+.hist-item .hi-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.hist-item .hi-meta{font-size:10.5px;color:var(--fg3);margin-top:1px}
+
+/* ── status bar ────────────────────────────────────────── */
+#statusbar{
+  height:24px;background:var(--surface);border-top:1px solid var(--line);
+  display:flex;align-items:center;padding:0 12px;gap:12px;flex-shrink:0;font-size:11px;color:var(--fg3);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.sbar-item{display:flex;align-items:center;gap:4px}
+#sbar-status{color:var(--fg3)}
+#sbar-status.ok{color:var(--ok)}
+#sbar-status.thinking{color:var(--accent)}
+#sbar-status.err{color:var(--err)}
+
+/* ── empty / welcome ───────────────────────────────────── */
+#welcome{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:24px 16px;gap:14px;
+}
+.wlc-icon{
+  width:48px;height:48px;border-radius:12px;
+  background:linear-gradient(135deg,var(--accent) 0%,var(--purple) 100%);
+  display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;
+}
+.wlc-title{font-size:19px;font-weight:700;text-align:center;letter-spacing:-.4px}
+.wlc-sub{font-size:12.5px;color:var(--fg3);text-align:center;max-width:340px;line-height:1.55}
+.wlc-cards{display:flex;flex-direction:column;gap:8px;width:100%;max-width:480px}
+.wlc-card{
+  padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:var(--r8);
+  font-size:12.5px;cursor:pointer;color:var(--fg2);transition:all .12s;text-align:left;width:100%;
+}
+.wlc-card:hover{border-color:var(--accent);color:var(--fg);background:var(--surface3)}
+.wlc-card-q{font-weight:500;color:var(--fg);margin-bottom:2px;font-size:12.5px}
+.wlc-card-tag{font-size:10.5px;color:var(--fg3)}
+
+/* ── responsive rules for mobile (<= 768px) ────────────── */
+@media (max-width: 768px) {
+  #sidebar{
+    position:fixed;top:0;bottom:0;left:0;
+    transform:translateX(-100%);
+    box-shadow:4px 0 24px rgba(0,0,0,.5);
+  }
+  #sidebar.open{transform:translateX(0)}
+  #sidebar-overlay{display:block}
+  #sidebar-overlay.open{opacity:1;pointer-events:auto}
+  .menu-btn{display:flex}
+  .wlc-cards{grid-template-columns:1fr}
+  .dash-grid{grid-template-columns:1fr}
+  .src-grid{grid-template-columns:1fr}
+  .bubble{max-width:calc(100% - 36px);padding:8px 12px;font-size:13px}
+  #hist-panel{
+    position:fixed;top:var(--header-h);bottom:0;right:0;z-index:95;
+    box-shadow:-4px 0 20px rgba(0,0,0,.5);
+  }
+}
+
+/* KPI Banner */
+.kpi-banner{display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap}
+.kpi-card{flex:1;min-width:110px;background:var(--surface2);border:1px solid var(--line2);border-radius:var(--r8);padding:10px 12px}
+.kpi-card .kpi-val{font-size:18px;font-weight:700;color:var(--fg);font-variant-numeric:tabular-nums;line-height:1.3}
+.kpi-card .kpi-lbl{font-size:11px;color:var(--fg3);margin-top:2px}
+.report-export-btn{margin-left:auto;font-size:11.5px;padding:4px 10px;border-radius:var(--r6);background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.report-export-btn:hover{background:var(--accent);color:#fff}
+
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- mobile overlay -->
+<div id="sidebar-overlay" onclick="window.closeSidebar()"></div>
+
+<!-- sidebar -->
+<div id="sidebar">
+  <div class="logo">
+    <div class="logo-icon">DL</div>
+    <span class="logo-text">EduMind AI</span>
+    <span class="logo-badge">BETA</span>
+    <button onclick="window.closeSidebar()" style="margin-left:auto;padding:4px;display:flex;color:var(--fg3)" class="menu-btn">✕</button>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-group-label">功能</div>
+    <div class="nav-item active" data-view="chat" onclick="window.switchView('chat')">
+      <span class="ni-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+      <span>EduMind AI 智学助手</span>
+    </div>
+    <div class="nav-item" data-view="dashboard" onclick="window.switchView('dashboard')">
+      <span class="ni-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span>
+      <span>看板</span>
+      <span class="ni-tag" id="pin-count">0</span>
+    </div>
+    <div class="nav-item" data-view="sources" onclick="window.switchView('sources')">
+      <span class="ni-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
+      <span>数据源</span>
+      <span class="ni-tag" id="src-count">13</span>
+    </div>
+
+    <div class="nav-group-label" style="margin-top:8px">工作区</div>
+    <div class="workspace-section" id="ws-list"></div>
+  </div>
+  <div class="sidebar-footer">
+    <div class="model-pill">
+      <div class="model-dot"></div>
+      <span class="model-name" id="model-label">gpt-5.6-terra</span>
+    </div>
+  </div>
+</div>
+
+<!-- main -->
+<div id="main">
+  <!-- topbar -->
+  <div id="topbar">
+    <button class="menu-btn" onclick="window.openSidebar()" aria-label="打开菜单">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="topbar-title-wrap">
+      <div class="topbar-title" id="topbar-title">EduMind AI 智学助手</div>
+      <div class="topbar-sub" id="topbar-sub">选择工作区开始提问</div>
+    </div>
+    <div class="tab-bar" id="chat-tabs" style="display:none">
+      <div class="tab-btn active" onclick="window.newSession()">新建</div>
+    </div>
+    <div class="topbar-actions">
+      <div class="icon-btn" id="theme-btn" data-tip="切换主题" onclick="window.toggleTheme()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="theme-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </div>
+
+      <div class="icon-btn" id="report-btn" data-tip="导出报告" onclick="window.exportFullReport()" style="display:none">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      </div>
+
+      <div class="icon-btn" id="hist-toggle-btn" data-tip="历史" onclick="window.toggleHist()" style="display:none">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+      </div>
+      <div class="icon-btn" data-tip="清空" onclick="window.clearChat()" style="display:none" id="clear-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- chat view -->
+  <div id="chat-view" class="view active">
+    <div id="messages">
+      <div id="welcome">
+        <div class="wlc-icon">DL</div>
+        <div class="wlc-title">EduMind AI · 智学与经营智能 Agent</div>
+        <div class="wlc-sub">语义治理精确查数 · 不编造 · 不越权 · 全过程 Hash 链审计</div>
+        <div class="wlc-cards" id="wlc-suggestions"></div>
+      </div>
+    </div>
+    <div id="input-bar">
+      <div class="input-wrap">
+        <textarea id="q" rows="1" placeholder="输入经营问题…"></textarea>
+        <button class="send-btn" id="send-btn" onclick="window.sendMsg()" disabled aria-label="发送">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+      <div class="input-hints" id="hint-chips"></div>
+      <div class="input-meta" id="input-meta"></div>
+    </div>
+  </div>
+
+  <!-- dashboard view -->
+  <div id="dashboard-view" class="view">
+    <div class="dash-header">
+      <div>
+        <div class="dash-title">数据看板</div>
+        <div class="dash-sub">对话中点击「固定到看板」保存图表</div>
+      </div>
+    </div>
+    <div class="dash-grid" id="dash-grid">
+      <div class="dash-empty">
+        <div class="dash-empty-icon">📊</div>
+        <div class="dash-empty-text">暂无固定图表。在 AI 对话中点击图表右上角的「固定」按钮。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- sources view -->
+  <div id="sources-view" class="view">
+    <div>
+      <div class="dash-title">数据源</div>
+      <div class="dash-sub">工作区数据库连接与治理层状态</div>
+    </div>
+    <div class="src-grid" id="src-grid"></div>
+  </div>
+
+  <!-- status bar -->
+  <div id="statusbar">
+    <div class="sbar-item">
+      <span id="sbar-status">就绪</span>
+    </div>
+    <div class="sbar-item" id="sbar-tokens" style="display:none">
+      <span id="sbar-token-val"></span>
+    </div>
+    <div class="sbar-item" id="sbar-timing" style="display:none">
+      <span id="sbar-time-val"></span>
+    </div>
+    <div class="sbar-item" style="margin-left:auto" id="sbar-audit"></div>
+  </div>
+</div>
+
+<!-- history panel -->
+<div id="hist-panel">
+  <div class="hist-header">对话历史</div>
+  <div class="hist-list" id="hist-list"></div>
+</div>
+
+</div><!-- #app -->
+
+<script type="module">
+import { createRenderer, chart, katex } from "./vendor/aigui-bundle-v2.js"
+const getApiUrl = (port, path) => `http://${window.location.hostname || "localhost"}:${port}${path}`
+
+
+/* ── workspaces ────────────────────────────────────────── */
+const WS = [
+  {id:"edumind",         name:"EduMind 智学家教", sub:"CortexDB 记忆 + 知识图谱 + @ai-gui 公式", port:43300, role:"tutor",    icon:"🎓",
+   hints:["帮我用配方法解方程 x^2 - 6x + 5 = 0","求解二次函数 y = x^2 - 4x + 7 的顶点和最值","为什么 sin(π-α) = sin(α)？","牛顿第二定律的定义和适用条件？"]},
+  {id:"ecommerce",      name:"电商平台",       sub:"30,000 订单 · 5 渠道 · 8 品类",           port:43129, role:"finance",  icon:"🛍",
+   hints:["各渠道各品类的营收与毛利率?","哪个品牌的动销率最低?","各省份的客单价和销量排行?","平均评分最低的品类有哪些?"]},
+  {id:"retail",         name:"家电零售",        sub:"5 门店 · 40 SKU · 4 大区",                port:43117, role:"finance",  icon:"🏪",
+   hints:["各门店大区各品类的销量和营收?","以旧换新占比最高的品类?","库存最低的门店是哪个?"]},
+  {id:"supermarket",    name:"超市经营",        sub:"1,500 SKU · 200,000 条销售记录",          port:43118, role:"finance",  icon:"🛒",
+   hints:["各部门的营收、毛利率与动销率?","本周销量最好的 10 个 SKU?","库存积压最严重的品类?"]},
+  {id:"teahouse",       name:"茶馆经营",        sub:"包间运营 · 饮品品类 · 连带率",            port:43119, role:"finance",  icon:"🍵",
+   hints:["各茶类的营收和客单价?","各包间类型的连带率?","节假日 vs 工作日的营收差距?"]},
+  {id:"forge",          name:"锻造公司",        sub:"2 厂 · 15 产线 · 制造成本分析",           port:43120, role:"finance",  icon:"🏭",
+   hints:["各厂的营收和各产线的产量?","合格率最低的产线是哪条?","各产品的毛利率排行?"]},
+  {id:"hotel",          name:"酒店/民宿",       sub:"12 门店 · 600 房 · RevPAR 分析",          port:43121, role:"finance",  icon:"🏨",
+   hints:["各门店的入住率、RevPAR 和平均房价?","哪种房型入住率最高?","节假日的 RevPAR 趋势?"]},
+  {id:"pharmacy",       name:"药店 BI",         sub:"处方药 · 近效期 · 毛利管理",              port:43122, role:"finance",  icon:"💊",
+   hints:["各品类的营收、毛利率与处方占比?","近效期库存最多的品类?","动销率最低的品类?"]},
+  {id:"autorepair",     name:"汽修连锁",        sub:"10 门店 · 工时利用率 · 配件毛利",         port:43123, role:"finance",  icon:"🔧",
+   hints:["各门店的工时利用率和返修率?","配件毛利率最高的品类?","哪家门店的客单价最高?"]},
+  {id:"dental",         name:"口腔连锁",        sub:"8 门诊 · 椅位利用率 · 诊疗毛利",          port:43124, role:"finance",  icon:"🦷",
+   hints:["各门诊的营收、毛利率与椅位利用率?","哪种诊疗项目的毛利率最高?","医生工作量排行?"]},
+  {id:"gym",            name:"健身房",          sub:"会员运营 · 课程满座率 · 出勤分析",         port:43125, role:"analyst",  icon:"💪",
+   hints:["各门店各课程类型的满座率和出勤率?","会员续费率最高的门店?","哪类课程的无客率最高?"]},
+  {id:"warehouse",      name:"仓储/WMS",        sub:"出库量 · 库存周转 · 拣货准时率",           port:43126, role:"finance",  icon:"📦",
+   hints:["各仓库的出库量和库存周转率?","拣货准时率最低的仓库?","近期出库趋势?"]},
+  {id:"manufacturing",  name:"制造质量",        sub:"产线 FPY · 废品率 · 质量追溯",            port:43127, role:"quality",  icon:"⚙️",
+   hints:["各产线的产量和一次合格率?","废品率最高的产线?","本月质量趋势?"]},
+]
+
+/* ── state ─────────────────────────────────────────────── */
+let currentWS  = WS[0]
+let currentView = "chat"
+let histOpen   = false
+let sessionN   = 0
+let t0         = 0
+let activeReq  = null
+let pinnedCharts = JSON.parse(localStorage.getItem("datalens_pinned") || "[]")
+let sessions   = JSON.parse(localStorage.getItem("datalens_sessions") || "[]")
+let activeSession = null
+
+/* ── mobile drawer ─────────────────────────────────────── */
+window.openSidebar = () => {
+  document.getElementById("sidebar").classList.add("open")
+  document.getElementById("sidebar-overlay").classList.add("open")
+}
+window.closeSidebar = () => {
+  document.getElementById("sidebar").classList.remove("open")
+  document.getElementById("sidebar-overlay").classList.remove("open")
+}
+
+/* ── view switching ─────────────────────────────────────── */
+window.switchView = (v) => {
+  currentView = v
+  document.querySelectorAll(".view").forEach(el => el.classList.remove("active"))
+  document.getElementById(v+"-view").classList.add("active")
+  document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"))
+  document.querySelector(`.nav-item[data-view="${v}"]`).classList.add("active")
+  document.getElementById("topbar-title").textContent =
+    v === "chat" ? (currentWS ? currentWS.icon+" "+currentWS.name : "EduMind AI 智学助手") :
+    v === "dashboard" ? "学习数据看板" : "知识库与图谱"
+  document.getElementById("topbar-sub").textContent =
+    v === "chat" ? (currentWS ? currentWS.sub : "选择工作区开始提问") :
+    v === "dashboard" ? `${pinnedCharts.length} 个固定图表` : `${WS.length} 个工作区数据源`
+  window.closeSidebar()
+  if (v === "dashboard") renderDashboard()
+  if (v === "sources") renderSources()
+}
+
+/* ── workspace select ──────────────────────────────────── */
+window.selectWS = (id) => {
+  currentWS = WS.find(w => w.id === id)
+  renderWsList()
+  updateChatHeader()
+  renderHints()
+  renderWelcomeSuggestions()
+  renderSources()
+  document.getElementById("send-btn").disabled = false
+  document.getElementById("clear-btn").style.display = ""; document.getElementById("report-btn").style.display = ""
+  document.getElementById("hist-toggle-btn").style.display = ""
+  document.getElementById("chat-tabs").style.display = ""
+  window.closeSidebar()
+  probeModel()
+}
+
+/* ── prompt hint helper ────────────────────────────────── */
+window.useHint = (txt) => { document.getElementById("q").value = txt; window.sendMsg() }
+
+/* ── 经营简报(主动式):一键生成本工作区的经营简报,数字全部经治理层查得 ── */
+const BRIEF_PROMPT = `生成【经营简报】。用 query_metric 按 grain=month 查最近几个月本工作区最重要的 2-3 个经营指标(营收类、毛利率/合格率类、客单价/满座率/动销率类里有哪个用哪个),对比最近两个【完整】月(忽略数据不完整的当月);再按主要业务维度(门店/部门/品类/产线等)查最近完整月,找出表现最好与最差的。然后用中文写一份 30 秒读完的简报:
+**总览**:一句话(最近完整月核心指标 + 环比上月 +/-%)。
+**关键数字**:一个小表(本月 / 上月 / 环比)。
+**值得关注**(2-3 条):最好/最差 + 一句可执行建议。
+最后附一个 \`\`\`chart 柱状图对比各维度。只用查到的数,环比用两月数字自算,不编造;数据不足就说明。`
+window.genBriefing = () => window.useHint(BRIEF_PROMPT)
+
+/* ── sidebar workspace list ────────────────────────────── */
+function renderWsList() {
+  const el = document.getElementById("ws-list")
+  el.innerHTML = WS.map(w => `
+    <div class="ws-item${currentWS?.id === w.id ? " active" : ""}" onclick="window.selectWS('${w.id}')">
+      <span>${w.icon}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.name}</span>
+      <span class="ws-port">${w.port}</span>
+    </div>`).join("")
+  document.getElementById("src-count").textContent = WS.length
+}
+
+function updateChatHeader() {
+  if (!currentWS) return
+  document.getElementById("topbar-title").textContent = currentWS.icon + " " + currentWS.name
+  document.getElementById("topbar-sub").textContent = currentWS.sub + " · " + currentWS.role
+}
+
+/* ── model probe ────────────────────────────────────────── */
+async function probeModel() {
+  if (!currentWS) return
+  try {
+    const r = await fetch(getApiUrl(currentWS.port, "/model"))
+    if (r.ok) { const d = await r.json(); document.getElementById("model-label").textContent = d.model || "gpt-5.6-terra" }
+  } catch { document.getElementById("model-label").textContent = "gpt-5.6-terra" }
+}
+
+/* ── welcome suggestions ───────────────────────────────── */
+function renderWelcomeSuggestions() {
+  if (!currentWS) { document.getElementById("wlc-suggestions").innerHTML = ""; return }
+  document.getElementById("wlc-suggestions").innerHTML =
+    currentWS.hints.map(h => `
+      <div class="wlc-card" onclick="window.useHint('${h.replace(/'/g,"\\'")}')">
+        <div class="wlc-card-q">${h}</div>
+        <div class="wlc-card-tag">${currentWS.icon} ${currentWS.name}</div>
+      </div>`).join("")
+}
+
+/* ── hints bar ─────────────────────────────────────────── */
+function renderHints() {
+  if (!currentWS) { document.getElementById("hint-chips").innerHTML = ""; return }
+  document.getElementById("hint-chips").innerHTML =
+    currentWS.hints.slice(0,3).map(h =>
+      `<div class="hint-chip" onclick="window.useHint('${h.replace(/'/g,"\\'")}')">💡 ${h}</div>`).join("")
+}
+
+/* ── history ────────────────────────────────────────────── */
+window.toggleHist = () => {
+  histOpen = !histOpen
+  document.getElementById("hist-panel").classList.toggle("open", histOpen)
+  renderHistList()
+}
+function renderHistList() {
+  const el = document.getElementById("hist-list")
+  const matching = sessions.filter(s => s.wsId === currentWS?.id).reverse()
+  if (!matching.length) { el.innerHTML = `<div style="padding:12px 14px;font-size:12px;color:var(--fg3)">暂无历史</div>`; return }
+  el.innerHTML = matching.map(s =>
+    `<div class="hist-item${s.id === activeSession?.id ? " active" : ""}" onclick="window.loadSession('${s.id}')">
+      <div class="hi-title">${s.firstQ || "(空)"}</div>
+      <div class="hi-meta">${s.wsName} · ${fmtTime(s.ts)}</div>
+    </div>`).join("")
+}
+window.loadSession = (id) => {
+  const s = sessions.find(x => x.id === id)
+  if (!s) return
+  const ws = WS.find(w => w.id === s.wsId)
+  if (ws) {
+    currentWS = ws; renderWsList(); updateChatHeader(); renderHints()
+    document.getElementById("send-btn").disabled = false
+    probeModel()
+  }
+  activeSession = s
+  const msgEl = document.getElementById("messages")
+  msgEl.innerHTML = ""
+  const welcome = document.getElementById("welcome")
+  if (welcome) welcome.style.display = "none"
+  if (s.messages) {
+    for (const m of s.messages) appendBubble(m.role, m.html, true)
+  }
+  histOpen = false
+  document.getElementById("hist-panel").classList.remove("open")
+  renderHistList()
+}
+
+/* ── chat ───────────────────────────────────────────────── */
+let renderer = null
+
+window.newSession = () => {
+  window.clearChat()
+  activeSession = null
+}
+
+window.clearChat = () => {
+  const msgEl = document.getElementById("messages")
+  msgEl.innerHTML = ""
+  const w = document.createElement("div"); w.id = "welcome"
+  w.innerHTML =
+    `<div class="wlc-icon">DL</div>
+     <div class="wlc-title">EduMind AI · 智学与经营智能 Agent</div>
+     <div class="wlc-sub">语义治理精确查数 · 不编造 · 不越权 · 全过程 Hash 链审计</div>
+     <div class="wlc-cards" id="wlc-suggestions"></div>`
+  w.className = "view active"
+  w.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;gap:14px"
+  msgEl.appendChild(w)
+  renderWelcomeSuggestions()
+  setStatus("就绪","")
+  document.getElementById("sbar-tokens").style.display = "none"
+  document.getElementById("sbar-timing").style.display = "none"
+  activeSession = null
+}
+
+function appendBubble(role, contentHtml) {
+  const msgEl = document.getElementById("messages")
+  const w = document.getElementById("welcome")
+  if (w) w.style.display = "none"
+
+  const wrap = document.createElement("div"); wrap.className = "msg-wrap"
+  const row = document.createElement("div"); row.className = `msg-row ${role}-row`
+  const av = document.createElement("div"); av.className = `avatar ${role}`
+  av.textContent = role === "ai" ? "DL" : "你"
+  const bbl = document.createElement("div"); bbl.className = "bubble"
+  bbl.innerHTML = contentHtml
+  row.appendChild(av); row.appendChild(bbl)
+  wrap.appendChild(row); msgEl.appendChild(wrap)
+  msgEl.scrollTop = msgEl.scrollHeight
+  return bbl
+}
+
+window.sendMsg = async () => {
+  if (!currentWS) return
+  const q = document.getElementById("q")
+  const msg = q.value.trim(); if (!msg) return
+  if (activeReq) { activeReq.abort(); activeReq = null }
+
+  q.value = ""; q.style.height = ""
+
+  appendBubble("user", escHtml(msg))
+
+  const aiBubble = appendBubble("ai", "")
+  renderer = createRenderer(aiBubble, { plugins:[chart({interactive:true}), katex()] })
+
+  t0 = performance.now()
+  setStatus("思考中…","thinking")
+  document.getElementById("send-btn").disabled = true
+  document.getElementById("sbar-tokens").style.display = ""
+  document.getElementById("sbar-timing").style.display = ""
+
+  sessionN++
+  const sessId = `${currentWS.id}-${Date.now()}`
+  if (!activeSession) {
+    activeSession = { id:sessId, wsId:currentWS.id, wsName:currentWS.name, ts:Date.now(), firstQ:msg, messages:[] }
+    sessions.push(activeSession)
+  }
+  activeSession.messages.push({ role:"user", html:escHtml(msg) })
+
+  const ctrl = new AbortController()
+  activeReq = ctrl
+
+  let answer = "", ntok = 0, chartsRendered = 0
+  const chartCount = () => (answer.match(/```chart[\s\S]*?```/g)||[]).length
+
+  try {
+    const res = await fetch(getApiUrl(currentWS.port, "/chat/stream"), {
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer boss"},
+      body:JSON.stringify({ session_id:`web-${currentWS.id}-${sessionN}`, message:msg }),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const reader = res.body.getReader(), dec = new TextDecoder()
+    let buf = ""
+    for (;;) {
+      const {done, value} = await reader.read()
+      if (done) break
+      buf += dec.decode(value, {stream:true})
+      let nl
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1)
+        if (!line.startsWith("data:")) continue
+        const payload = line.slice(5).trim(); if (!payload) continue
+        let frame; try { frame = JSON.parse(payload) } catch { continue }
+        if (frame.type === "step") {
+          const ms = Math.round(performance.now()-t0)
+          setStatus(`⋯ ${frame.label}`,"thinking")
+          let stepEl = aiBubble.querySelector(".step-row")
+          if (!stepEl) { stepEl = document.createElement("div"); stepEl.className = "step-row"; aiBubble.prepend(stepEl) }
+          stepEl.innerHTML = `<div class="step-spinner"></div><span>${frame.label}</span><span style="margin-left:auto;color:var(--fg3)">${(ms/1000).toFixed(1)}s</span>`
+        } else if (frame.type === "token") {
+          aiBubble.querySelector(".step-row")?.remove()
+          answer += frame.text; ntok++
+          document.getElementById("sbar-token-val").textContent = `${ntok}t`
+          document.getElementById("sbar-time-val").textContent = `${((performance.now()-t0)/1000).toFixed(1)}s`
+          const n = chartCount()
+          if (n > chartsRendered) {
+            chartsRendered = n; renderer.reset(); renderer.push(answer)
+            addPinButtons(aiBubble);
+          } else { renderer.push(frame.text) }
+        } else if (frame.type === "done") {
+          aiBubble.querySelector(".step-row")?.remove()
+          const finalAns = frame.answer ?? answer
+          const finalN = (finalAns.match(/```chart[\s\S]*?```/g)||[]).length
+          if (finalN > chartsRendered || (finalN===0 && chartsRendered===0)) {
+            renderer.reset(); renderer.push(finalAns)
+          }
+          answer = finalAns
+          addPinButtons(aiBubble);
+          const kpiHtml = extractKpiCards(finalAns || answer || "");
+          if (kpiHtml && !aiBubble.querySelector(".kpi-banner")) {
+            aiBubble.insertAdjacentHTML("afterbegin", kpiHtml);
+          }
+          const ms = Math.round(performance.now()-t0)
+          setStatus("完成","ok")
+          document.getElementById("sbar-token-val").textContent = `${ntok}t`
+          document.getElementById("sbar-time-val").textContent = `${ms}ms`
+          document.getElementById("sbar-audit").innerHTML =
+            `<span style="color:var(--fg3)">审计 req=${frame.request_id ?? "?"}</span>`
+          activeSession.messages.push({ role:"ai", html:aiBubble.innerHTML })
+          saveSessions()
+          renderHistList()
+        }
+      }
+    }
+  } catch(e) {
+    if (e.name === "AbortError") { setStatus("已中止",""); return }
+    aiBubble.innerHTML = `<span style="color:var(--err)">✖ 出错：${e.message}（bi-server 是否已启动？端口 ${currentWS.port}）</span>`
+    setStatus("出错","err")
+  } finally {
+    document.getElementById("send-btn").disabled = false
+    activeReq = null
+  }
+  const msgEl = document.getElementById("messages")
+  msgEl.scrollTop = msgEl.scrollHeight
+}
+
+
+function addPinButtons(bubble) {
+  if (bubble.querySelector("table") && !bubble.querySelector(".export-csv-btn")) {
+    const expBtn = document.createElement("button");
+    expBtn.className = "pin-btn export-csv-btn";
+    expBtn.style.cssText = "margin-top:6px;margin-bottom:6px;display:inline-flex;align-items:center;gap:4px;";
+    expBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 导出表格 CSV`;
+    expBtn.onclick = () => window.exportTableCSV(expBtn);
+    bubble.appendChild(expBtn);
+  }
+
+  bubble.querySelectorAll(".chart-card").forEach((cc, i) => {
+    if (cc.querySelector(".pin-btn")) return
+    const tb = document.createElement("div"); tb.className = "chart-card-toolbar"
+    const lbl = document.createElement("span"); lbl.className = "chart-card-label"
+    lbl.textContent = `图表 ${i+1} · ${currentWS?.name ?? ""}`
+    const btn = document.createElement("button"); btn.className = "pin-btn"
+    const chartId = `pin-${Date.now()}-${i}`
+    btn.dataset.chartId = chartId
+    btn.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> 固定`
+    btn.onclick = () => {
+      const isPin = btn.classList.toggle("pinned")
+      btn.innerHTML = isPin
+        ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> 已固定`
+        : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> 固定`
+      if (isPin) {
+        const canvas = cc.querySelector("canvas")
+        const imgData = canvas ? canvas.toDataURL() : null
+        pinnedCharts.push({ id:chartId, label:lbl.textContent, imgData, wsId:currentWS.id })
+        document.getElementById("pin-count").textContent = pinnedCharts.length
+        savePinned()
+      } else {
+        pinnedCharts = pinnedCharts.filter(p => p.id !== chartId)
+        document.getElementById("pin-count").textContent = pinnedCharts.length
+        savePinned()
+      }
+    }
+    tb.appendChild(lbl); tb.appendChild(btn)
+    cc.prepend(tb)
+  })
+}
+
+/* ── dashboard ──────────────────────────────────────────── */
+function renderDashboard() {
+  const grid = document.getElementById("dash-grid")
+  document.getElementById("topbar-sub").textContent = `${pinnedCharts.length} 个固定图表`
+  if (!pinnedCharts.length) {
+    grid.innerHTML = `<div class="dash-empty"><div class="dash-empty-icon">📊</div><div class="dash-empty-text">暂无固定图表。在 AI 对话中点击图表右上角的「固定」按钮。</div></div>`
+    return
+  }
+  grid.innerHTML = pinnedCharts.map(p => `
+    <div class="dash-card">
+      <div class="dash-card-header">
+        <span class="dash-card-title">${p.label}</span>
+        <span class="dash-card-remove" onclick="window.removePin('${p.id}')" title="移除">✕</span>
+      </div>
+      ${p.imgData ? `<img src="${p.imgData}" style="width:100%;display:block"/>` : `<div style="padding:20px;color:var(--fg3);font-size:12px">图表数据不可用</div>`}
+    </div>`).join("")
+}
+window.removePin = (id) => {
+  pinnedCharts = pinnedCharts.filter(p => p.id !== id)
+  document.getElementById("pin-count").textContent = pinnedCharts.length
+  savePinned(); renderDashboard()
+}
+
+/* ── sources view ───────────────────────────────────────── */
+async function renderSources() {
+  const grid = document.getElementById("src-grid")
+  grid.innerHTML = WS.map(w => `
+    <div class="src-card" id="sc-${w.id}">
+      <div class="src-card-head">
+        <span style="font-size:18px">${w.icon}</span>
+        <div style="flex:1">
+          <div class="src-card-name">${w.name}</div>
+          <div style="font-size:11px;color:var(--fg3)">${w.sub}</div>
+        </div>
+        <div class="src-status-dot warn" id="sd-${w.id}"></div>
+      </div>
+      <div class="src-card-meta">
+        <span>端口 :${w.port}</span><span>角色 ${w.role}</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-tile"><div class="mn" id="sm-${w.id}-status">探测中…</div><div class="ml">连接状态</div></div>
+        <div class="metric-tile"><div class="mn" id="sm-${w.id}-model">—</div><div class="ml">模型</div></div>
+      </div>
+    </div>`).join("")
+
+  WS.forEach(async w => {
+    try {
+      const r = await fetch(getApiUrl(w.port, "/model"), {signal: AbortSignal.timeout(2000)})
+      const dot = document.getElementById(`sd-${w.id}`)
+      const sEl = document.getElementById(`sm-${w.id}-status`)
+      const mEl = document.getElementById(`sm-${w.id}-model`)
+      if (r.ok) {
+        const d = await r.json()
+        if (dot) dot.className = "src-status-dot ok"
+        if (sEl) sEl.textContent = "🟢 在线"
+        if (mEl) mEl.textContent = (d.model || "").replace("gpt-","")
+      } else { throw new Error() }
+    } catch {
+      const dot = document.getElementById(`sd-${w.id}`)
+      if (dot) dot.className = "src-status-dot err"
+      const sEl = document.getElementById(`sm-${w.id}-status`)
+      if (sEl) sEl.textContent = "⚠️ 未连接"
+    }
+  })
+}
+
+/* ── persistence ────────────────────────────────────────── */
+function savePinned() { localStorage.setItem("datalens_pinned", JSON.stringify(pinnedCharts)) }
+function saveSessions() {
+  const trimmed = sessions.slice(-40)
+  localStorage.setItem("datalens_sessions", JSON.stringify(trimmed))
+}
+
+
+window.exportTableCSV = (btn) => {
+  const bubble = btn.closest(".bubble");
+  const table = bubble ? bubble.querySelector("table") : null;
+  if (!table) return;
+  let csv = [];
+  for (const row of table.rows) {
+    let cols = [];
+    for (const cell of row.cells) cols.push(`"${cell.innerText.replace(/"/g, '""')}"`);
+    csv.push(cols.join(","));
+  }
+  const blob = new Blob(["\ufeff" + csv.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `EduMind_Export_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+
+function extractKpiCards(markdownText) {
+  // Parse table rows to extract top metrics
+  const lines = markdownText.split('\n');
+  const tableLines = lines.filter(l => l.trim().startsWith('|'));
+  if (tableLines.length < 3) return '';
+  
+  const headers = tableLines[0].split('|').map(s => s.trim()).filter(Boolean);
+  const rows = tableLines.slice(2).map(l => l.split('|').map(s => s.trim()).filter(Boolean));
+  if (!rows.length) return '';
+
+  // Find numeric columns
+  let kpis = [];
+  headers.forEach((h, colIdx) => {
+    if (h.includes('营收') || h.includes('销售额') || h.includes('GMV') || h.includes('毛利率') || h.includes('销量') || h.includes('客单价') || h.includes('评分')) {
+      let sum = 0, count = 0, isPercent = h.includes('率');
+      rows.forEach(r => {
+        if (r[colIdx]) {
+          let num = parseFloat(r[colIdx].replace(/[^0-9.-]/g, ''));
+          if (!isNaN(num)) { sum += num; count++; }
+        }
+      });
+      if (count > 0) {
+        let valStr = isPercent ? (sum / count).toFixed(2) + '%' : (sum >= 10000 ? '¥' + (sum/10000).toFixed(1) + '万' : sum.toLocaleString());
+        kpis.push({ label: h, val: valStr, count });
+      }
+    }
+  });
+
+  if (!kpis.length) return '';
+  return `<div class="kpi-banner">` + kpis.slice(0, 4).map(k => `
+    <div class="kpi-card">
+      <div class="kpi-val">${k.val}</div>
+      <div class="kpi-lbl">${k.label} (汇总/均值)</div>
+    </div>`).join('') + `</div>`;
+}
+
+
+window.exportFullReport = () => {
+  const msgs = document.querySelectorAll(".bubble");
+  if (!msgs.length) return;
+  let reportText = `# EduMind AI 分析报告\n生成时间: ${new Date().toLocaleString('zh-CN')}\n工作区: ${currentWS?.name || '综合分析'}\n\n---\n\n`;
+  document.querySelectorAll(".msg-wrap").forEach(wrap => {
+    const isUser = wrap.querySelector(".avatar.user");
+    const bubble = wrap.querySelector(".bubble");
+    if (isUser) {
+      reportText += `### 👤 提问：${bubble.innerText.trim()}\n\n`;
+    } else {
+      reportText += `#### 🤖 AI 治理分析与数据：\n${bubble.innerText.trim()}\n\n---\n\n`;
+    }
+  });
+  const blob = new Blob([reportText], { type: "text/markdown;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `EduMind_Report_${currentWS?.id}_${Date.now()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+/* ── helpers ────────────────────────────────────────────── */
+function setStatus(text, cls) {
+  const el = document.getElementById("sbar-status")
+  if (el) { el.textContent = text; el.className = cls }
+}
+function escHtml(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") }
+function fmtTime(ts) {
+  const d = new Date(ts), now = Date.now(), diff = now-ts
+  if (diff < 60000) return "刚刚"
+  if (diff < 3600000) return Math.floor(diff/60000)+"分钟前"
+  if (diff < 86400000) return Math.floor(diff/3600000)+"小时前"
+  return d.toLocaleDateString("zh-CN",{month:"numeric",day:"numeric"})
+}
+
+/* ── textarea auto-height ───────────────────────────────── */
+const qEl = document.getElementById("q")
+qEl.addEventListener("input", () => {
+  qEl.style.height = "auto"
+  qEl.style.height = Math.min(qEl.scrollHeight, 120)+"px"
+})
+qEl.addEventListener("keydown", e => {
+  if (e.key==="Enter" && !e.shiftKey && (e.ctrlKey||e.metaKey)) { e.preventDefault(); window.sendMsg() }
+})
+
+/* ── init ───────────────────────────────────────────────── */
+renderWsList()
+renderWelcomeSuggestions()
+document.getElementById("pin-count").textContent = pinnedCharts.length
+
+const lastWsId = sessions.length ? sessions[sessions.length-1].wsId : "ecommerce"
+window.selectWS(lastWsId)
+renderHistList()
+</script>
+</body>
+</html>

@@ -3,6 +3,48 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.29
+
+### Added
+
+- **`harness-rs-serve`: `GET /model`, CORS support, and tool-progress chunks.**
+  `ChatService::model_name()` is surfaced at `GET /model` so a UI can show which
+  model is live; `CorsConfig` + `router_with_cors` let a browser page served from
+  another origin call `/chat` and read the `/chat/stream` SSE without exposing
+  `tower-http` to callers; `ChatChunk::Step { label }` is emitted around each
+  governed tool call so a client can show progress instead of a frozen spinner
+  while the answer-token stream is silent during the tool loop.
+- **`harness-rs-serve`: `ChatChunk::Error { message }`.** A stream failure now
+  arrives as JSON on the same `data:` path as every other frame (still under
+  `event: error` for older clients). Previously the body was a bare string, so a
+  client parsing frames as JSON dropped the reason silently and the stream simply
+  ended — indistinguishable from success, and the real cause never reached the UI.
+- **`harness-rs-models`: multi-delta streaming decode.** One SSE chunk can decode
+  to several `ModelDelta`s (e.g. `ToolCallStart` + `ToolCallArgs`); the driver now
+  queues the extras instead of dropping them.
+
+### Fixed
+
+- **`harness-rs-models`: transport errors name their cause.** `reqwest::Error`'s
+  `Display` is terse — an invalid base URL or a header value carrying a stray
+  control character both surfaced as a bare `builder error`, which tells an
+  operator nothing. Failures now include the target URL and the full source
+  chain. The API key lives in a header, never in the URL, so nothing secret is
+  added.
+- **`harness-rs-mcp-client`: prune undeclared arguments for strict MCP servers.**
+  Some gateways inject a sentinel key (Anthropic-via-OpenAI emits `{"_": true, …}`)
+  alongside the real params, and a server whose input schema is closed
+  (`additionalProperties: false`) then rejects the whole call. Undeclared
+  top-level keys are dropped only for closed schemas; free-form tools pass
+  through untouched.
+
+### Changed
+
+- **`verticals/` → `projects/datainside/`.** The DataInside vertical agents moved
+  under `projects/`, joined by new ones (advisor, strategy-advisor, pharmacy,
+  hotel-revenue, dental-clinic, autorepair-ops, ecommerce, edumind-tutor) and the
+  `boss-briefing` project. Workspace members and docs updated accordingly.
+
 ## 0.0.28
 
 ### Fixed

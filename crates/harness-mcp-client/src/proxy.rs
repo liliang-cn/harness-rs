@@ -38,6 +38,37 @@ pub(crate) fn to_arguments(
     }
 }
 
+/// Drop top-level argument keys the tool's input schema doesn't declare — but
+/// ONLY when the schema is closed (`additionalProperties: false`). Some model
+/// gateways inject a sentinel key (e.g. Anthropic-via-OpenAI emits `{"_":true,
+/// ...}`) alongside the real params; a strict MCP server (DataIntelligence)
+/// then rejects the whole call for "unexpected additional properties". Pruning
+/// the undeclared keys makes those models work without loosening the server.
+/// Free-form tools (`additionalProperties` absent or `true`) pass through
+/// untouched. Returns the (possibly) filtered value and the names it removed.
+pub(crate) fn strip_undeclared(
+    schema_input: &serde_json::Value,
+    args: serde_json::Value,
+) -> (serde_json::Value, Vec<String>) {
+    let serde_json::Value::Object(mut map) = args else {
+        return (args, Vec::new());
+    };
+    let closed = schema_input.get("additionalProperties") == Some(&serde_json::Value::Bool(false));
+    let props = schema_input.get("properties").and_then(|p| p.as_object());
+    let (Some(props), true) = (props, closed) else {
+        return (serde_json::Value::Object(map), Vec::new());
+    };
+    let removed: Vec<String> = map
+        .keys()
+        .filter(|k| !props.contains_key(*k))
+        .cloned()
+        .collect();
+    for k in &removed {
+        map.remove(k);
+    }
+    (serde_json::Value::Object(map), removed)
+}
+
 fn kind_of(v: &serde_json::Value) -> &'static str {
     match v {
         serde_json::Value::Null => "null",
@@ -148,6 +179,15 @@ impl Tool for McpProxyTool {
         args: serde_json::Value,
         _world: &mut World,
     ) -> Result<ToolResult, ToolError> {
+        let (args, removed) = strip_undeclared(&self.schema.input, args);
+        if !removed.is_empty() {
+            tracing::debug!(
+                target: "harness.mcp",
+                tool = %self.schema.name,
+                ?removed,
+                "dropped undeclared tool-arg keys (closed schema)"
+            );
+        }
         let mut params = CallToolRequestParams::new(self.schema.name.clone());
         params.arguments = to_arguments(&self.schema.name, &args)?;
 
@@ -222,6 +262,31 @@ mod tests {
     fn to_arguments_null_returns_none() {
         let result = to_arguments("my_tool", &serde_json::Value::Null).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn strip_undeclared_removes_sentinel_on_closed_schema() {
+        // A closed schema (additionalProperties:false) declaring metrics/group_by.
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"metrics": {}, "group_by": {}}
+        });
+        // Gateway-injected `"_":true` sentinel alongside valid params.
+        let args = json!({"_": true, "metrics": ["revenue"], "group_by": ["cat"]});
+        let (out, removed) = strip_undeclared(&schema, args);
+        assert_eq!(removed, vec!["_".to_string()]);
+        assert_eq!(out, json!({"metrics": ["revenue"], "group_by": ["cat"]}));
+    }
+
+    #[test]
+    fn strip_undeclared_passthrough_when_open_schema() {
+        // No additionalProperties:false → free-form tool, nothing pruned.
+        let schema = json!({"type": "object", "properties": {"a": {}}});
+        let args = json!({"a": 1, "extra": 2});
+        let (out, removed) = strip_undeclared(&schema, args.clone());
+        assert!(removed.is_empty());
+        assert_eq!(out, args);
     }
 
     #[test]

@@ -33,6 +33,8 @@ futures         = { workspace = true }
 
 # Optional HTTP transport.
 axum = { version = "0.8", optional = true }
+# Optional CORS layer for the HTTP transport (feature `cors`).
+tower-http = { version = "0.6", features = ["cors"], optional = true }
 # Optional gRPC transport.
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
@@ -45,6 +47,9 @@ tonic-build = { version = "0.12", optional = true }
 default = []
 # Expose `http::router()` — an axum Router with /chat, /chat/stream (SSE), /healthz.
 http = ["dep:axum"]
+# Expose `http::router_with_cors()` + `CorsConfig` so a browser/aigui page served
+# from another origin can call /chat and read the /chat/stream SSE.
+cors = ["http", "dep:tower-http"]
 # Expose `grpc::service()` — a tonic Chat service (unary Say + server-streaming
 # SayStream). Requires `protoc` at build time.
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
