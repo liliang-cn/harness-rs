@@ -65,6 +65,9 @@ fn to_status(e: ServeError) -> Status {
 fn to_pb_chunk(chunk: SvcChunk) -> ChatChunk {
     let kind = match chunk {
         SvcChunk::Token { text } => pb::chat_chunk::Kind::Token(text),
+        // No dedicated proto field for progress; surface it as a token so the
+        // gRPC stream stays exhaustive without a schema change.
+        SvcChunk::Step { label } => pb::chat_chunk::Kind::Token(format!("[{label}]")),
         SvcChunk::Done {
             answer,
             actor,

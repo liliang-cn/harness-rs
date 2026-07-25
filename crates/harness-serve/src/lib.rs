@@ -46,6 +46,8 @@ pub mod service;
 pub mod session;
 
 pub use auth::{Actor, AuthError, Authenticator, OpenAuth, StaticTokenAuth};
+#[cfg(feature = "cors")]
+pub use http::{CorsConfig, router_with_cors};
 pub use service::{ChatChunk, ChatReply, ChatService, ServeError};
 pub use session::{InMemorySessions, SessionStore};
 
@@ -63,6 +65,18 @@ mod tests {
             Arc::new(InMemorySessions::new()),
             std::env::temp_dir().join("serve-test"),
         )
+    }
+
+    #[test]
+    fn stream_errors_serialize_as_json_chunks() {
+        // A client parses every SSE `data:` as a ChatChunk, so a failure has to be a
+        // chunk too — a bare string body is silently dropped and the stream just ends.
+        let json = serde_json::to_value(ChatChunk::Error {
+            message: "agent error: model error".into(),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["message"], "agent error: model error");
     }
 
     #[tokio::test]

@@ -1,0 +1,120 @@
+# Semantic model for a forging company (2 factories, 15 lines) — full business:
+# production, quality, sales, R&D cost, and scheduling. Multiple grains, so
+# defect_rate and capacity_utilization exercise the compiler's chasm-safe path.
+
+entities:
+  - {name: factory,     table: factories,       primary_key: factory_id}
+  - {name: line,        table: lines,           primary_key: line_id}
+  - {name: part,        table: parts,           primary_key: part_id}
+  - {name: run,         table: production_runs, primary_key: run_id}
+  - {name: inspection,  table: inspections,     primary_key: inspection_id}
+  - {name: defect,      table: defects,         primary_key: defect_id}
+  - {name: customer,    table: customers,       primary_key: customer_id}
+  - {name: sales_order, table: sales_orders,    primary_key: order_id}
+  - {name: rd_project,  table: rd_projects,     primary_key: project_id}
+  - {name: rd_cost,     table: rd_costs,        primary_key: cost_id}
+  - {name: shift_plan,  table: shift_plans,     primary_key: plan_id}
+
+joins:
+  - {from: run,         to: line,       from_key: line_id,       to_key: line_id,       cardinality: many_to_one}
+  - {from: run,         to: part,       from_key: part_id,       to_key: part_id,       cardinality: many_to_one}
+  - {from: line,        to: factory,    from_key: factory_id,    to_key: factory_id,    cardinality: many_to_one}
+  - {from: inspection,  to: run,        from_key: run_id,        to_key: run_id,        cardinality: many_to_one}
+  - {from: defect,      to: inspection, from_key: inspection_id, to_key: inspection_id, cardinality: many_to_one}
+  - {from: sales_order, to: customer,   from_key: customer_id,   to_key: customer_id,   cardinality: many_to_one}
+  - {from: sales_order, to: part,       from_key: part_id,       to_key: part_id,       cardinality: many_to_one}
+  - {from: rd_cost,     to: rd_project, from_key: project_id,    to_key: project_id,    cardinality: many_to_one}
+  - {from: rd_project,  to: part,       from_key: part_id,       to_key: part_id,       cardinality: many_to_one}
+  - {from: shift_plan,  to: line,       from_key: line_id,       to_key: line_id,       cardinality: many_to_one}
+
+dimensions:
+  - {name: factory_name,   entity: factory,    column: name,           type: categorical, synonyms: [工厂, 厂]}   # RLS key
+  - {name: factory_region, entity: factory,    column: region,         type: categorical, synonyms: [厂区区域]}
+  - {name: line_name,      entity: line,       column: name,           type: categorical, synonyms: [产线, 生产线]}
+  - {name: part_name,      entity: part,       column: name,           type: categorical, synonyms: [零件, 锻件]}
+  - {name: material_grade, entity: part,       column: material_grade, type: categorical, synonyms: [材质, 材料牌号]}
+  - {name: shift,          entity: run,        column: shift,          type: categorical, synonyms: [班次]}
+  - {name: defect_type,    entity: defect,     column: defect_type,    type: categorical, synonyms: [缺陷类型, 不良类型]}
+  - {name: run_time,       entity: run,        column: run_date,       type: time}
+  - {name: customer_name,  entity: customer,   column: name,           type: categorical, synonyms: [客户, 主机厂]}
+  - {name: customer_tier,  entity: customer,   column: tier,           type: categorical, synonyms: [客户等级, 等级]}
+  - {name: order_time,     entity: sales_order, column: order_date,    type: time}
+  - {name: rd_category,    entity: rd_cost,    column: category,       type: categorical, synonyms: [费用类别, 成本类别]}
+  - {name: project_name,   entity: rd_project, column: name,           type: categorical}
+  - {name: rd_status,      entity: rd_project, column: status,         type: categorical}
+  - {name: plan_shift,     entity: shift_plan, column: shift,          type: categorical}
+
+metrics:
+  # --- production / quality ---
+  - {name: output_units,     entity: run, agg: sum, expr: "output_units"}
+  - {name: good_units,       entity: run, agg: sum, expr: "good_units"}
+  - {name: scrap_units,      entity: run, agg: sum, expr: "(output_units - good_units)"}
+  - {name: downtime_minutes, entity: run, agg: sum, expr: "downtime_min"}
+  - {name: tonnage,          entity: run, agg: sum, expr: "tonnes"}
+  - {name: inspected_units,  entity: inspection, agg: sum,   expr: "sampled"}
+  - {name: defects_found,    entity: defect,     agg: count, expr: "defect_id"}
+  - name: yield_rate
+    description: "Good units as a share of output."
+    synonyms: [良率, 合格率]
+    formula: "good_units::numeric / nullif(output_units, 0)"
+    additivity: non_additive
+  - name: scrap_rate
+    description: "Scrap as a share of output."
+    synonyms: [废品率, 报废率]
+    formula: "scrap_units::numeric / nullif(output_units, 0)"
+    additivity: non_additive
+  - name: defect_rate
+    description: "Defects per inspected unit (defects grain ÷ inspection grain)."
+    synonyms: [缺陷率, 探伤缺陷率]
+    formula: "defects_found::numeric / nullif(inspected_units, 0)"
+    additivity: non_additive
+
+  # --- sales ---
+  - {name: sales_qty,   entity: sales_order, agg: sum,   expr: "qty"}
+  - {name: order_count, entity: sales_order, agg: count, expr: "order_id"}
+  - {name: on_time_shipments, entity: sales_order, agg: sum, expr: "(shipped_date <= promised_date)::int"}
+  - name: sales_revenue
+    description: "Total order amount (RMB)."
+    synonyms: [销售额, 营收, 订单金额]
+    entity: sales_order
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+  - name: avg_order_value
+    description: "Average revenue per order. A ratio."
+    synonyms: [客单价, 平均订单额]
+    formula: "sales_revenue::numeric / nullif(order_count, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: on_time_rate
+    description: "Share of orders shipped on or before the promised date."
+    synonyms: [准时交付率, 及时交货率]
+    formula: "on_time_shipments::numeric / nullif(order_count, 0)"
+    additivity: non_additive
+
+  # --- R&D cost ---
+  - name: rd_spend
+    description: "Total R&D cost (labor + material + trial + equipment)."
+    synonyms: [研发成本, 研发投入, 研发费用]
+    entity: rd_cost
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+
+  # --- scheduling / capacity ---
+  - {name: planned_output, entity: shift_plan, agg: sum, expr: "planned_output"}
+  - {name: labor_hours,    entity: shift_plan, agg: sum, expr: "planned_hours"}
+  - {name: man_shifts,     entity: shift_plan, agg: sum, expr: "headcount"}
+  - name: capacity_utilization
+    description: "Actual output vs planned output (production grain ÷ plan grain — chasm-safe)."
+    synonyms: [产能利用率, 达成率]
+    formula: "output_units::numeric / nullif(planned_output, 0)"
+    additivity: non_additive
+
+  # --- time intelligence ---
+  - name: output_ytd
+    description: "Year-to-date output units."
+    synonyms: [年累计产量]
+    of: output_units
+    window: cumulative
+    reset: year

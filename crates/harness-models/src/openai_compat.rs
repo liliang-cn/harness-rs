@@ -45,6 +45,24 @@ fn extra_body() -> Option<serde_json::Map<String, serde_json::Value>> {
 }
 
 /// Serialize a request and fold in `extra_body()` (extra keys win).
+/// Render a request failure with its cause chain and target URL.
+///
+/// `reqwest::Error`'s own `Display` is terse — an invalid base URL or a header value
+/// carrying a stray control character both surface as bare `builder error`, which
+/// tells an operator nothing. The chain names the actual cause, and the URL shows
+/// which endpoint was configured. The API key lives in a header, never in the URL,
+/// so nothing secret is added here.
+fn transport_detail(url: &str, err: &reqwest::Error) -> String {
+    use std::error::Error;
+    let mut detail = format!("request to {url} failed: {err}");
+    let mut source = err.source();
+    while let Some(cause) = source {
+        detail.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    detail
+}
+
 fn request_body<T: Serialize>(req: &T) -> serde_json::Value {
     let mut v = serde_json::to_value(req).unwrap_or_else(|_| serde_json::json!({}));
     if let (Some(obj), Some(extra)) = (v.as_object_mut(), extra_body()) {
@@ -421,7 +439,7 @@ impl Model for OpenAiCompat {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
+                .map_err(|e| crate::retry::Retryable::transient(transport_detail(&url, &e)))?;
             let status = resp.status();
             let bytes = resp
                 .bytes()
@@ -570,7 +588,7 @@ impl Model for OpenAiCompat {
             .json(&request_body(&req))
             .send()
             .await
-            .map_err(|e| ModelError::Transport(format!("send: {e}")))?;
+            .map_err(|e| ModelError::Transport(transport_detail(&url, &e)))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -599,6 +617,9 @@ where
         done: bool,
         // Partial JSON args for in-flight tool calls, keyed by call index.
         partial_tool_args: std::collections::HashMap<u32, ToolCallAccumPriv>,
+        // Extra deltas from a chunk that decoded to more than one (e.g. a
+        // single-chunk tool call → ToolCallStart + ToolCallArgs). Drained first.
+        pending: std::collections::VecDeque<ModelDelta>,
     }
 
     let init = State {
@@ -606,9 +627,13 @@ where
         buf: String::new(),
         done: false,
         partial_tool_args: std::collections::HashMap::new(),
+        pending: std::collections::VecDeque::new(),
     };
 
     unfold(init, |mut state| async move {
+        if let Some(d) = state.pending.pop_front() {
+            return Some((Ok(d), state));
+        }
         if state.done {
             return None;
         }
@@ -631,8 +656,11 @@ where
                         Ok(v) => v,
                         Err(_) => continue,
                     };
-                    if let Some(delta) = decode_delta(&v, &mut state.partial_tool_args) {
-                        return Some((Ok(delta), state));
+                    let mut deltas = decode_delta(&v, &mut state.partial_tool_args);
+                    if !deltas.is_empty() {
+                        let first = deltas.remove(0);
+                        state.pending.extend(deltas);
+                        return Some((Ok(first), state));
                     }
                     continue;
                 }
@@ -656,10 +684,13 @@ where
     })
 }
 
+/// Decode one SSE `data:` object into zero or more deltas. Returns a `Vec`
+/// (not `Option`) because a single non-incremental tool-call chunk yields both
+/// a `ToolCallStart` and a `ToolCallArgs`; the driver queues any beyond the first.
 fn decode_delta(
     v: &serde_json::Value,
     partial: &mut std::collections::HashMap<u32, ToolCallAccumPriv>,
-) -> Option<ModelDelta> {
+) -> Vec<ModelDelta> {
     use serde_json::Value;
 
     // Usage chunk comes with `choices: []`. Handle it FIRST — otherwise the
@@ -680,13 +711,19 @@ fn decode_delta(
             cached_input_tokens: cached,
         };
         if usage.input_tokens > 0 || usage.output_tokens > 0 {
-            return Some(ModelDelta::Usage(usage));
+            return vec![ModelDelta::Usage(usage)];
         }
     }
 
-    let choices = v.get("choices")?.as_array()?;
-    let first = choices.first()?;
-    let delta = first.get("delta")?;
+    let Some(choices) = v.get("choices").and_then(|c| c.as_array()) else {
+        return Vec::new();
+    };
+    let Some(first) = choices.first() else {
+        return Vec::new();
+    };
+    let Some(delta) = first.get("delta") else {
+        return Vec::new();
+    };
 
     // Reasoning / thinking-mode content. DeepSeek streams `reasoning_content`
     // alongside (and BEFORE) `content` when the model is in thinking mode.
@@ -701,17 +738,22 @@ fn decode_delta(
         .or_else(|| delta.get("reasoning"))
         && !r.is_empty()
     {
-        return Some(ModelDelta::Reasoning(r.clone()));
+        return vec![ModelDelta::Reasoning(r.clone())];
     }
 
     // Plain text content
     if let Some(Value::String(t)) = delta.get("content")
         && !t.is_empty()
     {
-        return Some(ModelDelta::Text(t.clone()));
+        return vec![ModelDelta::Text(t.clone())];
     }
-    // Tool calls
+    // Tool calls. A chunk may carry the `id`+`name` (start), an `arguments`
+    // fragment, or — for non-incremental providers like Ollama/llama.cpp — BOTH
+    // in one delta. Emit a delta for each so the arguments are never dropped
+    // (the early-return-on-start bug that left `args=""` for single-chunk tool
+    // calls). Extra deltas beyond the first are queued by the SSE driver.
     if let Some(Value::Array(tcs)) = delta.get("tool_calls") {
+        let mut out = Vec::new();
         for tc in tcs {
             let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let acc = partial.entry(idx).or_default();
@@ -719,7 +761,7 @@ fn decode_delta(
                 && acc.id.is_none()
             {
                 acc.id = Some(id.clone());
-                return Some(ModelDelta::ToolCallStart {
+                out.push(ModelDelta::ToolCallStart {
                     id: id.clone(),
                     name: tc
                         .get("function")
@@ -729,13 +771,18 @@ fn decode_delta(
                         .to_string(),
                 });
             }
-            if let Some(Value::String(args)) = tc.get("function").and_then(|f| f.get("arguments")) {
+            if let Some(Value::String(args)) = tc.get("function").and_then(|f| f.get("arguments"))
+                && !args.is_empty()
+            {
                 acc.args.push_str(args);
-                return Some(ModelDelta::ToolCallArgs {
+                out.push(ModelDelta::ToolCallArgs {
                     id: acc.id.clone().unwrap_or_default(),
                     partial_json: args.clone(),
                 });
             }
+        }
+        if !out.is_empty() {
+            return out;
         }
     }
     // Usage (final chunk on some providers)
@@ -748,7 +795,7 @@ fn decode_delta(
                 .unwrap_or(0) as u32,
             cached_input_tokens: 0,
         };
-        return Some(ModelDelta::Usage(usage));
+        return vec![ModelDelta::Usage(usage)];
     }
     // Finish reason
     if let Some(Value::String(reason)) = first.get("finish_reason") {
@@ -759,9 +806,9 @@ fn decode_delta(
             "content_filter" => StopReason::Other,
             _ => StopReason::EndTurn,
         };
-        return Some(ModelDelta::Stop(r));
+        return vec![ModelDelta::Stop(r)];
     }
-    None
+    Vec::new()
 }
 
 #[derive(Default)]
@@ -1102,6 +1149,47 @@ mod tests {
             .count();
         assert_eq!(starts, 1);
         assert_eq!(args_count, 2);
+    }
+
+    // Ollama / llama.cpp emit a tool call's id, name AND full arguments in ONE
+    // delta (non-incremental). The parser must surface both a ToolCallStart and
+    // a ToolCallArgs from that single chunk — previously the args were dropped,
+    // leaving the tool called with empty arguments.
+    #[tokio::test]
+    async fn sse_stream_parses_single_chunk_tool_call() {
+        use futures::stream::StreamExt;
+        let chunks: Vec<bytes::Bytes> = vec![
+            br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"query_metric","arguments":"{\"metrics\":[\"revenue\"]}"}}]}}]}
+"#.to_vec().into(),
+            br#"data: [DONE]
+"#.to_vec().into(),
+        ];
+        let stream = futures::stream::iter(
+            chunks
+                .into_iter()
+                .map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+        );
+        let mut deltas = Vec::new();
+        let mut s = std::pin::pin!(parse_sse_stream(stream));
+        while let Some(d) = s.next().await {
+            deltas.push(d.unwrap());
+        }
+        let starts = deltas
+            .iter()
+            .filter(|d| matches!(d, ModelDelta::ToolCallStart { .. }))
+            .count();
+        let args: String = deltas
+            .iter()
+            .filter_map(|d| match d {
+                ModelDelta::ToolCallArgs { partial_json, .. } => Some(partial_json.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, 1, "expected one ToolCallStart");
+        assert_eq!(
+            args, r#"{"metrics":["revenue"]}"#,
+            "args must not be dropped"
+        );
     }
 
     #[test]

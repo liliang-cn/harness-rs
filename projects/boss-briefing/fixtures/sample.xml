@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>AI Sample</title>
+<item><title>企业加速部署 AI Agent，客服自动化进入交付期</title><link>https://example.com/agent-delivery?utm_source=test</link><description><![CDATA[企业从概念验证转向正式采购，重点关注可靠性、权限控制与ROI。]]></description><pubDate>Thu, 23 Jul 2026 14:00:00 GMT</pubDate></item>
+<item><title>AI Agent安全漏洞引发企业数据泄露担忧</title><link>https://example.com/agent-security</link><description><![CDATA[提示注入攻击说明企业部署智能体时需要隔离敏感工具并保留审计。]]></description><pubDate>Thu, 23 Jul 2026 13:00:00 GMT</pubDate></item>
+<item><title>OpenAI发布面向开发者的新自动化能力</title><link>https://example.com/openai-automation</link><description><![CDATA[新品把多步骤工作流和外部工具调用整合进统一接口。]]></description><pubDate>Thu, 23 Jul 2026 12:00:00 GMT</pubDate></item>
+<item><title>企业加速部署 AI Agent，客服自动化进入交付期</title><link>https://example.com/agent-delivery?utm_source=duplicate</link><description>重复资讯</description><pubDate>Thu, 23 Jul 2026 14:00:00 GMT</pubDate></item>
+</channel></rss>

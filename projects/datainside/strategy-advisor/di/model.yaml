@@ -1,0 +1,64 @@
+# 华联优选连锁 · 集团经营语义模型。门店级完整经营账:销售/进货/损耗按 store×category×月,
+# 固定成本(租金/水电/税/人力)按 store×月,员工按人头快照。net_profit / 人效 跨 grain,
+# 由 DI 逐 grain CTE 编译,chasm-safe。净利/人力/税等财务口径 RBAC 授权。
+
+entities:
+  - {name: store,    table: stores,      primary_key: store_id}
+  - {name: category, table: categories,  primary_key: category_id}
+  - {name: employee, table: employees,   primary_key: emp_id}
+  - {name: sale,     table: sales,       primary_key: sale_id}
+  - {name: purchase, table: procurement, primary_key: proc_id}
+  - {name: loss,     table: shrinkage,   primary_key: loss_id}
+  - {name: overhead, table: overheads,   primary_key: oh_id}
+
+joins:
+  - {from: sale,     to: store,    from_key: store_id,    to_key: store_id,    cardinality: many_to_one}
+  - {from: sale,     to: category, from_key: category_id, to_key: category_id, cardinality: many_to_one}
+  - {from: purchase, to: store,    from_key: store_id,    to_key: store_id,    cardinality: many_to_one}
+  - {from: purchase, to: category, from_key: category_id, to_key: category_id, cardinality: many_to_one}
+  - {from: loss,     to: store,    from_key: store_id,    to_key: store_id,    cardinality: many_to_one}
+  - {from: loss,     to: category, from_key: category_id, to_key: category_id, cardinality: many_to_one}
+  - {from: overhead, to: store,    from_key: store_id,    to_key: store_id,    cardinality: many_to_one}
+  - {from: employee, to: store,    from_key: store_id,    to_key: store_id,    cardinality: many_to_one}
+
+dimensions:
+  - {name: store_name, entity: store,    column: name,   type: categorical, synonyms: [门店, 店, 门店名称]}
+  - {name: region,     entity: store,    column: region, type: categorical, synonyms: [大区, 区域]}
+  - {name: city,       entity: store,    column: city,   type: categorical, synonyms: [城市]}
+  - {name: format,     entity: store,    column: format, type: categorical, synonyms: [业态, 门店类型]}
+  - {name: category,   entity: category, column: name,   type: categorical, synonyms: [品类, 类别]}
+  - {name: position,   entity: employee, column: position, type: categorical, synonyms: [岗位, 职位]}
+  - {name: month,      entity: sale,     column: month,  type: time,        synonyms: [月份, 时间]}
+
+metrics:
+  - {name: revenue,        description: "销售营收(元)。", synonyms: [营收, 销售额, 销售], entity: sale, agg: sum, expr: "revenue"}
+  - {name: cogs,           description: "销售成本(元)。", synonyms: [销售成本, 成本], entity: sale, agg: sum, expr: "cogs_amount"}
+  - {name: transactions,   description: "成交笔数。", synonyms: [笔数, 交易数, 订单数], entity: sale, agg: sum, expr: "transactions"}
+  - {name: units,          description: "销售件数。", synonyms: [件数, 销量], entity: sale, agg: sum, expr: "units"}
+  - {name: purchase_amount, description: "进货额(元)。", synonyms: [进货额, 采购额, 进货], entity: purchase, agg: sum, expr: "purchase_amount"}
+  - {name: loss_amount,    description: "损耗金额(元)。", synonyms: [损耗, 损耗金额, 报损], entity: loss, agg: sum, expr: "loss_amount"}
+  - {name: rent,           description: "租金(元)。", synonyms: [租金, 房租], entity: overhead, agg: sum, expr: "rent", roles: [finance, admin]}
+  - {name: utilities,      description: "水电等能耗(元)。", synonyms: [水电, 能耗], entity: overhead, agg: sum, expr: "utilities", roles: [finance, admin]}
+  - {name: tax,            description: "税费(元)。", synonyms: [税, 税费, 税务], entity: overhead, agg: sum, expr: "tax", roles: [finance, admin]}
+  - {name: labor_cost,     description: "人力成本(元)。", synonyms: [人力成本, 工资, 薪酬], entity: overhead, agg: sum, expr: "labor", roles: [finance, admin]}
+  - {name: headcount,      description: "在职人数。", synonyms: [人数, 员工数, 在职], entity: employee, agg: sum, expr: "case when active then 1 else 0 end"}
+
+  - {name: gross_profit,   description: "毛利 = 营收 − 销售成本。", synonyms: [毛利], formula: "revenue - cogs", additivity: non_additive}
+  - {name: gross_margin,   description: "毛利率。", synonyms: [毛利率], formula: "(revenue - cogs)::numeric / nullif(revenue, 0)", additivity: non_additive}
+  - {name: aov,            description: "客单价 = 营收 / 笔数。", synonyms: [客单价, 客单], formula: "revenue::numeric / nullif(transactions, 0)", additivity: non_additive}
+  - {name: loss_rate,      description: "损耗率 = 损耗 / 营收。损耗 grain 与销售 grain 不同。", synonyms: [损耗率, 报损率], formula: "loss_amount::numeric / nullif(revenue, 0)", additivity: non_additive}
+  - {name: rent_ratio,     description: "租金费用率 = 租金 / 营收。", synonyms: [租金费用率, 租金占比], formula: "rent::numeric / nullif(revenue, 0)", additivity: non_additive, roles: [finance, admin]}
+  - {name: labor_ratio,    description: "人力费用率 = 人力成本 / 营收。", synonyms: [人力费用率, 人力占比], formula: "labor_cost::numeric / nullif(revenue, 0)", additivity: non_additive, roles: [finance, admin]}
+  - {name: revenue_per_head, description: "人效 = 营收 / 在职人数。销售 grain 与人头 grain 跨口径。", synonyms: [人效, 人均营收], formula: "revenue::numeric / nullif(headcount, 0)", additivity: non_additive}
+  - name: net_profit
+    description: "门店净利 = 营收 − 销售成本 − 损耗 − 人力 − 租金 − 水电 − 税。跨 4 个 grain 的 chasm 指标。"
+    synonyms: [净利, 净利润, 利润, 盈亏]
+    formula: "revenue - cogs - loss_amount - labor_cost - rent - utilities - tax"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: net_margin
+    description: "净利率 = 净利 / 营收。"
+    synonyms: [净利率, 利润率]
+    formula: "(revenue - cogs - loss_amount - labor_cost - rent - utilities - tax)::numeric / nullif(revenue, 0)"
+    additivity: non_additive
+    roles: [finance, admin]

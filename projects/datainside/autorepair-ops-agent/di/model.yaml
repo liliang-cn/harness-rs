@@ -1,0 +1,71 @@
+# Semantic model for an auto-repair chain (汽修连锁). work-order grain vs
+# labor-capacity grain, so labor_utilization is a chasm metric; parts revenue /
+# margin are finance-gated and customer phone is masked.
+
+entities:
+  - {name: shop,       table: shops,          primary_key: shop_id}
+  - {name: technician, table: technicians,    primary_key: tech_id}
+  - {name: customer,   table: customers,      primary_key: customer_id}
+  - {name: work_order, table: work_orders,    primary_key: wo_id}
+  - {name: parts_line, table: parts_lines,    primary_key: line_id}
+  - {name: capacity,   table: labor_capacity, primary_key: cap_id}
+
+joins:
+  - {from: work_order, to: shop,       from_key: shop_id,     to_key: shop_id,     cardinality: many_to_one}
+  - {from: work_order, to: technician, from_key: tech_id,     to_key: tech_id,     cardinality: many_to_one}
+  - {from: work_order, to: customer,   from_key: customer_id, to_key: customer_id, cardinality: many_to_one}
+  - {from: parts_line, to: work_order, from_key: wo_id,       to_key: wo_id,       cardinality: many_to_one}
+  - {from: technician, to: shop,       from_key: shop_id,     to_key: shop_id,     cardinality: many_to_one}
+  - {from: capacity,   to: shop,       from_key: shop_id,     to_key: shop_id,     cardinality: many_to_one}
+
+dimensions:
+  - {name: shop_name,      entity: shop,       column: name,      type: categorical, synonyms: [门店, 店名]}
+  - {name: city,          entity: shop,       column: city,      type: categorical, synonyms: [城市, 地区]}
+  - {name: part_category, entity: parts_line, column: category,  type: categorical, synonyms: [配件品类, 品类]}
+  - {name: wo_status,     entity: work_order, column: status,    type: categorical, synonyms: [工单状态, 状态]}
+  - {name: customer_phone, entity: customer,  column: phone,     type: categorical, mask: "'***'"}  # PII
+  - {name: opened_time,   entity: work_order, column: opened_at, type: time}
+
+metrics:
+  - {name: work_order_count, entity: work_order, agg: count, expr: "wo_id", synonyms: [工单数, 工单量]}
+  - {name: rework,           entity: work_order, agg: sum,   expr: "(is_rework)::int", synonyms: [返修数]}
+  - {name: labor_hours_used, entity: work_order, agg: sum,   expr: "labor_hours", synonyms: [已用工时, 消耗工时]}
+  - {name: labor_hours_available, entity: capacity, agg: sum, expr: "available_labor_hours", synonyms: [可用工时, 产能工时]}
+  - name: parts_revenue
+    description: "Parts revenue (RMB)."
+    synonyms: [配件收入, 配件营收]
+    entity: parts_line
+    agg: sum
+    expr: "amount"
+    roles: [finance, admin]
+  - name: parts_margin
+    description: "Parts revenue minus part cost."
+    synonyms: [配件毛利, 配件毛利额]
+    entity: parts_line
+    agg: sum
+    expr: "(amount - cost_amount)"
+    roles: [finance, admin]
+  - name: labor_revenue
+    description: "Labor revenue billed on work orders (RMB)."
+    synonyms: [工时收入, 工时费]
+    entity: work_order
+    agg: sum
+    expr: "labor_amount"
+    roles: [finance, admin]
+
+  - name: parts_margin_rate
+    description: "Parts margin as a share of parts revenue."
+    synonyms: [配件毛利率]
+    formula: "parts_margin::numeric / nullif(parts_revenue, 0)"
+    additivity: non_additive
+    roles: [finance, admin]
+  - name: rework_rate
+    description: "Reworked work orders as a share of all work orders (same wo grain)."
+    synonyms: [返修率]
+    formula: "rework::numeric / nullif(work_order_count, 0)"
+    additivity: non_additive
+  - name: labor_utilization
+    description: "Labor hours used vs available. work-order grain vs capacity grain -> chasm-safe in DI."
+    synonyms: [工时利用率, 产能利用率]
+    formula: "labor_hours_used::numeric / nullif(labor_hours_available, 0)"
+    additivity: non_additive

@@ -13,11 +13,13 @@
 //! axum::serve(listener, app).await?;
 //! ```
 //!
-//! SSE frames carry each [`ChatChunk`](crate::ChatChunk) as JSON; a stream error
-//! arrives as an `event: error` frame.
+//! SSE frames carry each [`ChatChunk`](crate::ChatChunk) as JSON, including
+//! failures: a stream error arrives as an `event: error` frame whose body is a
+//! [`ChatChunk::Error`](crate::ChatChunk::Error), so one JSON parse handles every
+//! frame and no failure is silently dropped.
 
 use crate::auth::AuthError;
-use crate::service::{ChatService, ServeError};
+use crate::service::{ChatChunk, ChatService, ServeError};
 use axum::{
     Json, Router,
     extract::State,
@@ -44,8 +46,69 @@ pub fn router(service: Arc<ChatService>) -> Router {
     Router::new()
         .route("/chat", post(chat))
         .route("/chat/stream", post(chat_stream))
+        .route("/model", get(model))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(service)
+}
+
+/// `GET /model` — the live model's identifier, for a UI to display.
+async fn model(State(service): State<Arc<ChatService>>) -> impl IntoResponse {
+    Json(serde_json::json!({ "model": service.model_name() }))
+}
+
+/// CORS policy for [`router_with_cors`] (feature `cors`).
+///
+/// `harness-serve` exists to front a browser/aigui client, so a page served from
+/// another origin must be allowed to call `/chat` and read the `/chat/stream`
+/// SSE. This wraps the common cases without exposing `tower-http` to callers.
+#[cfg(feature = "cors")]
+#[derive(Clone, Default)]
+pub struct CorsConfig {
+    /// `None` → allow any origin (dev). `Some(list)` → only these origins.
+    origins: Option<Vec<String>>,
+}
+
+#[cfg(feature = "cors")]
+impl CorsConfig {
+    /// Allow any origin, method, and header. Convenient for local dev; prefer
+    /// [`allow_origins`](Self::allow_origins) in production.
+    pub fn permissive() -> Self {
+        Self { origins: None }
+    }
+
+    /// Restrict to an explicit allow-list of origins (e.g.
+    /// `"https://bi.example.com"`). Origin strings that don't parse are skipped.
+    pub fn allow_origins<I, S>(origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            origins: Some(origins.into_iter().map(Into::into).collect()),
+        }
+    }
+
+    fn layer(&self) -> tower_http::cors::CorsLayer {
+        use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+        let base = CorsLayer::new().allow_methods(Any).allow_headers(Any);
+        match &self.origins {
+            None => base.allow_origin(Any),
+            Some(list) => {
+                let parsed = list
+                    .iter()
+                    .filter_map(|o| o.parse::<axum::http::HeaderValue>().ok())
+                    .collect::<Vec<_>>();
+                base.allow_origin(AllowOrigin::list(parsed))
+            }
+        }
+    }
+}
+
+/// Like [`router`], but wrapped in a CORS layer so a browser page served from
+/// another origin can call `/chat` and read the `/chat/stream` SSE (feature `cors`).
+#[cfg(feature = "cors")]
+pub fn router_with_cors(service: Arc<ChatService>, cors: &CorsConfig) -> Router {
+    router(service).layer(cors.layer())
 }
 
 /// Extract a bearer token from the `Authorization` header, if present.
@@ -77,6 +140,18 @@ async fn chat(
     }
 }
 
+/// A stream failure as both a named SSE event and a JSON [`ChatChunk::Error`] frame:
+/// the event name keeps older clients working, the JSON body means a client parsing
+/// every `data:` as a chunk sees the reason instead of silently dropping it.
+fn error_event(message: String) -> Event {
+    Event::default()
+        .event("error")
+        .json_data(ChatChunk::Error {
+            message: message.clone(),
+        })
+        .unwrap_or_else(|_| Event::default().event("error").data(message))
+}
+
 /// `POST /chat/stream` — same body as `/chat`, but streams the answer token by
 /// token over SSE. Auth failures still return 401/403 (before the stream opens).
 async fn chat_stream(
@@ -89,10 +164,10 @@ async fn chat_stream(
         Ok(stream) => {
             let sse = stream.map(|item| {
                 let event = match item {
-                    Ok(chunk) => Event::default().json_data(chunk).unwrap_or_else(|_| {
-                        Event::default().event("error").data("serialize failed")
-                    }),
-                    Err(e) => Event::default().event("error").data(e.to_string()),
+                    Ok(chunk) => Event::default()
+                        .json_data(chunk)
+                        .unwrap_or_else(|_| error_event("serialize failed".into())),
+                    Err(e) => error_event(e.to_string()),
                 };
                 Ok::<Event, Infallible>(event)
             });

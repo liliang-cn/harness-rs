@@ -1,0 +1,47 @@
+[briefing]
+title = "AI行业老板内参"
+industry = "人工智能与企业软件"
+audience = "CEO/创始人"
+lookback_hours = 96
+max_items = 12
+output_dir = "out"
+focus_keywords = ["AI agent", "智能体", "企业AI", "自动化", "推理模型", "开源模型", "AI编程", "视频生成", "商业化", "ARR", "收入", "客户"]
+competitor_keywords = ["OpenAI", "Anthropic", "Google", "Gemini", "Microsoft", "Meta", "DeepSeek", "字节", "阿里", "腾讯", "百度", "Kimi"]
+risk_keywords = ["安全", "漏洞", "泄露", "监管", "诉讼", "裁员", "下调", "breach", "vulnerability", "regulation", "lawsuit"]
+
+[ranking]
+recency_weight = 35.0
+keyword_weight = 35.0
+source_weight = 20.0
+risk_bonus = 10.0
+
+[ai]
+enabled = false
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+max_items = 12
+
+[[sources]]
+name = "Google News · AI Agent"
+url = "https://news.google.com/rss/search?q=%22AI%20agent%22%20business&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+priority = 0.75
+tags = ["AI Agent", "商业化"]
+
+[[sources]]
+name = "Google News · 中国AI"
+url = "https://news.google.com/rss/search?q=AI%20%E5%95%86%E4%B8%9A%E5%8C%96%20OR%20AI%20%E6%99%BA%E8%83%BD%E4%BD%93&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+priority = 0.75
+tags = ["中国AI", "企业服务"]
+
+[[sources]]
+name = "Hacker News"
+url = "https://hnrss.org/newest?q=AI%20agent"
+priority = 0.65
+tags = ["开发者", "产品技术", "海外"]
+
+[[sources]]
+name = "TechCrunch AI"
+url = "https://techcrunch.com/category/artificial-intelligence/feed/"
+priority = 0.85
+tags = ["融资", "产品", "海外"]
