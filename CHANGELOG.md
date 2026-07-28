@@ -3,6 +3,24 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.31
+
+### Added
+
+- **`Block::Audio` — models that listen.** `harness-rs-core` gains
+  `Block::Audio { media_type, base64 }` with a `Block::audio_bytes` constructor, rendered by the
+  OpenAI-compatible adapter as an `input_audio` content part and by Gemini as `inlineData`. Audio is
+  not an image with a different MIME type: OpenAI wants the payload as bare base64 with the container
+  named separately (`{"data":…,"format":"wav"}`), so the data-URI shape an image uses would be
+  silently unusable audio. The container name is the MIME subtype, with `audio/mpeg` spelled `mp3` the
+  way the API spells it — a browser's default `audio/webm` stays `webm` rather than being forced into
+  `wav`, which would hand a provider a container it cannot read while claiming otherwise.
+
+  This is what a transcript cannot carry: intonation, stress, whether two words ran together, whether
+  a vowel was long. Speech transcribed to text before the model sees it has already lost the part a
+  pronunciation judgement rests on — which is why language tutoring needs the bytes, not the words.
+  `Block` is `#[non_exhaustive]`, so the new variant breaks no downstream match.
+
 ## 0.0.30
 
 ### Fixed

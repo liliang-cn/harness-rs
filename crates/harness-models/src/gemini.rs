@@ -175,7 +175,8 @@ enum GeminiPart {
         )]
         thought_signature: Option<String>,
     },
-    /// Inline image bytes (vision input): `{"inlineData":{"mimeType":...,"data":...}}`.
+    /// Inline media bytes — image for vision, audio for listening:
+    /// `{"inlineData":{"mimeType":...,"data":...}}`.
     InlineData {
         #[serde(rename = "inlineData")]
         inline_data: GeminiInlineData,
@@ -1047,7 +1048,9 @@ fn build_contents(ctx: &Context) -> (Option<String>, Vec<GeminiContent>) {
                         });
                     }
                 }
-                Block::Image { media_type, base64 } => {
+                // Gemini takes audio through the same inline_data door as an image; only the MIME
+                // type differs, so there is nothing to branch on beyond naming both.
+                Block::Image { media_type, base64 } | Block::Audio { media_type, base64 } => {
                     parts.push(GeminiPart::InlineData {
                         inline_data: GeminiInlineData {
                             mime_type: media_type.clone(),
@@ -1117,6 +1120,27 @@ mod tests {
         assert!(system.is_none());
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0].role, "user");
+    }
+
+    #[test]
+    fn audio_rides_the_same_inline_data_door_as_an_image() {
+        let mut ctx = empty_ctx();
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![
+                Block::Text("did I say this right?".into()),
+                Block::audio_bytes("audio/webm", b"\x1aE\xdf\xa3"),
+            ],
+        });
+
+        let (_, contents) = build_contents(&ctx);
+        let json = serde_json::to_value(&contents).unwrap();
+        let parts = json[0]["parts"].as_array().expect("parts array");
+
+        // The MIME type is what tells Gemini it is listening rather than looking, so it has to
+        // arrive unchanged — a wrong one here is audio silently treated as an image.
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "audio/webm");
+        assert!(!parts[1]["inlineData"]["data"].as_str().unwrap().is_empty());
     }
 
     #[test]
