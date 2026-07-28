@@ -3,6 +3,22 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Fixed
+
+- **`harness-rs-mcp-client`: a stdio MCP server that dies during the handshake now says why.**
+  `McpClient::connect_stdio` reported rmcp's `connection closed: initialize response` and nothing
+  else — no exit status, no stderr, no way to tell a broken binary from a transient start, because
+  `serve` consumes the transport and the child is already reaped by the time the error is built. On
+  that path it now re-runs the program once, drives the same handshake by hand while owning the
+  child, and appends what actually happened: the exit status and the tail of what the server said
+  ("it exited with status 1 before answering, saying: \"open cortexdb: unable to open database
+  file\""), the signal that killed it ("was killed by signal 9 … and wrote nothing to stderr" — what
+  a freshly copied binary looks like when macOS kills it on exec), that it hangs rather than crashes,
+  or that it answers a handshake perfectly well, which says the binary is sound and the failed start
+  was transient. Costs one extra spawn, on a path that has already failed.
+
 ## 0.0.29
 
 ### Added
