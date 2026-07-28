@@ -43,6 +43,17 @@ pub enum Block {
     /// its own multimodal wire shape (OpenAI `image_url` data-URI, Anthropic
     /// `image`/base64 source, Gemini `inline_data`).
     Image { media_type: String, base64: String },
+    /// Inline audio for models that listen. `media_type` is a MIME type (e.g.
+    /// `"audio/wav"`, `"audio/webm"`); `base64` is the standard-base64 encoding
+    /// of the raw audio bytes. Each provider adapter renders this into its own
+    /// wire shape (OpenAI `input_audio` with a bare format name, Gemini
+    /// `inline_data`).
+    ///
+    /// This is what a transcript cannot carry: intonation, stress, whether two
+    /// words ran together, whether a vowel was long. Speech transcribed to text
+    /// before the model sees it has already lost the part a pronunciation
+    /// judgement rests on.
+    Audio { media_type: String, base64: String },
 }
 
 impl Block {
@@ -50,6 +61,15 @@ impl Block {
     /// `media_type` is a MIME type like `"image/png"`.
     pub fn image_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
         Block::Image {
+            media_type: media_type.into(),
+            base64: base64_encode(bytes),
+        }
+    }
+
+    /// Build a [`Block::Audio`] from raw audio bytes, base64-encoding them.
+    /// `media_type` is a MIME type like `"audio/wav"`.
+    pub fn audio_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
+        Block::Audio {
             media_type: media_type.into(),
             base64: base64_encode(bytes),
         }

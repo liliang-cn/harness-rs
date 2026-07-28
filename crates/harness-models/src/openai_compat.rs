@@ -229,7 +229,7 @@ impl Content {
                     .into_iter()
                     .filter_map(|p| match p {
                         ContentPart::Text { text } => Some(text),
-                        ContentPart::ImageUrl { .. } => None,
+                        ContentPart::ImageUrl { .. } | ContentPart::InputAudio { .. } => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -246,18 +246,52 @@ impl Content {
     }
 }
 
+/// The container name OpenAI wants beside the audio payload, from a MIME type.
+///
+/// `audio/wav` → `wav`, `audio/mpeg` → `mp3`. Anything else keeps its own subtype rather than being
+/// forced into one of those two: a provider that accepts `webm` (what a browser records by default)
+/// should get `webm`, and one that does not should say so itself rather than be told the wrong
+/// container here.
+fn audio_format(media_type: &str) -> String {
+    let subtype = media_type
+        .split_once('/')
+        .map(|(_, subtype)| subtype)
+        .unwrap_or(media_type);
+    let subtype = subtype.split(';').next().unwrap_or(subtype).trim();
+    match subtype {
+        "mpeg" | "mp3" => "mp3".to_string(),
+        "x-wav" | "wave" | "wav" => "wav".to_string(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
 /// One part of a multimodal message. OpenAI shape:
 /// `{"type":"text","text":...}` / `{"type":"image_url","image_url":{"url":...}}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ContentPart {
-    Text { text: String },
-    ImageUrl { image_url: ImageUrl },
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+    /// `{"type":"input_audio","input_audio":{"data":<base64>,"format":"wav"}}`. Unlike an image,
+    /// this is not a data URI: the payload is bare base64 and the container is named separately.
+    InputAudio {
+        input_audio: InputAudio,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageUrl {
     url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InputAudio {
+    data: String,
+    format: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -953,6 +987,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
     let mut tool_calls = Vec::new();
     let mut reasoning: Option<String> = None;
     let mut images: Vec<ImageUrl> = Vec::new();
+    let mut audio: Vec<InputAudio> = Vec::new();
     for b in &turn.blocks {
         match b {
             Block::Text(s) => {
@@ -987,6 +1022,12 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     url: format!("data:{media_type};base64,{base64}"),
                 });
             }
+            Block::Audio { media_type, base64 } => {
+                audio.push(InputAudio {
+                    data: base64.clone(),
+                    format: audio_format(media_type),
+                });
+            }
             Block::ToolResult { .. } | Block::Feedback(_) => {
                 // shouldn't appear in assistant/user turns; ignore
             }
@@ -994,8 +1035,8 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         }
     }
 
-    // With images, content must be a parts array (text part first, then images).
-    let content = if images.is_empty() {
+    // With media, content must be a parts array (text part first, then the media).
+    let content = if images.is_empty() && audio.is_empty() {
         (!text.trim().is_empty()).then(|| Content::text(text))
     } else {
         let mut parts = Vec::new();
@@ -1004,6 +1045,9 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         }
         for image_url in images {
             parts.push(ContentPart::ImageUrl { image_url });
+        }
+        for input_audio in audio {
+            parts.push(ContentPart::InputAudio { input_audio });
         }
         Some(Content::Parts(parts))
     };
@@ -1288,5 +1332,57 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
+    }
+
+    #[test]
+    fn user_turn_with_audio_sends_bare_base64_and_a_container_name() {
+        // Audio is not an image with a different MIME type: OpenAI wants the payload bare and the
+        // container named beside it, so a data URI here would be silently unusable audio.
+        let ctx = Context {
+            system: vec![],
+            guides: vec![],
+            history: vec![Turn {
+                role: TurnRole::User,
+                blocks: vec![
+                    Block::Text("did I say this right?".into()),
+                    Block::audio_bytes("audio/wav", b"RIFF\0\0\0\0WAVE"),
+                ],
+            }],
+            task: Task {
+                description: "t".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
+            metadata: BTreeMap::new(),
+            tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
+        };
+        let msgs = build_messages(&ctx);
+        let user = msgs.iter().find(|m| m.role == "user").unwrap();
+        let json = serde_json::to_value(&user.content).unwrap();
+        let arr = json.as_array().expect("content must be a parts array");
+
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[1]["type"], "input_audio");
+        assert_eq!(arr[1]["input_audio"]["format"], "wav");
+        let data = arr[1]["input_audio"]["data"].as_str().unwrap();
+        assert!(
+            !data.starts_with("data:"),
+            "the payload must be bare base64, got {data}"
+        );
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn a_container_name_is_the_mime_subtype_and_mp3_is_spelled_the_way_the_api_spells_it() {
+        // A browser records webm by default, and forcing that into "wav" would hand the provider a
+        // container it cannot read while claiming otherwise. mpeg is the one real rename.
+        assert_eq!(audio_format("audio/mpeg"), "mp3");
+        assert_eq!(audio_format("audio/wav"), "wav");
+        assert_eq!(audio_format("audio/x-wav"), "wav");
+        assert_eq!(audio_format("audio/webm"), "webm");
+        assert_eq!(audio_format("audio/webm;codecs=opus"), "webm");
+        assert_eq!(audio_format("audio/OGG"), "ogg");
     }
 }
