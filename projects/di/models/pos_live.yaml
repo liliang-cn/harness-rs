@@ -1,0 +1,92 @@
+entities:
+    - name: sale
+      table: sales
+      primary_key: sale_id
+joins: []
+dimensions:
+    - name: sale_sold_at
+      entity: sale
+      column: sold_at
+      type: time
+      synonyms: []
+      mask: ""
+metrics:
+    - name: sale_count
+      description: Number of distinct sale (auto-generated; review).
+      synonyms:
+        - sale count
+        - number of sales
+      entity: sale
+      agg: count_distinct
+      expr: sale_id
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: non_additive
+      roles: []
+    - name: sale_sku_sum
+      description: Sum of sales.sku (auto-generated; confirm it is additive).
+      synonyms:
+        - sku
+      entity: sale
+      agg: sum
+      expr: sku
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: ""
+      roles: []
+    - name: sale_member_id_sum
+      description: Sum of sales.member_id (auto-generated; confirm it is additive).
+      synonyms:
+        - member id
+      entity: sale
+      agg: sum
+      expr: member_id
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: ""
+      roles: []
+    - name: sale_qty_sum
+      description: Sum of sales.qty (auto-generated; confirm it is additive).
+      synonyms:
+        - qty
+      entity: sale
+      agg: sum
+      expr: qty
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: ""
+      roles: []
+    - name: sale_amount_sum
+      description: Sum of sales.amount (auto-generated; confirm it is additive).
+      synonyms:
+        - amount
+      entity: sale
+      agg: sum
+      expr: amount
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: ""
+      roles: []
+    - name: sale_cost_amount_sum
+      description: Sum of sales.cost_amount (auto-generated; confirm it is additive).
+      synonyms:
+        - cost amount
+      entity: sale
+      agg: sum
+      expr: cost_amount
+      formula: ""
+      of: ""
+      window: ""
+      reset: ""
+      additivity: ""
+      roles: []
