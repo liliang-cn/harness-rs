@@ -22,8 +22,16 @@ path = "src/bin/mcp-echo-server.rs"
 required-features = ["test-server"]
 
 [features]
-default = ["http"]
+default = ["http", "tls-rustls"]
 http = ["rmcp/transport-streamable-http-client", "rmcp/transport-streamable-http-client-reqwest", "dep:reqwest"]
+# TLS for the HTTP transport. WITHOUT one of these, reqwest has no TLS backend
+# and every `https://` MCP server fails at the connector with the baffling
+# `invalid URL, scheme is not http` — before a socket is ever opened. Since
+# practically every remote MCP server is https, rustls is on by default.
+# For a system-trust-store build: default-features = false, then
+# features = ["http", "tls-native"].
+tls-rustls = ["rmcp/reqwest"]
+tls-native = ["rmcp/reqwest-native-tls"]
 test-server = ["dep:harness-mcp", "dep:harness-context"]
 
 [dependencies]
@@ -34,9 +42,10 @@ rmcp = { version = "1.7", features = ["client", "transport-child-process", "tran
 # Optional, only under `http`: lets callers inject a hardened reqwest client
 # (redirect policy + pinned DNS) for SSRF-safe connects. MUST match the reqwest
 # version rmcp 1.7 links (0.13) so the `reqwest::Client` type unifies and rmcp's
-# `impl StreamableHttpClient for reqwest::Client` applies. No TLS feature here —
-# we only name core types; rmcp's reqwest features (TLS) unify in. Re-exported as
-# `crate::reqwest`.
+# `impl StreamableHttpClient for reqwest::Client` applies. The TLS backend is
+# NOT selected here but through the `tls-*` features above, which go via rmcp's
+# own `reqwest`/`reqwest-native-tls` knobs — rmcp owns the dependency, so letting
+# it choose keeps the two in step. Re-exported as `crate::reqwest`.
 reqwest = { version = "0.13", optional = true, default-features = false }
 async-trait = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "io-std", "sync", "time"] }
