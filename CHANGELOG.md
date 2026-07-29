@@ -3,6 +3,23 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Fixed
+
+- **`harness-rs-mcp-client`: `https://` MCP servers could never connect.** The crate declared
+  `reqwest` with `default-features = false` and no TLS, on the assumption that rmcp's own reqwest
+  features would unify a backend in. They don't: rmcp's
+  `transport-streamable-http-client-reqwest` pulls the dependency but selects TLS only under its
+  separate `reqwest` / `reqwest-native-tls` features. With no backend compiled in, reqwest rejects
+  an https URL *at the connector*, before opening a socket, with `invalid URL, scheme is not http`
+  — an error that points at the scheme rather than the missing feature, so the obvious reading
+  ("my URL is wrong") is the wrong one. Since practically every remote MCP server is https, the
+  HTTP transport failed in exactly the case it exists for. `tls-rustls` is now on by default;
+  `tls-native` is available via `default-features = false, features = ["http", "tls-native"]`.
+  Covered by a regression test that needs no network: it connects to a refusing loopback port and
+  asserts the failure is a *connect* error rather than the scheme error.
+
 ## 0.0.32
 
 ### Fixed

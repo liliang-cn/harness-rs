@@ -31,3 +31,34 @@ async fn connect_http_with_hardened_client_unreachable_returns_err() {
     let result = McpClient::connect_http_with_client("http://127.0.0.1:1/mcp", client).await;
     assert!(result.is_err(), "expected Err for unreachable server");
 }
+
+/// Regression: the HTTP transport must be able to speak `https`.
+///
+/// Without a TLS backend, reqwest rejects an https URL *at the connector* with
+/// `invalid URL, scheme is not http` — before opening a socket. Every remote MCP
+/// server is https, so the transport was unusable in exactly the case it exists
+/// for, and the error named the scheme rather than the missing feature, which
+/// sent debugging in the wrong direction.
+///
+/// Port 1 on loopback refuses instantly, so this needs no network: reaching a
+/// *connect* failure proves TLS was configured, since a missing backend would
+/// have failed earlier with the scheme error.
+#[tokio::test]
+async fn https_urls_are_supported_by_the_http_transport() {
+    use harness_mcp_client::reqwest;
+    let err = reqwest::Client::new()
+        .get("https://127.0.0.1:1/mcp")
+        .send()
+        .await
+        .expect_err("nothing listens on port 1");
+
+    let detail = format!("{err} | {err:?}");
+    assert!(
+        !detail.contains("scheme is not http"),
+        "no TLS backend compiled in — enable the `tls-rustls` (or `tls-native`) feature: {detail}"
+    );
+    assert!(
+        err.is_connect(),
+        "expected a connection failure, got: {detail}"
+    );
+}
