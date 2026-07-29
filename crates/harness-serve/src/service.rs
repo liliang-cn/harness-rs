@@ -246,11 +246,27 @@ impl ChatService {
         };
 
         let outcome = agent
-            .run_with_seed_and_metadata(task, seed, metadata, &mut world, self.max_iters)
+            .run_with_seed_and_metadata(
+                task.clone(),
+                seed.clone(),
+                metadata.clone(),
+                &mut world,
+                self.max_iters,
+            )
             .await
             .map_err(|e| ServeError::Agent(e.to_string()))?;
 
-        let answer = answer_of(&outcome);
+        // 模型偶尔在工具循环后返回空(网关抖动/提前收尾)。空答案对用户就是白屏,
+        // 重跑一次比把空白交出去好;仍为空才如实返回。
+        let mut answer = answer_of(&outcome);
+        if answer.trim().is_empty() {
+            tracing::warn!(target: "harness.serve", %request_id, "empty answer — retrying once");
+            let retry = agent
+                .run_with_seed_and_metadata(task, seed, metadata, &mut world, self.max_iters)
+                .await
+                .map_err(|e| ServeError::Agent(e.to_string()))?;
+            answer = answer_of(&retry);
+        }
         self.sessions.append(session_id, message, &answer);
 
         Ok(ChatReply {
@@ -306,11 +322,27 @@ impl ChatService {
                 deadline: None,
             };
             match agent
-                .run_with_seed_and_metadata(task, seed, metadata, &mut world, max_iters)
+                .run_with_seed_and_metadata(
+                    task.clone(),
+                    seed.clone(),
+                    metadata.clone(),
+                    &mut world,
+                    max_iters,
+                )
                 .await
             {
                 Ok(outcome) => {
-                    let answer = answer_of(&outcome);
+                    // 同 `chat`:空答案重跑一次。此时流里也没吐过 token,重跑不会重复内容。
+                    let mut answer = answer_of(&outcome);
+                    if answer.trim().is_empty() {
+                        tracing::warn!(target: "harness.serve", "empty streamed answer — retrying once");
+                        if let Ok(retry) = agent
+                            .run_with_seed_and_metadata(task, seed, metadata, &mut world, max_iters)
+                            .await
+                        {
+                            answer = answer_of(&retry);
+                        }
+                    }
                     sessions.append(&session_id, &message, &answer);
                     let _ = tx.send(Ok(ChatChunk::Done {
                         answer,

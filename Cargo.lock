@@ -18,24 +18,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "advisor"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum 0.8.9",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-models",
- "harness-rs-serve",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tower-http 0.6.10",
-]
-
-[[package]]
 name = "aes"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -70,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "ai-note"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "argon2",
@@ -268,20 +250,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "autorepair-ops-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
-]
-
-[[package]]
 name = "axum"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -399,32 +367,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bi-common"
-version = "0.0.31"
-dependencies = [
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-models",
- "serde_json",
-]
-
-[[package]]
-name = "bi-server"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "axum 0.8.9",
- "bi-common",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-mcp-client",
- "harness-rs-serve",
- "serde",
- "serde_yaml",
- "tokio",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -480,7 +422,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cap"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -713,7 +655,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortexdb-memory"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs-context",
@@ -744,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "crate-keeper"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "clap",
@@ -901,7 +843,7 @@ checksum = "7eed2c4702fa172d1ce21078faa7c5203e69f5394d48cc436d25928394a867a2"
 
 [[package]]
 name = "deepseek-caps-e2e"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -918,27 +860,13 @@ dependencies = [
 
 [[package]]
 name = "deepseek-hello"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs",
  "harness-rs-core",
  "harness-rs-models",
  "harness-rs-skills",
- "tokio",
-]
-
-[[package]]
-name = "dental-clinic-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
  "tokio",
 ]
 
@@ -1036,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "ecommerce-analyst"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1051,24 +979,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ecommerce-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "harness-rs-models",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "ecommerce-ops-agent"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1085,25 +997,6 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "edumind-tutor-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "axum 0.8.9",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-cortexdb",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "harness-rs-models",
- "harness-rs-serve",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1168,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "eval-bench"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs",
@@ -1194,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "experience-cortexdb"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs-core",
@@ -1272,20 +1165,6 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
-
-[[package]]
-name = "forge-ops-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
-]
 
 [[package]]
 name = "form_urlencoded"
@@ -1488,23 +1367,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gym-membership-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "harness-rs-models",
- "harness-rs-tools-tasks",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "h2"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1525,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "harness-rs-context",
  "harness-rs-core",
@@ -1538,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-blueprint"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "futures",
@@ -1553,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-cli"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1577,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-compactor"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1590,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-context"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1604,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-core"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "futures",
@@ -1618,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-cortexdb"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1632,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-daemon"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1647,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-experience"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1660,7 +1522,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-hooks"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1677,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "futures",
@@ -1704,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop-engine"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1723,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-macros"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1734,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1750,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp-client"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1768,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-models"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1785,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-orchestrator"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "futures",
@@ -1802,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-permissions"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "harness-rs-core",
  "serde",
@@ -1812,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-recall-sqlite"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1824,14 +1686,14 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-redact"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "harness-rs-sandbox"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1843,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-scheduler"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1861,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-common"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1870,7 +1732,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-sensors-rust"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1882,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-serve"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -1906,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-skills"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1923,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-templates"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "futures",
@@ -1941,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-docs"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1957,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-fs"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -1972,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-memory"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1985,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-shell"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1997,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-skills"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -2009,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-sql"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -2025,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-tasks"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2041,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-tools-web"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs",
@@ -2144,20 +2006,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotel-revenue-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
-]
-
-[[package]]
 name = "html5ever"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2203,12 +2051,6 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
 
 [[package]]
 name = "httparse"
@@ -2519,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "investor-bot"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2677,7 +2519,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loop-engine-demo"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs-core",
@@ -2735,22 +2577,6 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
-
-[[package]]
-name = "manufacturing-quality-agent"
-version = "0.0.31"
-dependencies = [
- "async-trait",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-models",
- "harness-rs-redact",
- "serde_json",
- "tokio",
-]
 
 [[package]]
 name = "markup5ever"
@@ -2814,16 +2640,6 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
-
-[[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
 
 [[package]]
 name = "miniz_oxide"
@@ -3056,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-demo"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "harness-rs-core",
@@ -3151,7 +2967,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-assistant"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3177,20 +2993,6 @@ checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
  "indexmap 2.14.0",
-]
-
-[[package]]
-name = "pharmacy-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
 ]
 
 [[package]]
@@ -3710,7 +3512,7 @@ dependencies = [
 
 [[package]]
 name = "redaction-demo"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -3860,22 +3662,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.5.0",
  "web-sys",
-]
-
-[[package]]
-name = "retail-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "harness-rs-models",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -4710,20 +4496,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "supermarket-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
-]
-
-[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4752,20 +4524,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "teahouse-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "tokio",
 ]
 
 [[package]]
@@ -5121,19 +4879,10 @@ checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
 dependencies = [
  "bitflags",
  "bytes",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
- "http-body-util",
- "http-range-header",
- "httpdate",
- "mime",
- "mime_guess",
- "percent-encoding",
  "pin-project-lite",
- "tokio",
- "tokio-util",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
@@ -5262,12 +5011,6 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
-
-[[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-bidi"
@@ -5425,22 +5168,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
 dependencies = [
  "try-lock",
-]
-
-[[package]]
-name = "warehouse-bi-agent"
-version = "0.0.31"
-dependencies = [
- "anyhow",
- "bi-common",
- "harness-rs-context",
- "harness-rs-core",
- "harness-rs-hooks",
- "harness-rs-loop",
- "harness-rs-mcp-client",
- "harness-rs-models",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

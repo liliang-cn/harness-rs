@@ -3,6 +3,23 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.32
+
+### Fixed
+
+- **`harness-rs-serve`: an empty answer is retried once instead of being served as a blank.** After a
+  tool loop, a model occasionally returns no assistant text at all — a gateway hiccup, or the model
+  deciding it is done right after the last tool result. `ChatService::chat` and `chat_stream` handed
+  that straight through, and what the user saw was a blank reply after a query that had, in fact,
+  executed successfully against their database.
+
+  Both paths now re-run the turn once when the answer is empty, and return whatever the retry
+  produces — including empty, if it is empty again; the failure is reported rather than papered over.
+  The retry is safe in the streaming path specifically because an empty answer means no token was
+  ever emitted, so nothing can be duplicated on the wire. A blank screen gives the user no way to
+  tell "the model had nothing to say" from "the pipe broke", which is the worse of the two failures
+  to be silent about.
+
 ## 0.0.31
 
 ### Added
