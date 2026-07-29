@@ -239,6 +239,14 @@ impl ChatService {
 
         let seed = self.sessions.history(session_id);
         let mut world = harness_context::default_world(&self.data_dir);
+        // So a tool registered once on this service can tell whose turn it is in. Without it the only
+        // options are one shared slot that two simultaneous callers corrupt, or building the agent per
+        // request and giving up what this service already does.
+        world.session = Some(harness_core::SessionRef {
+            id: session_id.to_string(),
+            actor: actor.id.clone(),
+            request: request_id.clone(),
+        });
         let task = Task {
             description: message.to_string(),
             source: None,
@@ -316,6 +324,11 @@ impl ChatService {
 
         tokio::spawn(async move {
             let mut world = harness_context::default_world(&data_dir);
+            world.session = Some(harness_core::SessionRef {
+                id: session_id.clone(),
+                actor: actor_id.clone(),
+                request: request_id.clone(),
+            });
             let task = Task {
                 description: message.clone(),
                 source: None,

@@ -79,6 +79,84 @@ mod tests {
         assert_eq!(json["message"], "agent error: model error");
     }
 
+    /// A tool that records the session it was invoked under, which is the whole point of `World.session`.
+    struct WitnessTool {
+        seen: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        schema: harness_core::ToolSchema,
+    }
+
+    #[async_trait::async_trait]
+    impl harness_core::Tool for WitnessTool {
+        fn name(&self) -> &str {
+            &self.schema.name
+        }
+        fn schema(&self) -> &harness_core::ToolSchema {
+            &self.schema
+        }
+        fn risk(&self) -> harness_core::ToolRisk {
+            harness_core::ToolRisk::ReadOnly
+        }
+        async fn invoke(
+            &self,
+            _args: serde_json::Value,
+            world: &mut harness_core::World,
+        ) -> Result<harness_core::ToolResult, harness_core::ToolError> {
+            let session = world
+                .session
+                .clone()
+                .expect("a served turn carries its session");
+            self.seen
+                .lock()
+                .unwrap()
+                .push((session.id.clone(), session.actor.clone()));
+            Ok(harness_core::ToolResult {
+                ok: true,
+                content: serde_json::json!({"session": session.id}),
+                trace: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_can_tell_whose_turn_it_is_in() {
+        // Tools are registered once on a long-lived service, so one object serves every caller. Without
+        // the session on the world, a tool holding per-conversation state has one shared slot and two
+        // simultaneous learners silently overwrite each other's.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let tool = Arc::new(WitnessTool {
+            seen: seen.clone(),
+            schema: harness_core::ToolSchema {
+                name: "witness".into(),
+                description: "records the session it ran under".into(),
+                input: serde_json::json!({"type": "object", "properties": {}}),
+            },
+        });
+        let model: Arc<dyn Model> = Arc::new(
+            MockModel::new()
+                .script(MockResponse::tool_call("witness", serde_json::json!({})))
+                .script(MockResponse::text("done"))
+                .script(MockResponse::tool_call("witness", serde_json::json!({})))
+                .script(MockResponse::text("done")),
+        );
+        let svc = ChatService::new(
+            model,
+            Arc::new(OpenAuth::new("ada")),
+            Arc::new(InMemorySessions::new()),
+            std::env::temp_dir().join("serve-session-test"),
+        )
+        .with_tool(tool);
+
+        svc.chat(None, "lesson-a", "hello").await.unwrap();
+        svc.chat(None, "lesson-b", "hello").await.unwrap();
+
+        let recorded = seen.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 2, "the tool ran once per turn");
+        // Each turn saw its own conversation, not whichever one happened to be registered last.
+        assert_eq!(recorded[0].0, "lesson-a");
+        assert_eq!(recorded[1].0, "lesson-b");
+        assert!(recorded.iter().all(|(_, actor)| actor == "ada"));
+    }
+
     #[tokio::test]
     async fn rejects_bad_token() {
         let model: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("hi")));
