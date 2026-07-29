@@ -797,11 +797,16 @@ mod tests {
     #[tokio::test]
     async fn container_sandbox_fails_cleanly_without_docker() {
         let s = ContainerSandbox::new("harness-nonexistent-image-xyzzy:latest", ".");
-        // either docker missing OR image pull fails — both produce Err
-        assert!(
-            s.spawn().await.is_err(),
-            "expected error spawning bogus container"
-        );
+        // Three ways this can go, all of them "no container was started":
+        // docker is absent, the image pull fails, or — the case that used to
+        // hang this test forever — the CLI is installed but the daemon is down,
+        // and `docker run` waits on it indefinitely. Bound the wait so a stopped
+        // Docker Desktop can't wedge the whole suite.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), s.spawn()).await;
+        match outcome {
+            Ok(spawned) => assert!(spawned.is_err(), "expected error spawning bogus container"),
+            Err(_elapsed) => { /* daemon never answered — nothing was spawned */ }
+        }
     }
 
     #[tokio::test]

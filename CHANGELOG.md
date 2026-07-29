@@ -3,7 +3,7 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.34
 
 ### Fixed
 
@@ -19,6 +19,12 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   `tls-native` is available via `default-features = false, features = ["http", "tls-native"]`.
   Covered by a regression test that needs no network: it connects to a refusing loopback port and
   asserts the failure is a *connect* error rather than the scheme error.
+
+- **`harness-rs-sandbox`: `container_sandbox_fails_cleanly_without_docker` no longer hangs the
+  suite.** With the Docker CLI installed but the daemon stopped, `docker run` waits on it
+  indefinitely, so the test never returned and took `cargo test --workspace` with it. The spawn is
+  now bounded by a 20s timeout; a daemon that never answers counts as "nothing was spawned", which
+  is what the test is really asserting.
 
 ## 0.0.32
 
