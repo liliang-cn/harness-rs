@@ -239,6 +239,7 @@ impl Sandbox for WorktreeSandbox {
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
 
         let cleanup_source = self.source.clone();
@@ -403,6 +404,7 @@ impl Sandbox for ContainerSandbox {
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
 
         let kill_name = name.clone();
@@ -591,6 +593,7 @@ impl Sandbox for SeatbeltSandbox {
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
         Ok(SandboxHandle {
             world,
@@ -727,6 +730,7 @@ impl Sandbox for BubblewrapSandbox {
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
         Ok(SandboxHandle {
             world,
@@ -774,6 +778,7 @@ impl Sandbox for NullSandbox {
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
         Ok(SandboxHandle {
             world,

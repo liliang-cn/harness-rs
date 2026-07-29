@@ -91,6 +91,7 @@ pub fn default_world(repo_root: impl Into<std::path::PathBuf>) -> World {
         clock: Arc::new(SystemClock),
         kv: Arc::new(InMemoryKv::new()),
         profile: harness_core::UserProfile::default(),
+        session: None,
     }
 }
 

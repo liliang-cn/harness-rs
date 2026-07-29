@@ -679,6 +679,7 @@ mod tests {
             clock: Arc::new(NoopClock),
             kv: Arc::new(NoopKv),
             profile: harness_core::UserProfile::default(),
+            session: None,
         };
         (td, w)
     }
