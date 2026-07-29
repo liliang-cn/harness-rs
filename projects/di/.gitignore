@@ -1,0 +1,7 @@
+target/
+# 前端依赖装出来的,不进 git
+ui/node_modules/
+# web/ 是构建产物,但**要**提交:二进制用 include_dir! 把它编进去,
+# 这样 cargo build 之前不必先 npm run build。
+desktop/gen/
+*.dmg
