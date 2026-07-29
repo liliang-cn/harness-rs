@@ -1536,9 +1536,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-compactor"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ee1fc7c163a87e09f76ffb52fd9368044cff827a97ae6e3d5fac37fbde4d818"
+checksum = "2a8e975d8961a9cace32a49e90a275c517701123437d1ffdc582d62a5022c634"
 dependencies = [
  "async-trait",
  "harness-rs-context",
@@ -1549,9 +1549,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-context"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7712c46b8cf77a86dc7921f157ea62beb802591e1781fd4f944e024944e9b9d0"
+checksum = "9f9251a5a768719414cc156c1156dcdbf9d98fb9a5226d6f1a0f8348a4e7581c"
 dependencies = [
  "async-trait",
  "harness-rs-core",
@@ -1565,9 +1565,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-core"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5a5e509468e6bf15f0fb644030d09a514b747aed1e3fb68c779ab2117f13d9b"
+checksum = "4e40e33d65cfdb3b18d310d75da17d93281affa9701e75fd2f1f97955ddd867f"
 dependencies = [
  "async-trait",
  "futures",
@@ -1580,9 +1580,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-hooks"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71fb548b501d79eaa06515415dcc18a5744732e2f5f597f900b96807303befdc"
+checksum = "11187199ba393f6eb630a84c60ee5649233b3cb345c6778991fad5767b297884"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1597,9 +1597,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-loop"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d630b91e5a41bd2638544f048cdbddab1af9aadb976398b44caa3f2f62d299f5"
+checksum = "5319e0e415b9d537e4d188b9f761fa73536b964acec44f41e93234272c7823b1"
 dependencies = [
  "async-trait",
  "futures",
@@ -1617,9 +1617,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-mcp-client"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b35347802f5f5e9447ee0c18e5cb435c5e6c64616ccf225022921e5ae16337e8"
+checksum = "47cfaa443fb6223568602f2d956efb54f93319005911281b87bbf4173b6b7c46"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1633,9 +1633,9 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-models"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde7ed6bb35740bc9054aa72417ea3104d417f972cbb7a3afebc924380aeec0e"
+checksum = "c9d35d7eb71577c2318b053d203d8898ae0bbbab8bcf87f614363a108de320b5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1652,18 +1652,18 @@ dependencies = [
 
 [[package]]
 name = "harness-rs-redact"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91281f7854a31c49fa4f311c4d00a359a8a8322b370d665e5cfac379ad59141b"
+checksum = "7849f3cfc5c24e634f03815eb47d89e8bd2fd9d5502a4582bb82be5f63226071"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "harness-rs-serve"
-version = "0.0.31"
+version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2288c812c1be539cf17241b1863c2744fb2c91f10ccbd6fd81b0648ca39ca360"
+checksum = "b2cf93b78147cc6a266fcb8847919443a6065bf206059f69d0d6044369e61d5f"
 dependencies = [
  "async-trait",
  "axum",

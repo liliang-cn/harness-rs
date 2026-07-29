@@ -15,11 +15,11 @@ authors = ["liliang"]
 [workspace.dependencies]
 # 框架用发布版。`harness` 这个名字在 crates.io 上被一个无关的 benchmark crate
 # 占了,发布名是 harness-rs-*;这里用 package= 保持源码里的 `use harness_core::…`。
-harness-core       = { package = "harness-rs-core",       version = "0.0.31" }
-harness-serve      = { package = "harness-rs-serve",      version = "0.0.31" }
-harness-mcp-client = { package = "harness-rs-mcp-client", version = "0.0.31" }
-harness-hooks      = { package = "harness-rs-hooks",      version = "0.0.31" }
-harness-models     = { package = "harness-rs-models",     version = "0.0.31" }
+harness-core       = { package = "harness-rs-core",       version = "0.0.32" }
+harness-serve      = { package = "harness-rs-serve",      version = "0.0.32" }
+harness-mcp-client = { package = "harness-rs-mcp-client", version = "0.0.32" }
+harness-hooks      = { package = "harness-rs-hooks",      version = "0.0.32" }
+harness-models     = { package = "harness-rs-models",     version = "0.0.32" }
 
 tokio       = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs"] }
 async-trait = "0.1"
