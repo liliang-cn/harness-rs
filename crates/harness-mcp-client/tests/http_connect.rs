@@ -62,3 +62,18 @@ async fn https_urls_are_supported_by_the_http_transport() {
         "expected a connection failure, got: {detail}"
     );
 }
+
+/// End-to-end proof against a real public MCP server, over https.
+///
+/// `#[ignore]` because it depends on a third party being up — run it by hand
+/// (`cargo test -p harness-rs-mcp-client --test http_connect -- --ignored`)
+/// when touching the transport or its TLS wiring.
+#[tokio::test]
+#[ignore = "network: talks to a public MCP server"]
+async fn connects_to_a_real_https_mcp_server() {
+    let client = McpClient::connect_http("https://weather.datakoot.com/mcp")
+        .await
+        .expect("connect to a public https MCP server");
+    let tools = client.tools();
+    assert!(!tools.is_empty(), "expected the server to advertise tools");
+}
