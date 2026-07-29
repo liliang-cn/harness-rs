@@ -53,10 +53,6 @@ members = [
     "examples/redaction-demo",
 ]
 
-# di-server 是产品,不是这个框架的一部分:它用 crates.io 上发布的 harness-rs-*,
-# 有自己的 workspace 与 Cargo.lock,可以整体搬走而不带上这个仓库。
-exclude = ["projects/di"]
-
 [workspace.package]
 version = "0.0.32"
 edition = "2024"
