@@ -33,7 +33,9 @@ fn only_thinking(thought: &str) -> MockResponse {
 async fn a_turn_that_only_thought_gets_asked_to_carry_on() {
     let mut world = default_world(".");
     let model = MockModel::new()
-        .script(only_thinking("**Initiating Document Design** — I'll write the docx next."))
+        .script(only_thinking(
+            "**Initiating Document Design** — I'll write the docx next.",
+        ))
         .script(MockResponse::text("Done — resume.docx is written."));
 
     let outcome = AgentLoop::new(model)
@@ -64,7 +66,9 @@ async fn a_turn_that_only_thought_gets_asked_to_carry_on() {
 async fn it_only_asks_once_and_then_reports_what_there_is() {
     let mut world = default_world(".");
     // Stalls every time: the loop must not spend the whole budget nudging.
-    let stalls: Vec<MockResponse> = (0..6).map(|_| only_thinking("still just thinking")).collect();
+    let stalls: Vec<MockResponse> = (0..6)
+        .map(|_| only_thinking("still just thinking"))
+        .collect();
     let model = MockModel::new().script_many(stalls);
 
     let outcome = AgentLoop::new(model)
@@ -79,7 +83,10 @@ async fn it_only_asks_once_and_then_reports_what_there_is() {
             verified,
             ..
         } => {
-            assert_eq!(iters, 2, "one correction, then it reports rather than looping");
+            assert_eq!(
+                iters, 2,
+                "one correction, then it reports rather than looping"
+            );
             // The reasoning fallback still applies, so the caller sees SOMETHING
             // rather than a blank turn — but the outcome no longer PRETENDS the
             // work was done: the verdict travels with it.

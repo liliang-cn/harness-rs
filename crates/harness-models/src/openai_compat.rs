@@ -1128,8 +1128,9 @@ mod tests {
     #[tokio::test]
     async fn a_chunk_that_ends_mid_character_loses_nothing() {
         let want = "你好世界情绪: 开心";
-        let payload =
-            format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{want}\"}}}}]}}\n\ndata: [DONE]\n\n");
+        let payload = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{want}\"}}}}]}}\n\ndata: [DONE]\n\n"
+        );
 
         for at in 1..payload.len() {
             let got = text_through_split_stream(&payload, at).await;

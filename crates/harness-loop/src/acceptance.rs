@@ -125,7 +125,9 @@ impl Acceptance for FilesExist {
                 let full = root.join(p);
                 // Present but empty is the same failure as absent: a 0-byte
                 // file is what a half-finished write leaves behind.
-                !std::fs::metadata(&full).map(|m| m.len() > 0).unwrap_or(false)
+                !std::fs::metadata(&full)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false)
             })
             .map(String::as_str)
             .collect();

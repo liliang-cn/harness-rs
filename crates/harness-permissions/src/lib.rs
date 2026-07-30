@@ -92,7 +92,10 @@ impl PermissionMode {
         if yolo() {
             return PermissionMode::AutoApprove;
         }
-        match std::env::var("HARNESS_PERMISSION_MODE").as_deref().map(str::trim) {
+        match std::env::var("HARNESS_PERMISSION_MODE")
+            .as_deref()
+            .map(str::trim)
+        {
             Ok("plan") => PermissionMode::Plan,
             Ok("auto") | Ok("auto-approve") | Ok("autoapprove") => PermissionMode::AutoApprove,
             Ok("default") | Err(_) => PermissionMode::Default,

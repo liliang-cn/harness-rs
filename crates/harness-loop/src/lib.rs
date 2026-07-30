@@ -8,6 +8,7 @@
 //!   applied directly to the world, blocking signals are fed back to the model.
 //! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
 
+pub mod acceptance;
 pub mod learning;
 pub mod memory_layer;
 #[cfg(feature = "otel")]
@@ -15,7 +16,6 @@ pub mod otel;
 pub mod profile_guide;
 pub mod recall_layer;
 pub mod registry;
-pub mod acceptance;
 pub use acceptance::{Acceptance, FilesExist, NonEmptyAnswer, Verdict};
 pub mod replay;
 pub mod subagent;
@@ -737,15 +737,16 @@ impl<M: Model> AgentLoop<M> {
                     verdict = verdict.or_else(|| Some(Verdict::passed()));
                 }
 
-                if let Some(v) = verdict.clone().filter(|v| !v.passed) {
-                    if acceptance_retries_left > 0 && iter + 1 < ctx.policy.max_iters {
-                        acceptance_retries_left -= 1;
-                        ctx.history.push(Turn {
-                            role: TurnRole::User,
-                            blocks: vec![Block::Text(v.reason)],
-                        });
-                        continue;
-                    }
+                if let Some(v) = verdict.clone().filter(|v| !v.passed)
+                    && acceptance_retries_left > 0
+                    && iter + 1 < ctx.policy.max_iters
+                {
+                    acceptance_retries_left -= 1;
+                    ctx.history.push(Turn {
+                        role: TurnRole::User,
+                        blocks: vec![Block::Text(v.reason)],
+                    });
+                    continue;
                 }
 
                 self.hooks.fire(&Event::TaskCompleted, world);
