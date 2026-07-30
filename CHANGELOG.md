@@ -3,6 +3,56 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.35
+
+### Fixed
+
+- **`harness-rs-models`: a streamed chunk that ended mid-character dropped the WHOLE chunk.** Both
+  SSE readers appended each HTTP chunk with `if let Ok(s) = std::str::from_utf8(&bytes)`, which
+  silently discarded every byte of any chunk whose last bytes were the start of a character still
+  in flight. Not a mangled glyph — the entire chunk, with nothing logged. Chunks land wherever the
+  network puts them, so with CJK this fires constantly: three bytes per character means two of
+  every three split points fall inside one, and replies came back missing spans of themselves. It
+  surfaced as a reply losing the leading character of its own trailing emotion tag, which then
+  failed to parse and reached the user as half a tag under an otherwise fine answer.
+  `push_utf8_chunk` decodes the valid prefix and carries the incomplete tail to the next chunk;
+  `openai_compat` and `gemini` both had the bug and now share one decoder. The regression test
+  splits a payload at every byte offset — against the old code it fails at byte 40 with the whole
+  text gone.
+
+- **`harness-rs-scheduler`: `cronjob` could list and remove every job in the store, including other
+  users'.** Invisible in a single-user binary; in a multi-tenant host it meant one user's agent
+  could enumerate another's scheduled work, pause it, or cancel it — and ids are handed out in the
+  create response. `Job` gains `owner: Option<String>` (serde-default, so existing job files load
+  unchanged) and `CronjobTool::for_owner` stamps it on create and scopes list/remove/pause/resume.
+  Removing someone else's job reports "not found" rather than "not yours": whether an id exists in
+  another account isn't ours to disclose. `JobStore::list_for_owner` has a default that filters
+  `list()`, so no backend has to change; a SQL-backed store should override it with a WHERE clause.
+
+### Added
+
+- **`harness-rs-loop`: `Acceptance` — the loop can be told what "done" means.** A loop ends when
+  the model stops asking for tools. That rule is right and it answers the wrong question: it says
+  the model *believes* it is finished, not that the work happened, and the two are
+  indistinguishable from outside. An `Acceptance` is consulted before `Outcome::Done`; when it says
+  no, the reason goes back to the model as an instruction and the loop carries on, bounded by
+  `acceptance_retries`. `Outcome::Done` now carries the verdict, so "checked and it holds up" is
+  distinguishable from "nobody looked". Two implementations ship: `NonEmptyAnswer` (on by default,
+  free) catches the turn that produced only reasoning and stopped — previously the reasoning
+  fallback dressed that monologue up as the answer. `FilesExist` is the deterministic version of
+  the check people actually want, and treats a 0-byte file as missing, because that is what a
+  half-finished write leaves behind. `harness-loop-engine` already drew this distinction with its
+  maker/checker split, but only if you adopted that whole runtime; this puts it on the loop
+  everyone actually uses.
+
+- **`harness-rs-permissions`: `HARNESS_YOLO` and `PermissionMode::from_env()`.** `AutoApprove`
+  already existed and its doc comment already named the case that needs it — "unattended scheduled
+  runs" — but there was no agreed way to switch it on, so every host invented its own env var with
+  its own spelling and its own idea of what it waives. `yolo()` reads `HARNESS_YOLO` once (a policy
+  this consequential must not change under a running turn) and logs loudly. An unrecognised
+  `HARNESS_PERMISSION_MODE` resolves to `Default` and says so: a typo must never be read as
+  permission.
+
 ## 0.0.34
 
 ### Fixed
