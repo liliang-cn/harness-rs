@@ -11,13 +11,29 @@ use std::sync::Arc;
 
 pub struct CronjobTool {
     store: Arc<dyn JobStore>,
+    /// Whose jobs this instance may see and change. `None` = the single-user
+    /// world; a multi-tenant host constructs one tool per user with
+    /// [`CronjobTool::for_owner`], and the agent physically cannot reach
+    /// anyone else's jobs through it.
+    owner: Option<String>,
     schema: ToolSchema,
 }
 
 impl CronjobTool {
     pub fn new(store: Arc<dyn JobStore>) -> Self {
+        Self::build(store, None)
+    }
+
+    /// A tool scoped to one owner: created jobs are stamped with `owner`, and
+    /// list/remove/pause/resume refuse to touch anything else.
+    pub fn for_owner(store: Arc<dyn JobStore>, owner: impl Into<String>) -> Self {
+        Self::build(store, Some(owner.into()))
+    }
+
+    fn build(store: Arc<dyn JobStore>, owner: Option<String>) -> Self {
         Self {
             store,
+            owner,
             schema: ToolSchema {
                 name: "cronjob".into(),
                 description: "Schedule recurring agent jobs. actions: create (name, \
@@ -45,6 +61,16 @@ impl CronjobTool {
 
     fn s<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
         a.get(k).and_then(|v| v.as_str())
+    }
+
+    /// Whether `id` exists AND belongs to this tool's owner.
+    async fn owns(&self, id: &str) -> Result<bool, String> {
+        Ok(self
+            .store
+            .get(id)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some_and(|j| j.owned_by(self.owner.as_deref())))
     }
 }
 
@@ -85,6 +111,7 @@ impl Tool for CronjobTool {
                         let next = sched.next_after(now).timestamp_millis();
                         let job = Job::new(name, schedule, prompt, channel, now.timestamp_millis())
                             .with_target(target)
+                            .with_owner(self.owner.clone())
                             .with_next_run(Some(next));
                         let id = job.id.clone();
                         self.store
@@ -98,7 +125,7 @@ impl Tool for CronjobTool {
             }
             "list" => self
                 .store
-                .list()
+                .list_for_owner(self.owner.as_deref())
                 .await
                 .map(|jobs| json!({"jobs": jobs}))
                 .map_err(|e| e.to_string()),
@@ -107,11 +134,18 @@ impl Tool for CronjobTool {
                     name: "cronjob".into(),
                     reason: "id required".into(),
                 })?;
-                self.store
-                    .remove(id)
-                    .await
-                    .map(|r| json!({"removed": r}))
-                    .map_err(|e| e.to_string())
+                match self.owns(id).await {
+                    Err(e) => Err(e),
+                    // Report "not found" rather than "not yours": whether an id
+                    // exists in someone else's account isn't ours to disclose.
+                    Ok(false) => Ok(json!({"removed": false})),
+                    Ok(true) => self
+                        .store
+                        .remove(id)
+                        .await
+                        .map(|r| json!({"removed": r}))
+                        .map_err(|e| e.to_string()),
+                }
             }
             "pause" | "resume" => {
                 let id = Self::s(&args, "id").ok_or_else(|| ToolError::InvalidArgs {
@@ -119,11 +153,16 @@ impl Tool for CronjobTool {
                     reason: "id required".into(),
                 })?;
                 let on = action == "resume";
-                self.store
-                    .set_enabled(id, on)
-                    .await
-                    .map(|r| json!({"updated": r, "enabled": on}))
-                    .map_err(|e| e.to_string())
+                match self.owns(id).await {
+                    Err(e) => Err(e),
+                    Ok(false) => Ok(json!({"updated": false, "enabled": on})),
+                    Ok(true) => self
+                        .store
+                        .set_enabled(id, on)
+                        .await
+                        .map(|r| json!({"updated": r, "enabled": on}))
+                        .map_err(|e| e.to_string()),
+                }
             }
             other => Err(format!("unknown action `{other}`")),
         };
@@ -202,4 +241,70 @@ mod tests {
 
         let _ = std::fs::remove_file(&p);
     }
+    #[tokio::test]
+    async fn one_owner_can_neither_see_nor_touch_anothers_jobs() {
+        let p = tmp();
+        let store: Arc<dyn JobStore> = Arc::new(FileJobStore::open(&p).unwrap());
+        let alice = CronjobTool::for_owner(store.clone(), "alice");
+        let bob = CronjobTool::for_owner(store.clone(), "bob");
+        let mut w = default_world(".");
+
+        let made = alice
+            .invoke(
+                json!({"action":"create","name":"a","schedule":"daily 08:00","prompt":"p"}),
+                &mut w,
+            )
+            .await
+            .unwrap();
+        let id = made.content["created"].as_str().unwrap().to_string();
+
+        // Bob's list is empty even though the store holds Alice's job.
+        let seen = bob.invoke(json!({"action":"list"}), &mut w).await.unwrap();
+        assert!(seen.content["jobs"].as_array().unwrap().is_empty());
+        assert_eq!(store.list().await.unwrap().len(), 1);
+
+        // And knowing the id doesn't help him.
+        let killed = bob
+            .invoke(json!({"action":"remove","id": id.clone()}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(killed.content["removed"], json!(false));
+        let paused = bob
+            .invoke(json!({"action":"pause","id": id.clone()}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(paused.content["updated"], json!(false));
+        assert!(store.get(&id).await.unwrap().unwrap().enabled, "still Alice's, still running");
+
+        // Alice still owns it.
+        let hers = alice.invoke(json!({"action":"list"}), &mut w).await.unwrap();
+        assert_eq!(hers.content["jobs"].as_array().unwrap().len(), 1);
+        assert!(alice.invoke(json!({"action":"remove","id": id}), &mut w).await.unwrap().content["removed"] == json!(true));
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[tokio::test]
+    async fn the_single_user_default_stays_unowned() {
+        let p = tmp();
+        let store: Arc<dyn JobStore> = Arc::new(FileJobStore::open(&p).unwrap());
+        let tool = CronjobTool::new(store.clone());
+        let mut w = default_world(".");
+        tool.invoke(
+            json!({"action":"create","name":"a","schedule":"every 5m","prompt":"p"}),
+            &mut w,
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.list().await.unwrap()[0].owner, None);
+        assert_eq!(
+            tool.invoke(json!({"action":"list"}), &mut w).await.unwrap().content["jobs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
 }
