@@ -636,6 +636,9 @@ fn gemini_response_format(
 struct GeminiStreamState<S> {
     upstream: S,
     buf: String,
+    /// Bytes of a character split across a chunk boundary. See
+    /// [`crate::push_utf8_chunk`].
+    tail: Vec<u8>,
     eof: bool,
     pending: VecDeque<Result<ModelDelta, ModelError>>,
     raw_parts: Vec<JsonValue>,
@@ -660,6 +663,7 @@ where
     let init = GeminiStreamState {
         upstream: stream,
         buf: String::new(),
+        tail: Vec::new(),
         eof: false,
         pending: VecDeque::new(),
         raw_parts: Vec::new(),

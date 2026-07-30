@@ -42,3 +42,80 @@ pub use gemini::*;
 pub use mock::*;
 pub use openai_compat::*;
 pub use router::*;
+
+/// Append an HTTP chunk to a text buffer without losing a character that
+/// straddles the boundary.
+///
+/// HTTP chunks land wherever the network puts them. With CJK that is usually
+/// inside a character — three bytes each means two of every three split points
+/// fall within one. Decoding a chunk on its own therefore fails routinely, and
+/// the obvious `if let Ok(s) = from_utf8(&bytes)` discards the WHOLE chunk when
+/// it does: not a mangled glyph, every byte of it, with nothing logged.
+///
+/// `tail` carries the incomplete trailing bytes to the next call.
+pub fn push_utf8_chunk(buf: &mut String, tail: &mut Vec<u8>, bytes: &[u8]) {
+    let mut pending = std::mem::take(tail);
+    pending.extend_from_slice(bytes);
+    match std::str::from_utf8(&pending) {
+        Ok(s) => buf.push_str(s),
+        Err(e) => {
+            let good = e.valid_up_to();
+            // Safety: `valid_up_to` is by definition the length of the valid prefix.
+            buf.push_str(unsafe { std::str::from_utf8_unchecked(&pending[..good]) });
+            match e.error_len() {
+                // Truncated at the end — the rest of this character is still in
+                // flight. Hold it for the next chunk.
+                None => tail.extend_from_slice(&pending[good..]),
+                // Genuinely invalid bytes: skip them rather than stall forever.
+                Some(bad) => {
+                    tracing::warn!(bytes = bad, "invalid utf-8 in stream; skipping");
+                    tail.extend_from_slice(&pending[good + bad..]);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod utf8_chunk_tests {
+    use super::push_utf8_chunk;
+
+    #[test]
+    fn a_character_split_across_chunks_survives() {
+        let text = "你好世界情绪: 开心";
+        let bytes = text.as_bytes();
+        // Every possible split, including the two-in-three that land inside a
+        // character.
+        for at in 0..=bytes.len() {
+            let mut buf = String::new();
+            let mut tail = Vec::new();
+            push_utf8_chunk(&mut buf, &mut tail, &bytes[..at]);
+            push_utf8_chunk(&mut buf, &mut tail, &bytes[at..]);
+            assert_eq!(buf, text, "split at byte {at}");
+            assert!(tail.is_empty(), "nothing left over at {at}");
+        }
+    }
+
+    #[test]
+    fn one_byte_at_a_time_still_arrives_whole() {
+        let text = "情绪: 开心 — mixed ascii and 中文";
+        let mut buf = String::new();
+        let mut tail = Vec::new();
+        for b in text.as_bytes() {
+            push_utf8_chunk(&mut buf, &mut tail, &[*b]);
+        }
+        assert_eq!(buf, text);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn genuinely_invalid_bytes_are_skipped_rather_than_stalling_the_stream() {
+        let mut buf = String::new();
+        let mut tail = Vec::new();
+        // 0xFF can never start a character.
+        push_utf8_chunk(&mut buf, &mut tail, b"ok\xff");
+        push_utf8_chunk(&mut buf, &mut tail, "后面还有".as_bytes());
+        assert!(buf.starts_with("ok"), "got {buf:?}");
+        assert!(buf.ends_with("后面还有"), "the stream carries on: {buf:?}");
+    }
+}

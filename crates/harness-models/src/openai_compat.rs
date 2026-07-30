@@ -648,6 +648,10 @@ where
     struct State<S> {
         upstream: S,
         buf: String,
+        /// Bytes of a character split across chunk boundaries, carried to the
+        /// next chunk. HTTP chunks land wherever the network puts them, which
+        /// is regularly in the middle of a 3-byte CJK character.
+        tail: Vec<u8>,
         done: bool,
         // Partial JSON args for in-flight tool calls, keyed by call index.
         partial_tool_args: std::collections::HashMap<u32, ToolCallAccumPriv>,
@@ -659,6 +663,7 @@ where
     let init = State {
         upstream: stream,
         buf: String::new(),
+        tail: Vec::new(),
         done: false,
         partial_tool_args: std::collections::HashMap::new(),
         pending: std::collections::VecDeque::new(),
@@ -704,9 +709,7 @@ where
             // Need more bytes.
             match state.upstream.next().await {
                 Some(Ok(bytes)) => {
-                    if let Ok(s) = std::str::from_utf8(&bytes) {
-                        state.buf.push_str(s);
-                    }
+                    crate::push_utf8_chunk(&mut state.buf, &mut state.tail, &bytes);
                 }
                 Some(Err(e)) => {
                     state.done = true;
@@ -1093,6 +1096,46 @@ mod tests {
     use super::*;
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
+
+    /// Feed one SSE payload through the parser, split at `at` BYTES —
+    /// deliberately including splits that land inside a multi-byte character.
+    async fn text_through_split_stream(payload: &str, at: usize) -> String {
+        use futures::StreamExt;
+        let b = payload.as_bytes();
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![
+            Ok(bytes::Bytes::copy_from_slice(&b[..at])),
+            Ok(bytes::Bytes::copy_from_slice(&b[at..])),
+        ];
+        let stream = futures::stream::iter(chunks);
+        let deltas = parse_sse_stream(stream);
+        let mut deltas = Box::pin(deltas);
+        let mut out = String::new();
+        while let Some(Ok(d)) = deltas.next().await {
+            if let ModelDelta::Text(t) = d {
+                out.push_str(&t);
+            }
+        }
+        out
+    }
+
+    /// An HTTP chunk can end mid-character, and with Chinese it usually does:
+    /// three bytes per character means two of every three split points land
+    /// inside one. This used to `if let Ok(s) = from_utf8(&bytes)` and drop the
+    /// WHOLE chunk when that happened — not a mangled glyph, every byte of it,
+    /// silently. Replies came back missing spans of themselves; one lost the
+    /// leading character of its own trailing `情绪:` tag, which then failed to
+    /// parse and reached the user as "绪: 开心".
+    #[tokio::test]
+    async fn a_chunk_that_ends_mid_character_loses_nothing() {
+        let want = "你好世界情绪: 开心";
+        let payload =
+            format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{want}\"}}}}]}}\n\ndata: [DONE]\n\n");
+
+        for at in 1..payload.len() {
+            let got = text_through_split_stream(&payload, at).await;
+            assert_eq!(got, want, "split at byte {at} of {}", payload.len());
+        }
+    }
 
     #[test]
     fn parses_response_with_null_tool_calls() {
