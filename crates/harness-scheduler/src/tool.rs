@@ -274,12 +274,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(paused.content["updated"], json!(false));
-        assert!(store.get(&id).await.unwrap().unwrap().enabled, "still Alice's, still running");
+        assert!(
+            store.get(&id).await.unwrap().unwrap().enabled,
+            "still Alice's, still running"
+        );
 
         // Alice still owns it.
-        let hers = alice.invoke(json!({"action":"list"}), &mut w).await.unwrap();
+        let hers = alice
+            .invoke(json!({"action":"list"}), &mut w)
+            .await
+            .unwrap();
         assert_eq!(hers.content["jobs"].as_array().unwrap().len(), 1);
-        assert!(alice.invoke(json!({"action":"remove","id": id}), &mut w).await.unwrap().content["removed"] == json!(true));
+        assert!(
+            alice
+                .invoke(json!({"action":"remove","id": id}), &mut w)
+                .await
+                .unwrap()
+                .content["removed"]
+                == json!(true)
+        );
 
         let _ = std::fs::remove_file(&p);
     }
@@ -298,7 +311,10 @@ mod tests {
         .unwrap();
         assert_eq!(store.list().await.unwrap()[0].owner, None);
         assert_eq!(
-            tool.invoke(json!({"action":"list"}), &mut w).await.unwrap().content["jobs"]
+            tool.invoke(json!({"action":"list"}), &mut w)
+                .await
+                .unwrap()
+                .content["jobs"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -306,5 +322,4 @@ mod tests {
         );
         let _ = std::fs::remove_file(&p);
     }
-
 }

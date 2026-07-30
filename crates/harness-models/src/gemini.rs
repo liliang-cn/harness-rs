@@ -702,20 +702,20 @@ where
             }
             match state.upstream.next().await {
                 Some(Ok(bytes)) => {
-                    if let Ok(s) = std::str::from_utf8(&bytes) {
-                        // Gemini ships SSE with CRLF line endings (`\r\n\r\n`
-                        // between events). Normalise to LF so the rest of
-                        // this parser can treat events as plain `\n\n`-
-                        // delimited.
-                        if s.contains('\r') {
-                            state
-                                .buf
-                                .push_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
-                        } else {
-                            state.buf.push_str(s);
-                        }
+                    // Decode into a scratch buffer first: a chunk can end
+                    // inside a character, and dropping it whole (the old
+                    // `if let Ok(s)`) silently ate spans of CJK replies.
+                    let mut decoded = String::new();
+                    crate::push_utf8_chunk(&mut decoded, &mut state.tail, &bytes);
+                    // Gemini ships SSE with CRLF line endings (`\r\n\r\n`
+                    // between events). Normalise to LF so the rest of this
+                    // parser can treat events as plain `\n\n`-delimited.
+                    if decoded.contains('\r') {
+                        state
+                            .buf
+                            .push_str(&decoded.replace("\r\n", "\n").replace('\r', "\n"));
                     } else {
-                        tracing::warn!(len = bytes.len(), "gemini bytes chunk not utf-8");
+                        state.buf.push_str(&decoded);
                     }
                 }
                 Some(Err(e)) => {
