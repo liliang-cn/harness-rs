@@ -15,6 +15,8 @@ pub mod otel;
 pub mod profile_guide;
 pub mod recall_layer;
 pub mod registry;
+pub mod acceptance;
+pub use acceptance::{Acceptance, FilesExist, NonEmptyAnswer, Verdict};
 pub mod replay;
 pub mod subagent;
 pub mod telemetry;
@@ -111,6 +113,9 @@ pub enum Outcome {
         iters: u32,
         tools_called: u32,
         usage: harness_core::Usage,
+        /// What the acceptance checks said. `None` means nothing was asked —
+        /// so "the model stopped" is all this outcome claims.
+        verified: Option<Verdict>,
     },
     /// Policy budget exhausted before the model stopped requesting tools.
     /// Carries everything we know so the caller can recover partial work
@@ -167,6 +172,14 @@ pub struct AgentLoop<M: Model> {
     pub stuck: StuckPolicy,
     /// Context-compaction hysteresis. See [`CompactPolicy`].
     pub compaction: CompactPolicy,
+    /// Conditions the run must satisfy before the loop reports success. The
+    /// model stopping is evidence it *believes* it is finished; these say
+    /// whether it is. See [`acceptance`].
+    pub acceptance: Vec<Arc<dyn Acceptance>>,
+    /// How many times a failed acceptance is handed back to the model before
+    /// the loop gives up and reports what there is. One is usually enough: a
+    /// model that ignores the first correction rarely takes the second.
+    pub acceptance_retries: u32,
     /// System instruction injected into every run's `Context.system` (unless the
     /// built context already carries its own). Set via [`with_system`](Self::with_system).
     pub system: Vec<Block>,
@@ -188,6 +201,10 @@ impl<M: Model> AgentLoop<M> {
             learning: None,
             stuck: StuckPolicy::default(),
             compaction: CompactPolicy::default(),
+            // On by default, because the failure it catches is invisible: a
+            // turn that produced nothing is reported as a turn that finished.
+            acceptance: vec![Arc::new(acceptance::NonEmptyAnswer)],
+            acceptance_retries: 1,
             system: Vec::new(),
         }
     }
@@ -219,6 +236,23 @@ impl<M: Model> AgentLoop<M> {
     /// each fragment as it arrives; the rest of the loop is unchanged.
     pub fn with_streaming(mut self, enable: bool) -> Self {
         self.streaming = enable;
+        self
+    }
+
+    /// Add a condition the run must satisfy before it can report success.
+    pub fn with_acceptance(mut self, a: Arc<dyn Acceptance>) -> Self {
+        self.acceptance.push(a);
+        self
+    }
+
+    /// Replace the acceptance set outright (including the default).
+    pub fn with_acceptance_set(mut self, set: Vec<Arc<dyn Acceptance>>) -> Self {
+        self.acceptance = set;
+        self
+    }
+
+    pub fn with_acceptance_retries(mut self, n: u32) -> Self {
+        self.acceptance_retries = n;
         self
     }
 
@@ -573,6 +607,8 @@ impl<M: Model> AgentLoop<M> {
         // how many consecutive rounds have repeated it.
         let mut last_fingerprint: Option<String> = None;
         let mut repeat_count: u32 = 0;
+        // How many times the model has stopped mid-work with nothing to show.
+        let mut acceptance_retries_left = self.acceptance_retries;
 
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
@@ -665,12 +701,60 @@ impl<M: Model> AgentLoop<M> {
             }
 
             if out.tool_calls.is_empty() {
+                // The model stopping is its opinion that the work is done.
+                // Before taking it as fact, run whatever the caller said
+                // "done" actually means. A failure goes back as an instruction
+                // and the loop carries on; the retry cap keeps a model that
+                // ignores corrections from eating the budget.
+                let mut verdict: Option<Verdict> = None;
+                if !self.acceptance.is_empty() {
+                    // Record this turn first — the checks read the transcript.
+                    let mut probe = ctx.clone();
+                    probe.history.push(Turn {
+                        role: TurnRole::Assistant,
+                        blocks: out
+                            .text
+                            .as_deref()
+                            .filter(|t| !t.trim().is_empty())
+                            .map(|t| vec![Block::Text(t.to_string())])
+                            .unwrap_or_default(),
+                    });
+                    for check in &self.acceptance {
+                        let v = check.check(&probe, world).await;
+                        if !v.passed {
+                            tracing::info!(
+                                check = check.name(),
+                                reason = %v.reason,
+                                "acceptance failed"
+                            );
+                            verdict = Some(v);
+                            break;
+                        }
+                    }
+                    // Everything passed. Say so explicitly: "checked, and it
+                    // holds up" is a different claim from "nobody looked", and
+                    // the host has to be able to tell them apart.
+                    verdict = verdict.or_else(|| Some(Verdict::passed()));
+                }
+
+                if let Some(v) = verdict.clone().filter(|v| !v.passed) {
+                    if acceptance_retries_left > 0 && iter + 1 < ctx.policy.max_iters {
+                        acceptance_retries_left -= 1;
+                        ctx.history.push(Turn {
+                            role: TurnRole::User,
+                            blocks: vec![Block::Text(v.reason)],
+                        });
+                        continue;
+                    }
+                }
+
                 self.hooks.fire(&Event::TaskCompleted, world);
                 self.hooks.fire(&Event::SessionEnd, world);
                 self.run_learning_review(&ctx, world, tools_called).await;
                 // Thinking models (e.g. Qwen3 via Ollama) sometimes emit the
                 // whole answer into the reasoning channel and leave `text`
-                // empty. Fall back to the reasoning so the turn isn't blank.
+                // empty. Fall back to the reasoning so the turn isn't blank —
+                // but `verified` says whether anyone agreed it was done.
                 let text = out
                     .text
                     .filter(|t| !t.trim().is_empty())
@@ -680,6 +764,7 @@ impl<M: Model> AgentLoop<M> {
                     iters: iter + 1,
                     tools_called,
                     usage: total_usage,
+                    verified: verdict,
                 });
             }
 
