@@ -26,6 +26,12 @@ pub struct Job {
     /// Channel-specific recipient (email address, chat id, …).
     #[serde(default)]
     pub target: Option<String>,
+    /// Who this job belongs to, in a host that has more than one user. `None`
+    /// means unowned — the single-user default. A multi-tenant host stamps its
+    /// user id here and scopes every read through `list_for_owner`, so one
+    /// user's agent can neither see nor cancel another's jobs.
+    #[serde(default)]
+    pub owner: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -50,6 +56,7 @@ impl Job {
             prompt: prompt.into(),
             channel: channel.into(),
             target: None,
+            owner: None,
             enabled: true,
             last_run_ms: None,
             next_run_ms: None,
@@ -63,6 +70,15 @@ impl Job {
     pub fn with_next_run(mut self, ms: Option<i64>) -> Self {
         self.next_run_ms = ms;
         self
+    }
+    pub fn with_owner(mut self, owner: Option<String>) -> Self {
+        self.owner = owner;
+        self
+    }
+    /// Whether this job is visible to `owner`. An unowned job belongs to the
+    /// single-user world and is visible to an unowned caller only.
+    pub fn owned_by(&self, owner: Option<&str>) -> bool {
+        self.owner.as_deref() == owner
     }
 }
 
@@ -85,7 +101,21 @@ pub enum JobError {
 #[async_trait]
 pub trait JobStore: Send + Sync + 'static {
     async fn add(&self, job: &Job) -> Result<(), JobError>;
+    /// Every job in the store, across owners. The scheduler wants this; a
+    /// user-facing caller almost always wants `list_for_owner` instead.
     async fn list(&self) -> Result<Vec<Job>, JobError>;
+
+    /// Only the jobs belonging to `owner`. The default filters `list()`, which
+    /// is correct for any backend; a database-backed store should override it
+    /// with a WHERE clause.
+    async fn list_for_owner(&self, owner: Option<&str>) -> Result<Vec<Job>, JobError> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|j| j.owned_by(owner))
+            .collect())
+    }
     async fn get(&self, id: &str) -> Result<Option<Job>, JobError>;
     async fn remove(&self, id: &str) -> Result<bool, JobError>;
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<bool, JobError>;
