@@ -76,6 +76,28 @@ pub fn push_utf8_chunk(buf: &mut String, tail: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
+/// The question a grounded search asks on the caller's behalf.
+///
+/// Shared so every provider phrases it the same way: facts with their numbers
+/// and dates, the source URLs, and an explicit "I could not find it" instead of
+/// a guess — a search that quietly invents a number is worse than no search.
+pub fn grounding_prompt(query: &str) -> String {
+    format!(
+        "Search the web and answer: {query}\n\nGive the facts with their numbers and dates, \
+         say when the data is from, and list the source URLs. If you cannot find it, say so \
+         plainly — do not guess."
+    )
+}
+
+#[doc(hidden)]
+pub fn __grounding_task(query: &str) -> harness_core::Task {
+    harness_core::Task {
+        description: format!("web search: {query}"),
+        source: None,
+        deadline: None,
+    }
+}
+
 #[cfg(test)]
 mod utf8_chunk_tests {
     use super::push_utf8_chunk;

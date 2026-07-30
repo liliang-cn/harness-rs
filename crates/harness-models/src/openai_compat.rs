@@ -575,7 +575,14 @@ impl Model for OpenAiCompat {
             output_cost_usd_per_million_tokens: None,
             supports_tool_use: true,
             supports_streaming: true,
+            supports_web_grounding: self.grounding_tool().is_some(),
         }
+    }
+
+    /// Ask the provider to search, with its built-in tool and nothing else.
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        let tool = self.grounding_tool()?;
+        Some(self.grounded_answer(tool, query).await)
     }
 
     async fn stream(
@@ -1091,6 +1098,66 @@ fn push_block_text(buf: &mut String, b: &Block) {
     }
 }
 
+impl OpenAiCompat {
+    /// The provider's built-in search tool, as it wants to be declared — or
+    /// `None` when this endpoint serves a model that has none.
+    ///
+    /// Keyed on the model id, not the host: OpenAI-compatible gateways serve
+    /// everyone's models, so `api.example.com` may well be answering for
+    /// `gemini-3.6-flash`.
+    fn grounding_tool(&self) -> Option<serde_json::Value> {
+        if self.cfg.model.to_ascii_lowercase().starts_with("gemini") {
+            Some(serde_json::json!({ "google_search": {} }))
+        } else {
+            None
+        }
+    }
+
+    /// One bare request: no function tools, no history, no system prompt.
+    ///
+    /// Providers refuse a built-in tool in the same call as function
+    /// declarations — Gemini answers *"Please enable
+    /// tool_config.include_server_side_tool_invocations"* — and the gateways in
+    /// front of them generally drop that switch, so the only shape that works
+    /// everywhere is this one.
+    async fn grounded_answer(
+        &self,
+        tool: serde_json::Value,
+        query: &str,
+    ) -> Result<String, ModelError> {
+        let body = serde_json::json!({
+            "model": self.cfg.model,
+            "messages": [{ "role": "user", "content": crate::grounding_prompt(query) }],
+            "tools": [tool],
+        });
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
+        let mut req = self.client.post(url).json(&body);
+        if !self.cfg.api_key.is_empty() {
+            req = req.bearer_auth(&self.cfg.api_key);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ModelError::Transport(e.to_string()))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ModelError::Invalid(e.to_string()))?;
+        if !status.is_success() {
+            let msg = json["error"]["message"].as_str().unwrap_or("");
+            return Err(ModelError::Invalid(format!("{status}: {msg}")));
+        }
+        Ok(json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1428,5 +1495,36 @@ mod tests {
         assert_eq!(audio_format("audio/webm"), "webm");
         assert_eq!(audio_format("audio/webm;codecs=opus"), "webm");
         assert_eq!(audio_format("audio/OGG"), "ogg");
+    }
+
+    #[test]
+    fn grounding_is_offered_only_where_it_exists() {
+        let m = |id: &str| {
+            OpenAiCompat::new(LlmConfig {
+                name: "t".into(),
+                base_url: "https://example.test/v1".into(),
+                api_key: "k".into(),
+                model: id.into(),
+            })
+        };
+        for id in ["gemini-3.6-flash-high", "Gemini-2.5-Pro", "gemini"] {
+            assert!(m(id).grounding_tool().is_some(), "{id}");
+            assert!(m(id).info().supports_web_grounding, "{id}");
+        }
+        for id in ["gpt-5.5", "deepseek-v4", "claude-opus-5", "llama3"] {
+            assert!(m(id).grounding_tool().is_none(), "{id}");
+            assert!(!m(id).info().supports_web_grounding, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_grounding_prompt_forbids_guessing() {
+        let p = crate::grounding_prompt("gold price");
+        assert!(p.contains("gold price"));
+        assert!(p.contains("source URLs"), "sources are the point");
+        assert!(
+            p.contains("do not guess"),
+            "an invented number is worse than no answer"
+        );
     }
 }
