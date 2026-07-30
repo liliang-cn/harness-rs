@@ -3,6 +3,31 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.36
+
+### Added
+
+- **`Model::search_web(query)` — ask the provider to search with its own built-in tool.** Returns
+  `None` by default, meaning "no built-in search, fall back to an index". Providers that ship one
+  are far better at it than any scrape: a single request comes back with the numbers, the date and
+  the source URLs.
+- **`ModelInfo::supports_web_grounding`**, alongside `supports_tool_use` — server-side search the
+  provider runs, as distinct from a tool we hand it.
+- **`OpenAiCompat` implements it for `gemini-*` model ids**, matched on the model rather than the
+  host: OpenAI-compatible gateways serve everyone's models, so `api.example.com` may well be
+  answering for `gemini-3.6-flash`. `GeminiNative` implements it too, though there it is a
+  convenience — the native path already attaches `googleSearch` to every request.
+
+The awkward part is hidden rather than documented. These providers refuse a built-in tool in the
+same request as function declarations (Gemini: *"Please enable
+`tool_config.include_server_side_tool_invocations` to use Built-in tools with Function calling"*),
+and OpenAI-compatible gateways in front of them generally drop that switch, so grounding needs its
+own tool-free request. Every caller having to rediscover that is how you end up with what this
+release replaces: applications reaching around the `Model` abstraction entirely — scraping
+DuckDuckGo HTML (`harness-rs-tools-web` still carries an `is_ddg_anomaly()` helper, which is what
+losing that fight looks like), or pulling a decrypted API key out of a database to hand-roll the
+request.
+
 ## 0.0.35
 
 ### Fixed
