@@ -217,6 +217,7 @@ impl Model for MockModel {
             output_cost_usd_per_million_tokens: Some(0.0),
             supports_tool_use: true,
             supports_streaming: false,
+            supports_web_grounding: false,
         }
     }
 }

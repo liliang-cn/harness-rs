@@ -599,7 +599,30 @@ impl Model for GeminiNative {
             output_cost_usd_per_million_tokens: None,
             supports_tool_use: true,
             supports_streaming: true,
+            supports_web_grounding: self.enable_search_grounding,
         }
+    }
+
+    /// On the native API this is a convenience, not a necessity: grounding is
+    /// already attached to every request (see `mixed_tools` above), so the model
+    /// can search mid-loop. This exists so a caller holding a `dyn Model` can
+    /// ask for a search without knowing which provider it got.
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        if !self.enable_search_grounding {
+            return None;
+        }
+        // No tools on this context, so `mixed_tools` is false and the request
+        // carries googleSearch alone — the shape every provider accepts.
+        let mut ctx = Context::new(crate::__grounding_task(query));
+        ctx.history.push(harness_core::Turn {
+            role: harness_core::TurnRole::User,
+            blocks: vec![harness_core::Block::Text(crate::grounding_prompt(query))],
+        });
+        Some(
+            self.complete(&ctx)
+                .await
+                .map(|out| out.text.unwrap_or_default()),
+        )
     }
 }
 

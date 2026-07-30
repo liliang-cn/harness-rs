@@ -17,6 +17,12 @@ pub struct ModelInfo {
     pub output_cost_usd_per_million_tokens: Option<f64>,
     pub supports_tool_use: bool,
     pub supports_streaming: bool,
+    /// Whether the provider will answer from live web results using its own
+    /// built-in search (Gemini's `google_search`, and friends). Distinct from
+    /// `supports_tool_use`: this is search the provider runs server-side, not a
+    /// tool we hand it.
+    #[serde(default)]
+    pub supports_web_grounding: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +92,26 @@ pub enum ModelDelta {
 #[async_trait]
 pub trait Model: Send + Sync + 'static {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError>;
+
+    /// Answer `query` from live web results, using the provider's OWN search.
+    ///
+    /// Returns `None` when the provider has no such thing, which is the default
+    /// — callers fall back to a search index. The answer comes back as prose
+    /// with its sources, not as a result list, because that is what these
+    /// providers return.
+    ///
+    /// Why it is a separate call rather than a tool the loop can pick: the
+    /// providers that offer built-in search generally refuse to accept it in
+    /// the same request as function declarations. Gemini answers *"Please
+    /// enable tool_config.include_server_side_tool_invocations to use Built-in
+    /// tools with Function calling"*, and OpenAI-compatible gateways in front
+    /// of it usually drop that switch. So grounding has to happen in its own
+    /// tool-free request, and hiding that here keeps every caller from
+    /// rediscovering it.
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        let _ = query;
+        None
+    }
 
     /// Streaming is optional; default implementation falls back to `complete`.
     async fn stream(
@@ -163,6 +189,7 @@ mod arc_model_tests {
                 output_cost_usd_per_million_tokens: None,
                 supports_tool_use: false,
                 supports_streaming: false,
+                supports_web_grounding: false,
             }
         }
     }

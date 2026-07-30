@@ -314,7 +314,8 @@ impl Model for AnthropicNative {
             input_cost_usd_per_million_tokens: None,
             output_cost_usd_per_million_tokens: None,
             supports_tool_use: true,
-            supports_streaming: false, // not wired yet
+            supports_streaming: false,
+            supports_web_grounding: false, // not wired yet
         }
     }
 }

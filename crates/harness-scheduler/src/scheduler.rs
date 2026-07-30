@@ -163,6 +163,7 @@ mod tests {
             output_cost_usd_per_million_tokens: None,
             supports_tool_use: false,
             supports_streaming: false,
+            supports_web_grounding: false,
         }
     }
 
