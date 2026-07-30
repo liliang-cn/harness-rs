@@ -58,6 +58,55 @@ pub enum PermissionMode {
     AutoApprove,
 }
 
+/// `HARNESS_YOLO=1` — run without asking.
+///
+/// The mode already existed; what didn't was one agreed way to switch it on,
+/// so every host invented its own env var with its own spelling and its own
+/// idea of what it waives. One definition, read once — a policy this
+/// consequential must not change under a running turn.
+///
+/// What it means: no interactive gate. It is NOT a licence to skip a host's
+/// hard refusals (catastrophic commands, path jails, SSRF guards); those exist
+/// because nobody would knowingly approve them either.
+pub fn yolo() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = matches!(
+            std::env::var("HARNESS_YOLO").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes") | Ok("yolo")
+        );
+        if on {
+            tracing::warn!("HARNESS_YOLO=1 — tools run without asking");
+        }
+        on
+    })
+}
+
+impl PermissionMode {
+    /// Mode from the environment: `HARNESS_YOLO=1` wins outright, else
+    /// `HARNESS_PERMISSION_MODE=plan|auto|default`, else `Default`.
+    ///
+    /// An unrecognised value is `Default` (the safe end) and says so, rather
+    /// than being read as permission by a typo.
+    pub fn from_env() -> Self {
+        if yolo() {
+            return PermissionMode::AutoApprove;
+        }
+        match std::env::var("HARNESS_PERMISSION_MODE").as_deref().map(str::trim) {
+            Ok("plan") => PermissionMode::Plan,
+            Ok("auto") | Ok("auto-approve") | Ok("autoapprove") => PermissionMode::AutoApprove,
+            Ok("default") | Err(_) => PermissionMode::Default,
+            Ok(other) => {
+                tracing::warn!(
+                    value = other,
+                    "HARNESS_PERMISSION_MODE not recognised — falling back to Default"
+                );
+                PermissionMode::Default
+            }
+        }
+    }
+}
+
 /// Declarative rules consumed by `PermissionHook`.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionRules {
@@ -247,5 +296,39 @@ mod tests {
             hook.decide(&mk_action("dangerous")),
             HookOutcome::Deny { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod env_mode_tests {
+    use super::*;
+
+    // These read process-global env, so they run as one test rather than
+    // racing each other.
+    #[test]
+    fn the_mode_comes_from_the_environment_and_a_typo_is_not_permission() {
+        // Unset → the safe end.
+        unsafe {
+            std::env::remove_var("HARNESS_PERMISSION_MODE");
+        }
+        assert_eq!(PermissionMode::from_env(), PermissionMode::Default);
+
+        for (val, want) in [
+            ("plan", PermissionMode::Plan),
+            ("auto", PermissionMode::AutoApprove),
+            ("auto-approve", PermissionMode::AutoApprove),
+            ("default", PermissionMode::Default),
+            // A typo must not read as permission.
+            ("aut0", PermissionMode::Default),
+            ("YOLO", PermissionMode::Default),
+        ] {
+            unsafe {
+                std::env::set_var("HARNESS_PERMISSION_MODE", val);
+            }
+            assert_eq!(PermissionMode::from_env(), want, "for {val:?}");
+        }
+        unsafe {
+            std::env::remove_var("HARNESS_PERMISSION_MODE");
+        }
     }
 }
