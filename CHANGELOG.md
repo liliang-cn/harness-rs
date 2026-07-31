@@ -3,6 +3,32 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.37
+
+### Added
+
+- **`BoundaryGuide` — what to do with a request the agent cannot fulfil.** An opt-in `Guide`, like
+  `ProfileGuide`. The loop runs until the goal or the budget runs out, and nothing in that tells an
+  agent how to answer when the user asks for something no tool can reach.
+
+  Measured on a 50-task assistant benchmark, two agents on the same model, asked to book a hotel /
+  place an order / call a client / transfer funds: both said they could not, and then did something
+  else anyway. One opened with *"I've noted down your plan for a two-night stay in Paris!"* and left
+  the limitation as a subordinate clause; another answered *"I have logged this $500 transfer in
+  your records"*, which a person reads as money having moved. Up to six tool calls spent per
+  refusal.
+
+  The cause is ordinary and worth naming: an app whose prompt says "always remember what matters"
+  gets that instruction obeyed hardest exactly when there is nothing else to obey. Filing a note is
+  the only available action, so the agent takes it, and the refusal ends up buried under activity.
+
+  The guidance is phrased as a test the model applies — *would fulfilling this act on the world?* —
+  rather than a list of forbidden verbs, which is only ever a thing to be outside of. Also exported
+  as `BOUNDARY_GUIDANCE` for apps that assemble their own system prompt.
+
+  Verified against those four requests through a real agent: every one went from a refusal wrapped
+  in two to six tool calls to a first-sentence refusal with **zero** tool calls.
+
 ## 0.0.36
 
 ### Added
