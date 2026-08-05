@@ -25,7 +25,12 @@ pub struct Query {
 }
 
 /// One predicate against a dimension — never against a raw column.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+///
+/// `PartialEq` because callers that *build* filters — grounding a question into
+/// a time window, replaying a recon case — have to be able to assert on the
+/// filter they produced. A predicate that can only be compared by rendering it
+/// to SQL is a predicate whose tests all go through the compiler.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Filter {
     pub dimension: String,
     /// `=` | `!=` | `>` | `>=` | `<` | `<=` | `in`
