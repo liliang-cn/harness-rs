@@ -1,0 +1,22 @@
+[package]
+name = "harness-rs-recon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reconciliation for a semantic model: pin each metric to a hand-written control query or a figure the customer publishes, and report VERIFIED / SELF-CONSISTENT / PARTIAL honestly."
+
+keywords   = ["bi", "verification", "semantic-layer", "reconciliation", "harness"]
+categories = ["database", "development-tools"]
+
+[lib]
+name = "harness_recon"
+path = "src/lib.rs"
+
+[dependencies]
+harness-rs-semantic = { path = "../harness-semantic" }
+serde      = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror  = { workspace = true }
