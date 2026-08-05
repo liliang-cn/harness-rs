@@ -1,0 +1,23 @@
+[package]
+name = "harness-rs-semantic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "A governed semantic layer for harness-rs: entities, joins, dimensions and metrics, plus a compiler that turns \"this metric by these dimensions\" into fan-out/chasm-safe SQL. Speaks no LLM, opens no database — it only produces SQL strings."
+
+keywords   = ["sql", "semantic-layer", "bi", "metrics", "harness"]
+categories = ["database", "development-tools"]
+readme     = "README.md"
+
+[lib]
+name = "harness_semantic"
+path = "src/lib.rs"
+
+[dependencies]
+serde      = { workspace = true }
+serde_yaml = { workspace = true }
+regex      = { workspace = true }
+thiserror  = { workspace = true }
