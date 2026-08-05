@@ -1,0 +1,3 @@
+[     183ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:43100/favicon.ico:0
+[   19132ms] TypeError: window.toggleTheme is not a function
+    at HTMLDivElement.onclick (http://localhost:43100/:495:98)

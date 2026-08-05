@@ -1,0 +1,32 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: DL
+      - generic [ref=e6]: DataLens
+      - generic [ref=e7]: BETA
+      - button "✕" [ref=e8] [cursor=pointer]
+    - generic [ref=e9]:
+      - generic [ref=e10]: 功能
+      - generic [ref=e11] [cursor=pointer]: AI 问数
+      - generic [ref=e16] [cursor=pointer]:
+        - generic [ref=e23]: 看板
+        - generic [ref=e24]: "0"
+      - generic [ref=e25] [cursor=pointer]:
+        - generic [ref=e31]: 数据源
+        - generic [ref=e32]: "13"
+      - generic [ref=e33]: 工作区
+    - generic [ref=e35]: gpt-5.6-terra
+  - generic [ref=e39]:
+    - generic [ref=e41]:
+      - generic [ref=e42]: AI 问数
+      - generic [ref=e43]: 选择工作区开始提问
+    - generic [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]: DL
+        - generic [ref=e48]: DataLens · 治理式 AI 数据助手
+        - generic [ref=e49]: 语义治理精确查数 · 不编造 · 不越权 · 全过程 Hash 链审计
+      - generic [ref=e51]:
+        - textbox "输入经营问题…" [ref=e52]
+        - button "发送" [disabled] [ref=e53]
+    - generic [ref=e57]: 就绪
+  - generic [ref=e60]: 对话历史

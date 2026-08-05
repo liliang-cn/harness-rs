@@ -1,0 +1,110 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: DL
+      - generic [ref=e6]: DataLens
+      - generic [ref=e7]: BETA
+      - button "✕" [ref=e8] [cursor=pointer]
+    - generic [ref=e9]:
+      - generic [ref=e10]: 功能
+      - generic [ref=e11] [cursor=pointer]: AI 问数
+      - generic [ref=e16] [cursor=pointer]:
+        - generic [ref=e23]: 看板
+        - generic [ref=e24]: "0"
+      - generic [ref=e25] [cursor=pointer]:
+        - generic [ref=e31]: 数据源
+        - generic [ref=e32]: "12"
+      - generic [ref=e33]: 工作区
+      - generic [ref=e34]:
+        - generic [ref=e142] [cursor=pointer]:
+          - generic [ref=e143]: 🛍
+          - generic [ref=e144]: 电商平台
+          - generic [ref=e145]: "43129"
+        - generic [ref=e146] [cursor=pointer]:
+          - generic [ref=e147]: 🏪
+          - generic [ref=e148]: 家电零售
+          - generic [ref=e149]: "43117"
+        - generic [ref=e150] [cursor=pointer]:
+          - generic [ref=e151]: 🛒
+          - generic [ref=e152]: 超市经营
+          - generic [ref=e153]: "43118"
+        - generic [ref=e154] [cursor=pointer]:
+          - generic [ref=e155]: 🍵
+          - generic [ref=e156]: 茶馆经营
+          - generic [ref=e157]: "43119"
+        - generic [ref=e158] [cursor=pointer]:
+          - generic [ref=e159]: 🏭
+          - generic [ref=e160]: 锻造公司
+          - generic [ref=e161]: "43120"
+        - generic [ref=e162] [cursor=pointer]:
+          - generic [ref=e163]: 🏨
+          - generic [ref=e164]: 酒店/民宿
+          - generic [ref=e165]: "43121"
+        - generic [ref=e166] [cursor=pointer]:
+          - generic [ref=e167]: 💊
+          - generic [ref=e168]: 药店 BI
+          - generic [ref=e169]: "43122"
+        - generic [ref=e170] [cursor=pointer]:
+          - generic [ref=e171]: 🔧
+          - generic [ref=e172]: 汽修连锁
+          - generic [ref=e173]: "43123"
+        - generic [ref=e174] [cursor=pointer]:
+          - generic [ref=e175]: 🦷
+          - generic [ref=e176]: 口腔连锁
+          - generic [ref=e177]: "43124"
+        - generic [ref=e178] [cursor=pointer]:
+          - generic [ref=e179]: 💪
+          - generic [ref=e180]: 健身房
+          - generic [ref=e181]: "43125"
+        - generic [ref=e182] [cursor=pointer]:
+          - generic [ref=e183]: 📦
+          - generic [ref=e184]: 仓储/WMS
+          - generic [ref=e185]: "43126"
+        - generic [ref=e186] [cursor=pointer]:
+          - generic [ref=e187]: ⚙️
+          - generic [ref=e188]: 制造质量
+          - generic [ref=e189]: "43127"
+    - generic [ref=e83]: gpt-5.6-terra
+  - generic [ref=e87]:
+    - generic [ref=e88]:
+      - generic [ref=e89]:
+        - generic [ref=e90]: 🛍 电商平台
+        - generic [ref=e91]: 30,000 订单 · 5 渠道 · 8 品类 · finance
+      - generic [ref=e92]: 新建
+    - generic [ref=e106]:
+      - generic [ref=e107]:
+        - generic [ref=e206]:
+          - generic [ref=e207]: 你
+          - generic [ref=e208]: 各渠道的营收与毛利率？
+        - generic [ref=e210]:
+          - generic [ref=e211]: DL
+          - table [ref=e214]:
+            - rowgroup [ref=e215]:
+              - row [ref=e216]:
+                - columnheader "渠道" [ref=e217]
+                - columnheader "营收" [ref=e218]
+                - columnheader "毛利率" [ref=e219]
+            - rowgroup [ref=e220]:
+              - row [ref=e221]:
+                - cell "抖音直播间" [ref=e222]
+                - cell "16,796,570.32" [ref=e223]
+                - cell "54.13%" [ref=e224]
+              - row [ref=e225]:
+                - cell "微信小程序" [ref=e226]
+                - cell "16,651,426." [ref=e227]
+                - cell [ref=e228]
+      - generic [ref=e125]:
+        - generic [ref=e126]:
+          - textbox "输入经营问题…" [ref=e127]
+          - button "发送" [disabled] [ref=e128]
+        - generic [ref=e132]:
+          - generic [ref=e202] [cursor=pointer]: 💡 各渠道各品类的营收与毛利率?
+          - generic [ref=e203] [cursor=pointer]: 💡 哪个品牌的动销率最低?
+          - generic [ref=e204] [cursor=pointer]: 💡 各省份的客单价和销量排行?
+    - generic [ref=e136]:
+      - generic [ref=e137]: ⋯ query_metric 已返回
+      - generic [ref=e229]: 53t
+      - generic [ref=e231]: 6.0s
+  - generic [ref=e139]:
+    - generic [ref=e140]: 对话历史
+    - generic: 暂无历史
