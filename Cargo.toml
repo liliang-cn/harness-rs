@@ -24,11 +24,7 @@ members = [
     "crates/harness-tools-web",
     "crates/harness-tools-tasks",
     "crates/harness-semantic",
-    "crates/harness-anchor",
-    "crates/harness-recon",
     "crates/harness-grounding",
-    "crates/harness-modelgen",
-    "crates/harness-warehouse",
     "crates/harness-tools-sql",
     "crates/harness-tools-memory",
     "crates/harness-tools-skills",
@@ -71,11 +67,7 @@ authors = ["liliang"]
 # 语义层与它周边的几个 crate。用 workspace 依赖登记一次,各 crate 写
 # `{ workspace = true }` 即可 —— 版本与路径只有一处需要改。
 harness-semantic  = { package = "harness-rs-semantic",  path = "crates/harness-semantic" }
-harness-warehouse = { package = "harness-rs-warehouse", path = "crates/harness-warehouse" }
-harness-modelgen  = { package = "harness-rs-modelgen",  path = "crates/harness-modelgen" }
 harness-grounding = { package = "harness-rs-grounding", path = "crates/harness-grounding" }
-harness-anchor    = { package = "harness-rs-anchor",    path = "crates/harness-anchor" }
-harness-recon     = { package = "harness-rs-recon",     path = "crates/harness-recon" }
 # internal — alias keys keep the in-source `use harness_core::*` style;
 # `package = ...` selects the on-crates.io name (`harness` is taken by an
 # unrelated benchmarking crate, so we publish as `harness-rs-*`).

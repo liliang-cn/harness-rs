@@ -1,0 +1,20 @@
+[package]
+name = "harness-rs-grounding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CJK-aware grounding for the harness-rs semantic layer: turns a natural-language question into a semantic query (metrics + dimensions + grain) by deterministic lexical recall, and asks for clarification instead of guessing when the evidence is tied. Speaks no LLM, opens no database."
+
+keywords   = ["nlp", "semantic-layer", "bi", "cjk", "harness"]
+categories = ["text-processing", "database"]
+
+[lib]
+name = "harness_grounding"
+path = "src/lib.rs"
+
+[dependencies]
+harness-semantic = { workspace = true }
+serde            = { workspace = true }
