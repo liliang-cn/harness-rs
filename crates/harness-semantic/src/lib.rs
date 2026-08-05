@@ -40,12 +40,14 @@
 
 pub mod compile;
 pub mod dialect;
+pub mod governance;
 pub mod lint;
 pub mod model;
 pub mod reach;
 
 pub use compile::{Compiled, CompileError, Filter, Query, Value, compile};
 pub use dialect::Dialect;
+pub use governance::{GovernanceError, Policy, Principal, RowFilter};
 pub use lint::{Issue, lint};
 pub use model::{
     ADDITIVE, Dimension, Entity, Join, Metric, Model, ModelError, NON_ADDITIVE, SEMI_ADDITIVE,
