@@ -25,17 +25,23 @@ pub struct Query {
 }
 
 /// One predicate against a dimension — never against a raw column.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Filter {
     pub dimension: String,
     /// `=` | `!=` | `>` | `>=` | `<` | `<=` | `in`
     pub op: String,
+    #[serde(default)]
     pub values: Vec<Value>,
 }
 
 /// A bind value. Deliberately small: the compiler never inlines a literal into
 /// SQL, so this is only what a placeholder can carry.
-#[derive(Clone, Debug, PartialEq)]
+/// Untagged on the wire, so a filter reads as it would be written by hand:
+/// `values: ["east"]`, `values: [5]`. A tagged form would make every recon file
+/// and every API call carry a type name the caller already conveyed by writing
+/// the literal.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
 pub enum Value {
     Str(String),
     Int(i64),
