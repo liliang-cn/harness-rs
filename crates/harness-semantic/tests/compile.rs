@@ -438,9 +438,13 @@ metrics: [{name: revenue, entity: sale, agg: sum, expr: amount}]
     let typo_metric = good.replace("expr:", "epxr:");
     assert!(Model::from_yaml(&typo_metric).is_err());
 
-    // 顶层也一样：metrics → metric。
-    let typo_top = good.replace("\nmetrics:", "\nmetric:");
-    assert!(Model::from_yaml(&typo_top).is_err(), "顶层写错的键会让整块消失");
+    // **顶层是扩展点，不严格。** 一份模型文件合法地带着别的工具的段，而
+    // di-writeback 往模型里加指标时正是靠保留它们才没把它们删掉。
+    let extra_section = format!("{good}\ngovernance:\n  tenant_budget_bytes: 5000\n");
+    assert!(
+        Model::from_yaml(&extra_section).is_ok(),
+        "顶层的别的段该放行"
+    );
 
     // 而 entity / join 上的错键也拒。
     let typo_entity = good.replace("primary_key:", "primarykey:");

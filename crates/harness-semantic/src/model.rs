@@ -156,8 +156,17 @@ pub(crate) fn norm_name(s: &str) -> String {
 }
 
 /// The single source of truth.
+///
+/// **顶层刻意不加 `deny_unknown_fields`，四个内层结构刻意加。**
+///
+/// 拼写风险在叶子字段：把 `synonyms:` 写成 `synonym:`，那个维度解析得干干净净，
+/// 然后中文问句永远匹配不上它，而 lint 说的是「这个维度有问题」，不是「你拼错
+/// 了一个键」。所以 Entity / Join / Dimension / Metric 一律严格。
+///
+/// 扩展点在顶层：一份模型文件合法地带着别的段（`governance:` 之类），那些段属于
+/// 别的工具。在这里拒绝它们，等于要求整个平台的每一个键都由编译器认识 —— 而
+/// di-writeback 往模型里加一个指标时，正是靠保留这些段才没把它们删掉。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Model {
     #[serde(default)]
     pub entities: Vec<Entity>,
