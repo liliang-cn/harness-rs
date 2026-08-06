@@ -53,6 +53,12 @@ pub struct Policy {
     pub k_anon_exempt: HashSet<String>,
     /// The metric used as the cohort-size measure.
     pub count_metric: String,
+    /// 每个租户在当前计费窗口里的字节上限（0 = 不限）。
+    ///
+    /// 和单条查询的行数上限是**两件事**：行数上限管「一条查询不能太贵」，这个管
+    /// 「一个人不能一整天都在发不太贵的查询」。只有前者的系统，会被一个每分钟发
+    /// 一次全表扫描的看板刷爆,而每一条查询单看都在限额内。
+    pub tenant_budget_bytes: i64,
 }
 
 impl Policy {
@@ -82,6 +88,9 @@ impl Policy {
             k_anon_dims: vec!["customer_email".into()],
             k_anon_exempt: HashSet::from(["admin".to_string()]),
             count_metric: "order_count".into(),
+            // 默认不限。一个默认就有预算上限的部署，会在没有人配过它的地方
+            // 突然开始拒绝查询，而现场看到的是「系统坏了」。
+            tenant_budget_bytes: 0,
         }
     }
 }
