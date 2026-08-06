@@ -1602,14 +1602,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-rs-grounding"
-version = "0.0.37"
-dependencies = [
- "harness-rs-semantic",
- "serde",
-]
-
-[[package]]
 name = "harness-rs-hooks"
 version = "0.0.37"
 dependencies = [
