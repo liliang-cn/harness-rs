@@ -55,6 +55,37 @@ pub struct Policy {
     pub count_metric: String,
 }
 
+impl Policy {
+    /// The policy a deployment starts from.
+    ///
+    /// `Policy::default()` is every rule switched off, which is the right
+    /// meaning for a struct literal and the wrong one for a server: a data
+    /// plane that boots with no row filters and no k-anonymity looks governed
+    /// — it has a policy, the API reports one — and enforces nothing. The
+    /// failure is silent in the direction that leaks.
+    ///
+    /// The names here (`store_region`, `customer_email`, `order_count`) are a
+    /// convention, not a discovery: a model that spells its region dimension
+    /// differently is *not* scoped by this, and nothing will say so. Deployments
+    /// that rename them must pass their own policy.
+    pub fn baseline() -> Self {
+        Policy {
+            // Only admin sees masked dimensions raw.
+            unmask: HashSet::from(["admin".to_string()]),
+            // Managers see their own region.
+            row_filters: vec![RowFilter {
+                dimension: "store_region".into(),
+                attr_key: "region".into(),
+                roles: vec!["manager".into()],
+            }],
+            k: 5,
+            k_anon_dims: vec!["customer_email".into()],
+            k_anon_exempt: HashSet::from(["admin".to_string()]),
+            count_metric: "order_count".into(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GovernanceError {
     #[error("metric {metric:?} not authorized for role {role:?}")]
@@ -345,5 +376,26 @@ metrics:
         assert_eq!(rows.len(), 2);
         assert_eq!(cols, vec!["customer_email".to_string()], "the count goes too");
         assert_eq!(rows[0].len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+
+    /// `default()` 是所有规则都关掉 —— 对一个结构体字面量是对的意思，对一个数据面
+    /// 是错的：它看上去有策略（API 也会报出来一个），实际上一条都不拦。
+    #[test]
+    fn the_baseline_is_not_the_empty_policy() {
+        let d = Policy::default();
+        assert!(d.row_filters.is_empty() && d.k == 0, "default 就该是全关");
+
+        let b = Policy::baseline();
+        assert_eq!(b.row_filters.len(), 1, "经理按大区收窄");
+        assert_eq!(b.row_filters[0].roles, ["manager"]);
+        assert_eq!(b.k, 5);
+        assert!(b.unmask.contains("admin"));
+        assert!(b.k_anon_exempt.contains("admin"));
+        assert!(!b.count_metric.is_empty(), "k 匿名要数群体大小，没有计数指标就不成立");
     }
 }
