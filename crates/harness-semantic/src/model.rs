@@ -67,6 +67,19 @@ pub struct Dimension {
     /// SQL expression returned when the caller may not see the raw value.
     #[serde(default)]
     pub mask: String,
+    /// The values this dimension actually takes, when there are few enough to
+    /// list. Empty means "not enumerated" — never "no values".
+    ///
+    /// A dimension declares a *column*; that is enough to group by, and not
+    /// enough to understand "只看南区". Without this, the layer above cannot
+    /// tell whether 南区 is a region, a product line or a typo, so it drops the
+    /// restriction — and the answer covers every region, silently, and is
+    /// larger than the truth.
+    ///
+    /// Only worth filling for low-cardinality columns. A customer id column has
+    /// no useful list, and a list nobody can read is not documentation.
+    #[serde(default)]
+    pub values: Vec<String>,
 }
 
 /// An aggregated number with grain and aggregation locked in.
