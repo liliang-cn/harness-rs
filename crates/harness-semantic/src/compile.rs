@@ -450,10 +450,18 @@ impl<'a> Compiler<'a> {
         }
         let joins = self.plan_joins(&base, &need)?;
 
-        let agg = agg_expr(&mt.agg, &mt.expr).ok_or_else(|| CompileError::BadAgg {
-            metric: metric_name.into(),
-            got: mt.agg.clone(),
-        })?;
+        // Qualify a bare column with the metric's own entity alias.
+        //
+        // Without this, `SUM(amount)` in a query that joins `order_items` to
+        // `orders` — both of which have an `amount` — is rejected by the engine
+        // as ambiguous. The metric is fine, the model is fine, and the failure
+        // surfaces only for *some* group-by dimensions, which reads as "this
+        // dimension is broken" rather than "the column was never qualified".
+        let agg = agg_expr(&mt.agg, &qualified_expr(self.d, &base, &mt.expr))
+            .ok_or_else(|| CompileError::BadAgg {
+                metric: metric_name.into(),
+                got: mt.agg.clone(),
+            })?;
 
         let mut sel = Vec::new();
         let mut grp = Vec::new();
@@ -652,6 +660,29 @@ impl<'a> Compiler<'a> {
             b.push_str(&format!("\nLIMIT {}", self.q.limit));
         }
         b
+    }
+}
+
+/// A metric's `expr`, qualified by its entity when — and only when — it is a
+/// bare column name.
+///
+/// **Anything else is left exactly as written.** `amount * qty`, `CASE WHEN …`,
+/// `COALESCE(a, b)`: a model author who wrote an expression already knows which
+/// tables are in play, and a naive prefix would produce `"sale"."amount * qty"`,
+/// which is not a column and not an expression either. `*` is left alone too —
+/// `COUNT(*)` qualified is a syntax error.
+///
+/// Bare means: letters, digits and underscores, not starting with a digit, and
+/// not already carrying a dot.
+fn qualified_expr(d: &dyn Dialect, entity: &str, expr: &str) -> String {
+    let e = expr.trim();
+    let bare = !e.is_empty()
+        && !e.starts_with(|c: char| c.is_ascii_digit())
+        && e.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
+    if bare {
+        format!("{}.{}", d.quote_ident(entity), d.quote_ident(e))
+    } else {
+        e.to_string()
     }
 }
 
