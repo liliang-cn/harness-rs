@@ -35,7 +35,9 @@
 //!
 //! let q = Query { metrics: vec!["revenue".into()], group_by: vec!["region".into()], ..Default::default() };
 //! let out = harness_semantic::compile(&m, &q, &dialect::Postgres).unwrap();
-//! assert!(out.sql.contains("SUM(amount)"));
+//! // 聚合的列按它自己的实体限定 —— orders 和 stores 都有 amount 时，
+//! // 一个没限定的 SUM(amount) 会被引擎判成歧义。
+//! assert!(out.sql.contains(r#"SUM("order"."amount")"#));
 //! ```
 
 pub mod compile;

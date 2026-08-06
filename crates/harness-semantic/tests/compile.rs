@@ -336,3 +336,76 @@ fn a_canonical_name_beats_a_synonym() {
     assert_eq!(m.resolve_metric("order_count"), Some("order_count"));
     assert_eq!(m.resolve_metric("nope"), None);
 }
+
+/// 两张表都有 `amount` 时，一个没限定的 `SUM(amount)` 会被引擎判成歧义。
+///
+/// 这是在生产库上翻出来的：teahouse 的 `tea_revenue`（expr: amount，实体
+/// order_item）按 `room_type` 切分时，join 到 orders —— 后者也有 amount ——
+/// Postgres 直接拒绝。指标是对的、模型是对的，而失败只在**某些**维度上出现，
+/// 读起来像「这个维度坏了」，不像「那个列从来没被限定过」。
+#[test]
+fn a_bare_metric_column_is_qualified_by_its_own_entity() {
+    let m = Model::from_yaml(
+        r#"
+entities:
+  - {name: item,  table: order_items, primary_key: id}
+  - {name: order, table: orders,      primary_key: id}
+joins:
+  - {from: item, to: order, from_key: order_id, to_key: id, cardinality: many_to_one}
+dimensions:
+  - {name: channel, entity: order, column: channel, type: categorical}
+metrics:
+  # 两张表都有 amount。
+  - {name: item_revenue, entity: item, agg: sum, expr: amount}
+"#,
+    )
+    .unwrap();
+
+    let q = Query {
+        metrics: vec!["item_revenue".into()],
+        group_by: vec!["channel".into()],
+        ..Default::default()
+    };
+    let out = compile(&m, &q, &dialect::Postgres).unwrap();
+    assert!(
+        out.sql.contains(r#"SUM("item"."amount")"#),
+        "聚合的列要按它自己的实体限定:\n{}",
+        out.sql
+    );
+    assert!(
+        !out.sql.contains("SUM(amount)"),
+        "不该留下没限定的那种:\n{}",
+        out.sql
+    );
+}
+
+/// **写了表达式的就原样放着。** 作者写 `amount * qty` 时已经知道有哪些表在场，
+/// 而傻加前缀会得到 `"item"."amount * qty"` —— 那既不是一个列，也不是一个表达式。
+/// `COUNT(*)` 同理：限定过的 `*` 是语法错误。
+#[test]
+fn an_expression_is_left_exactly_as_written() {
+    let m = Model::from_yaml(
+        r#"
+entities: [{name: item, table: order_items, primary_key: id}]
+dimensions: [{name: sku, entity: item, column: sku, type: categorical}]
+metrics:
+  - {name: gross,   entity: item, agg: sum,   expr: "amount * qty"}
+  - {name: lines,   entity: item, agg: count, expr: "*"}
+  - {name: net,     entity: item, agg: sum,   expr: "COALESCE(amount, 0)"}
+  - {name: skus,    entity: item, agg: count_distinct, expr: sku}
+"#,
+    )
+    .unwrap();
+
+    let q = Query {
+        metrics: vec!["gross".into(), "lines".into(), "net".into(), "skus".into()],
+        group_by: vec!["sku".into()],
+        ..Default::default()
+    };
+    let out = compile(&m, &q, &dialect::Postgres).unwrap();
+    assert!(out.sql.contains("SUM(amount * qty)"), "{}", out.sql);
+    assert!(out.sql.contains("COUNT(*)"), "限定过的 * 是语法错误:\n{}", out.sql);
+    assert!(out.sql.contains("SUM(COALESCE(amount, 0))"), "{}", out.sql);
+    // 而裸列名照常限定。
+    assert!(out.sql.contains(r#"COUNT(DISTINCT "item"."sku")"#), "{}", out.sql);
+}
