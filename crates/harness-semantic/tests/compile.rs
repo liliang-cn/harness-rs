@@ -409,3 +409,40 @@ metrics:
     // 而裸列名照常限定。
     assert!(out.sql.contains(r#"COUNT(DISTINCT "item"."sku")"#), "{}", out.sql);
 }
+
+/// **写错一个键是错误，不是一个空值。**
+///
+/// 这些文件是人手写的，而 serde 的默认行为是忽略不认识的键。忽略的代价在这里
+/// 特别大：一个把 `synonyms:` 写成 `synonym:` 的维度，解析得干干净净，然后中文
+/// 问句永远匹配不上它；一个把 `expr:` 写成 `epxr:` 的指标，编译出来是 `SUM()`。
+/// 什么都不会报错，而 lint 说的是「这个指标有问题」，不是「你拼错了一个键」。
+///
+/// Go 版为此专门有一个 `internal/strictyaml` 包，注释里记着那次事故：一份评测集
+/// 把 `expect_metrics:` 写成了 `expect:`，于是每条用例都解码成空期望、每条都失败，
+/// 验收报告发出去说这次交付答对了 0%。什么都没报错，那个数字只是错的。
+#[test]
+fn a_misspelled_key_is_refused_instead_of_silently_ignored() {
+    let good = r#"
+entities: [{name: sale, table: sales, primary_key: id}]
+dimensions: [{name: region, entity: sale, column: region, type: categorical, synonyms: [大区]}]
+metrics: [{name: revenue, entity: sale, agg: sum, expr: amount}]
+"#;
+    assert!(Model::from_yaml(good).is_ok());
+
+    // synonyms → synonym：少一个 s，中文问句就永远匹配不上这个维度。
+    let typo_dim = good.replace("synonyms:", "synonym:");
+    let err = Model::from_yaml(&typo_dim).unwrap_err();
+    assert!(err.to_string().contains("synonym"), "要点名是哪个键: {err}");
+
+    // expr → epxr：编译出来会是 SUM()。
+    let typo_metric = good.replace("expr:", "epxr:");
+    assert!(Model::from_yaml(&typo_metric).is_err());
+
+    // 顶层也一样：metrics → metric。
+    let typo_top = good.replace("\nmetrics:", "\nmetric:");
+    assert!(Model::from_yaml(&typo_top).is_err(), "顶层写错的键会让整块消失");
+
+    // 而 entity / join 上的错键也拒。
+    let typo_entity = good.replace("primary_key:", "primarykey:");
+    assert!(Model::from_yaml(&typo_entity).is_err());
+}
