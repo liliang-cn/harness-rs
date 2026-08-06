@@ -32,6 +32,7 @@ pub enum ModelError {
 /// A real business thing with a primary key the layer joins on — **declared,
 /// never guessed**.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Entity {
     pub name: String,
     pub table: String,
@@ -44,6 +45,7 @@ pub struct Entity {
 /// direction. A missing edge is refused, never invented — an invented join is
 /// how a total silently becomes six times too large.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Join {
     pub from: String,
     pub to: String,
@@ -55,6 +57,7 @@ pub struct Join {
 
 /// A typed attribute to group or filter by, named in business words.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Dimension {
     pub name: String,
     pub entity: String,
@@ -88,6 +91,7 @@ pub struct Dimension {
 /// formula over other metric names — which is how chasm traps are avoided: each
 /// base metric aggregates in its own CTE before anything is combined.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Metric {
     pub name: String,
     #[serde(default)]
@@ -153,6 +157,7 @@ pub(crate) fn norm_name(s: &str) -> String {
 
 /// The single source of truth.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Model {
     #[serde(default)]
     pub entities: Vec<Entity>,
