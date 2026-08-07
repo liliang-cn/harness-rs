@@ -302,6 +302,10 @@ impl Model for AnthropicNative {
             } else {
                 Some(reasoning)
             },
+            // Anthropic's Messages API has no image-output channel today.
+            // Deferred deliberately: shipping untested parsing for a shape we
+            // cannot exercise is worse than not shipping it.
+            images: Vec::new(),
         })
     }
 

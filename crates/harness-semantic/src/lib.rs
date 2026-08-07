@@ -47,7 +47,7 @@ pub mod lint;
 pub mod model;
 pub mod reach;
 
-pub use compile::{Compiled, CompileError, Filter, Query, Value, compile};
+pub use compile::{CompileError, Compiled, Filter, Query, Value, compile};
 pub use dialect::Dialect;
 pub use governance::{GovernanceError, Policy, Principal, RowFilter};
 pub use lint::{Issue, lint};

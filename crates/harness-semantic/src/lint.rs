@@ -58,5 +58,8 @@ pub fn lint(m: &Model) -> Vec<Issue> {
 
 /// Only the error-severity issues.
 pub fn lint_errors(m: &Model) -> Vec<Issue> {
-    lint(m).into_iter().filter(|i| i.severity == "error").collect()
+    lint(m)
+        .into_iter()
+        .filter(|i| i.severity == "error")
+        .collect()
 }

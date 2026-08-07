@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use harness_context::{FileRecall, default_world};
 use harness_core::{
     Context, Model, ModelError, ModelInfo, ModelOutput, RecallStore, StopReason, Task, ToolCall,
-    ToolError, ToolResult, ToolRisk, ToolSchema, Usage, World,
+    ToolError, ToolResult, ToolRisk, ToolSchema, World,
 };
 use harness_loop::AgentLoop;
 use std::sync::Arc;
@@ -40,17 +40,13 @@ impl Model for MockModel {
                     name: "noop".into(),
                     args: serde_json::json!({}),
                 }],
-                usage: Usage::default(),
                 stop_reason: StopReason::ToolUse,
-                reasoning: None,
+                ..Default::default()
             })
         } else {
             Ok(ModelOutput {
                 text: Some("done".into()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
     }

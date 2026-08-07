@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use harness_core::{
     Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, Tool, ToolCall, ToolError,
-    ToolResult, ToolRisk, ToolSchema, Usage, World,
+    ToolResult, ToolRisk, ToolSchema, World,
 };
 use harness_loop::{AgentLoop, Outcome};
 use serde_json::json;
@@ -86,17 +86,13 @@ impl Model for ThreeReads {
                         args: json!({ "n": i }),
                     })
                     .collect(),
-                usage: Usage::default(),
                 stop_reason: StopReason::ToolUse,
-                reasoning: None,
+                ..Default::default()
             })
         } else {
             Ok(ModelOutput {
                 text: Some("done".into()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
     }
