@@ -25,7 +25,7 @@ pub struct ModelInfo {
     pub supports_web_grounding: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelOutput {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
@@ -36,6 +36,15 @@ pub struct ModelOutput {
     /// subsequent calls; required by providers that gate on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Images the model emitted this turn. Empty for text-only models.
+    ///
+    /// Populated from the OpenAI-compatible `message.images[]` channel, which
+    /// is how Gemini image models answer through a chat endpoint. Before this
+    /// field existed those images were silently discarded by serde and the
+    /// caller saw only `text: None` — an empty answer with no way to learn
+    /// why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::image::GeneratedImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,10 +61,11 @@ pub struct Usage {
     pub cached_input_tokens: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StopReason {
+    #[default]
     EndTurn,
     ToolUse,
     MaxTokens,
@@ -173,10 +183,7 @@ mod arc_model_tests {
         async fn complete(&self, _ctx: &Context) -> Result<ModelOutput, ModelError> {
             Ok(ModelOutput {
                 text: Some("ok".into()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
         fn info(&self) -> ModelInfo {

@@ -169,7 +169,9 @@ impl Dialect for MySql {
             // would silently shift every weekly bucket by a day.
             "week" => format!("DATE_SUB(DATE({e}), INTERVAL WEEKDAY({e}) DAY)"),
             "month" => format!("DATE_SUB(DATE({e}), INTERVAL DAYOFMONTH({e})-1 DAY)"),
-            "quarter" => format!("DATE_ADD(MAKEDATE(YEAR({e}), 1), INTERVAL QUARTER({e})-1 QUARTER)"),
+            "quarter" => {
+                format!("DATE_ADD(MAKEDATE(YEAR({e}), 1), INTERVAL QUARTER({e})-1 QUARTER)")
+            }
             "year" => format!("MAKEDATE(YEAR({e}), 1)"),
             // An unrecognised grain must not silently become "close enough":
             // this is a syntax error naming the offending grain, which is loud,

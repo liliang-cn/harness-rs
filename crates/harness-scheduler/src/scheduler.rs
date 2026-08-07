@@ -150,7 +150,7 @@ mod tests {
     use crate::channel::{Channel, ChannelError};
     use crate::store::{FileJobStore, Job, JobStore};
     use async_trait::async_trait;
-    use harness_core::{Context, ModelError, ModelInfo, ModelOutput, StopReason, Usage};
+    use harness_core::{Context, ModelError, ModelInfo, ModelOutput};
     use std::sync::Mutex as StdMutex;
 
     fn mi() -> ModelInfo {
@@ -175,10 +175,7 @@ mod tests {
         async fn complete(&self, _c: &Context) -> Result<ModelOutput, ModelError> {
             Ok(ModelOutput {
                 text: Some(self.text.clone()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
         fn info(&self) -> ModelInfo {

@@ -12,7 +12,11 @@ fn main() {
     let src = std::fs::read_to_string(&a[0]).expect("read model");
     let m = harness_semantic::Model::from_yaml(&src).expect("parse model");
     let split = |s: &str| -> Vec<String> {
-        s.split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
+        s.split(',')
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .map(String::from)
+            .collect()
     };
     let q = harness_semantic::Query {
         metrics: split(&a[1]),

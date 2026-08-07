@@ -4,8 +4,8 @@ use crate::LlmConfig;
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use harness_core::{
-    Block, Context, Model, ModelDelta, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall,
-    TurnRole, Usage,
+    Block, Context, GeneratedImage, Model, ModelDelta, ModelError, ModelInfo, ModelOutput,
+    StopReason, ToolCall, TurnRole, Usage,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -113,6 +113,40 @@ impl OpenAiCompat {
 
     pub fn config(&self) -> &LlmConfig {
         &self.cfg
+    }
+
+    /// Download an image the provider referenced by URL rather than inlining.
+    ///
+    /// Deliberately unauthenticated: these are pre-signed, provider-hosted
+    /// object-store links, and forwarding the LLM API key to an arbitrary host
+    /// named in a model response would leak it to wherever the response says.
+    async fn fetch_image(&self, url: &str) -> Result<GeneratedImage, ModelError> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ModelError::Transport(format!("fetch image {url}: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(ModelError::Invalid(format!(
+                "fetch image {url}: HTTP {}",
+                resp.status()
+            )));
+        }
+        let media_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).trim().to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ModelError::Transport(format!("read image {url}: {e}")))?;
+        Ok(GeneratedImage {
+            media_type,
+            bytes: bytes.to_vec(),
+        })
     }
 }
 
@@ -315,6 +349,45 @@ struct ChatMessage {
     /// back; the echo, when needed, rides `reasoning_content`).
     #[serde(skip_serializing, default)]
     reasoning: Option<String>,
+    /// Images the model produced. Deserialize-only — this is an output
+    /// channel; images going *in* ride `content` as `ContentPart::ImageUrl`.
+    ///
+    /// Gemini image models answer here with `content: null`, which is why
+    /// omitting this field did not merely lose the image but made the whole
+    /// turn look empty. Tolerates a literal `null` like `tool_calls` does.
+    #[serde(skip_serializing, default, deserialize_with = "de_null_images")]
+    images: Vec<WireImage>,
+}
+
+/// One entry of the `message.images[]` output channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WireImage {
+    image_url: ImageUrl,
+}
+
+fn de_null_images<'de, D>(d: D) -> Result<Vec<WireImage>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<WireImage>>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Partition the image output channel into images already usable as bytes and
+/// remote URLs the caller still has to fetch.
+///
+/// Inline `data:` URIs decode here. Anything else is a URL: it goes to the
+/// second list rather than being discarded, because dropping it would repeat
+/// exactly the failure this whole field exists to fix.
+fn split_images(images: Vec<WireImage>) -> (Vec<GeneratedImage>, Vec<String>) {
+    let mut ready = Vec::new();
+    let mut to_fetch = Vec::new();
+    for img in images {
+        match harness_core::b64::parse_data_uri(&img.image_url.url) {
+            Some((media_type, bytes)) => ready.push(GeneratedImage { media_type, bytes }),
+            None => to_fetch.push(img.image_url.url),
+        }
+    }
+    (ready, to_fetch)
 }
 
 /// OpenAI-compat requires a tool call's `arguments` to be a JSON-object–shaped
@@ -536,6 +609,14 @@ impl Model for OpenAiCompat {
             }
         };
 
+        // Images the model produced. Inline data URIs decode locally; a
+        // provider that answered with a URL gets fetched now, so the caller
+        // receives bytes and never a handle that can expire.
+        let (mut images, to_fetch) = split_images(first.message.images);
+        for url in to_fetch {
+            images.push(self.fetch_image(&url).await?);
+        }
+
         // DeepSeek puts thinking in `reasoning_content`; Ollama in `reasoning`.
         let reasoning = first.message.reasoning_content.or(first.message.reasoning);
 
@@ -562,6 +643,7 @@ impl Model for OpenAiCompat {
             },
             stop_reason,
             reasoning,
+            images,
         })
     }
 
@@ -897,6 +979,7 @@ fn inject_schema_hint(messages: &mut Vec<ChatMessage>, hint: &str) {
                 tool_call_id: None,
                 reasoning_content: None,
                 reasoning: None,
+                images: Vec::new(),
             },
         );
     }
@@ -918,6 +1001,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             tool_call_id: None,
             reasoning_content: None,
             reasoning: None,
+            images: Vec::new(),
         });
     }
 
@@ -939,6 +1023,7 @@ fn build_messages(ctx: &Context) -> Vec<ChatMessage> {
             tool_call_id: None,
             reasoning_content: None,
             reasoning: None,
+            images: Vec::new(),
         });
     }
     out
@@ -968,6 +1053,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     tool_call_id: Some(call_id.clone()),
                     reasoning_content: None,
                     reasoning: None,
+                    images: Vec::new(),
                 });
             } else if let Block::Feedback(signals) = b {
                 let mut s = String::new();
@@ -985,6 +1071,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
                     tool_call_id: None,
                     reasoning_content: None,
                     reasoning: None,
+                    images: Vec::new(),
                 });
             }
         }
@@ -1069,6 +1156,7 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         tool_call_id: None,
         reasoning_content: reasoning,
         reasoning: None,
+        images: Vec::new(),
     });
 }
 
@@ -1203,6 +1291,79 @@ mod tests {
             let got = text_through_split_stream(&payload, at).await;
             assert_eq!(got, want, "split at byte {at} of {}", payload.len());
         }
+    }
+
+    /// Regression for a silent data-loss bug: `ChatMessage` parsed only
+    /// `content` / `reasoning_content` / `tool_calls`, so serde dropped the
+    /// `images[]` array that image-capable chat models answer with. The caller
+    /// received `text: None` and an empty output, with nothing to indicate an
+    /// image had arrived and been thrown away.
+    ///
+    /// Body shape captured verbatim from `gemini-3.1-flash-image` via the
+    /// cpa.superleo.app gateway on 2026-08-07: `content` is null and the image
+    /// rides `message.images[].image_url.url` as a base64 data URI.
+    #[test]
+    fn parses_image_output_from_chat_response() {
+        // "/9j/4AAQ" is the standard base64 prefix of a JPEG (FF D8 FF E0 00 10).
+        let body = r#"{
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": null,
+                    "tool_calls": null,
+                    "images": [
+                        {"type": "image_url", "index": 0,
+                         "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}
+                    ]
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 19, "completion_tokens": 1534}
+        }"#;
+        let parsed: ChatResponse = serde_json::from_str(body).expect("image response must parse");
+
+        let (ready, to_fetch) = split_images(parsed.choices[0].message.images.clone());
+        assert!(to_fetch.is_empty(), "inline data URIs need no fetching");
+        assert_eq!(ready.len(), 1, "the image must survive parsing");
+        assert_eq!(ready[0].media_type, "image/jpeg");
+        assert_eq!(
+            &ready[0].bytes[..4],
+            &[0xff, 0xd8, 0xff, 0xe0],
+            "bytes must decode to a real JPEG header, not a mangled string"
+        );
+    }
+
+    #[test]
+    fn text_only_response_yields_no_images() {
+        let body = r#"{
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }"#;
+        let parsed: ChatResponse = serde_json::from_str(body).unwrap();
+        assert!(parsed.choices[0].message.images.is_empty());
+    }
+
+    #[test]
+    fn remote_image_urls_are_queued_for_fetching_not_dropped() {
+        // A provider that answers with a plain URL must not silently lose the
+        // image. It goes to the fetch list so the caller still ends up with
+        // bytes rather than an expiring handle.
+        let imgs = vec![
+            WireImage {
+                image_url: ImageUrl {
+                    url: "https://example.com/a.png".into(),
+                },
+            },
+            WireImage {
+                image_url: ImageUrl {
+                    url: "data:image/png;base64,Zm9v".into(),
+                },
+            },
+        ];
+        let (ready, to_fetch) = split_images(imgs);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(to_fetch, vec!["https://example.com/a.png".to_string()]);
     }
 
     #[test]

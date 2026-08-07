@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use harness_context::default_world;
 use harness_core::{
-    Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, Tool, ToolCall, Usage,
+    Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, Tool, ToolCall,
 };
 use harness_loop::{AgentLoop, LearningConfig};
 use harness_tools_skills::SkillManageTool;
@@ -42,17 +42,13 @@ impl Model for MainModel {
                     name: "noop".into(),
                     args: serde_json::json!({}),
                 }],
-                usage: Usage::default(),
                 stop_reason: StopReason::ToolUse,
-                reasoning: None,
+                ..Default::default()
             })
         } else {
             Ok(ModelOutput {
                 text: Some("done".into()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
     }
@@ -80,17 +76,13 @@ impl Model for ReviewModel {
                     name: "skill_manage".into(),
                     args: serde_json::json!({"action":"create","name":"learned-skill","content": SKILL_MD}),
                 }],
-                usage: Usage::default(),
                 stop_reason: StopReason::ToolUse,
-                reasoning: None,
+                ..Default::default()
             })
         } else {
             Ok(ModelOutput {
                 text: Some("reviewed".into()),
-                tool_calls: vec![],
-                usage: Usage::default(),
-                stop_reason: StopReason::EndTurn,
-                reasoning: None,
+                ..Default::default()
             })
         }
     }
