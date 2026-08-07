@@ -441,7 +441,7 @@ pub fn verify_chain(path: impl AsRef<Path>) -> std::io::Result<ChainVerification
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::{Action, Context, ModelOutput, StopReason, Task, ToolResult, Usage};
+    use harness_core::{Action, Context, ModelOutput, Task, ToolResult, Usage};
 
     /// Collects records in memory for assertions.
     #[derive(Default)]
@@ -481,14 +481,12 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("30 days".into()),
-            tool_calls: vec![],
             usage: Usage {
                 input_tokens: 100,
                 output_tokens: 5,
                 cached_input_tokens: 0,
             },
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         hook.fire(&Event::PostModel { out: &out }, &mut w);
 
@@ -538,10 +536,7 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("reach me at ll_faw@hotmail.com".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         hook.fire(&Event::PostModel { out: &out }, &mut w);
 

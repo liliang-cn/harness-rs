@@ -208,6 +208,10 @@ pub fn replay_as_mock(events: &[SessionEvent]) -> harness_models::MockModel {
                 input_tokens: output.usage.input_tokens,
                 output_tokens: output.usage.output_tokens,
                 reasoning: output.reasoning.clone(),
+                // Carried so a replay of an image-producing run reproduces
+                // the images too — otherwise "deterministic replay" would
+                // quietly mean "replay of the text only".
+                images: output.images.clone(),
             });
         }
     }
@@ -560,10 +564,7 @@ mod tests {
                 ts_ms: 100,
                 output: ModelOutput {
                     text: Some("hi".into()),
-                    tool_calls: Vec::new(),
-                    usage: Default::default(),
-                    stop_reason: harness_core::StopReason::EndTurn,
-                    reasoning: None,
+                    ..Default::default()
                 },
             },
             SessionEvent::End { ts_ms: 110 },

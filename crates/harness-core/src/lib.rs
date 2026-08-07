@@ -15,6 +15,7 @@ pub mod __export {
     pub use serde_json;
 }
 
+pub mod b64;
 pub mod compactor;
 pub mod context;
 pub mod embed;
@@ -22,6 +23,7 @@ pub mod error;
 pub mod event;
 pub mod guide;
 pub mod hook;
+pub mod image;
 pub mod memory;
 pub mod model;
 pub mod profile;
@@ -30,6 +32,7 @@ pub mod recall_testkit;
 pub mod sensor;
 pub mod signal;
 pub mod skill;
+pub mod speech;
 pub mod tool;
 pub mod world;
 
@@ -40,6 +43,7 @@ pub use error::*;
 pub use event::*;
 pub use guide::*;
 pub use hook::*;
+pub use image::*;
 pub use memory::*;
 pub use model::*;
 pub use profile::*;
@@ -48,6 +52,7 @@ pub use recall_testkit::*;
 pub use sensor::*;
 pub use signal::*;
 pub use skill::*;
+pub use speech::*;
 pub use tool::*;
 pub use world::*;
 

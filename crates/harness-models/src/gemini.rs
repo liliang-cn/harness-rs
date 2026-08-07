@@ -506,6 +506,10 @@ impl Model for GeminiNative {
             } else {
                 Some(sig_lines.join("\n"))
             },
+            // Gemini's native `inline_data` image parts are not parsed here
+            // yet; the verified image path for Gemini models runs through
+            // `ChatImageModel` on the OpenAI-compatible channel.
+            images: Vec::new(),
         })
     }
 

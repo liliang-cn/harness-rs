@@ -25,11 +25,17 @@ pub mod config;
 pub mod embed_gemini;
 pub mod embed_ollama;
 pub mod gemini;
+pub mod image_chat;
+pub mod image_dashscope;
+pub mod image_openai;
 pub mod kind;
+pub(crate) mod media_http;
 pub mod mock;
 pub mod openai_compat;
 pub mod retry;
 pub mod router;
+pub mod speech_dashscope;
+pub mod speech_openai;
 
 pub use anthropic::*;
 pub use config::*;
@@ -39,9 +45,14 @@ pub use kind::*;
 // `embed_gemini`; re-export only the adapter type to avoid a glob clash.
 pub use embed_ollama::OllamaEmbed;
 pub use gemini::*;
+pub use image_chat::*;
+pub use image_dashscope::*;
+pub use image_openai::*;
 pub use mock::*;
 pub use openai_compat::*;
 pub use router::*;
+pub use speech_dashscope::*;
+pub use speech_openai::*;
 
 /// Append an HTTP chunk to a text buffer without losing a character that
 /// straddles the boundary.

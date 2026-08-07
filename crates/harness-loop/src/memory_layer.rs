@@ -622,7 +622,7 @@ async fn distil_and_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::{ModelOutput, StopReason, Usage};
+    use harness_core::{ModelOutput, StopReason};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Test-only in-memory backend so we don't touch the filesystem.
@@ -670,10 +670,7 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("final answer X".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = w.fire(&Event::PostModel { out: &out }, &mut world);
         let _ = w.fire(&Event::TaskCompleted, &mut world);
@@ -700,10 +697,8 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("partial".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
             stop_reason: StopReason::ToolUse,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = w.fire(&Event::PostModel { out: &out }, &mut world);
         // No TaskCompleted ⇒ nothing should be written.
@@ -731,17 +726,12 @@ mod tests {
 
         let out_a = ModelOutput {
             text: Some("I'll remember your coffee preference.".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
             stop_reason: StopReason::ToolUse,
-            reasoning: None,
+            ..Default::default()
         };
         let out_b = ModelOutput {
             text: Some("Setting Beijing as your timezone.".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = s.fire(&Event::PostModel { out: &out_a }, &mut world);
         let _ = s.fire(&Event::PostModel { out: &out_b }, &mut world);
@@ -778,10 +768,7 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("some chat".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
         let _ = s.fire(&Event::TaskCompleted, &mut world);
@@ -811,10 +798,7 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("fluff".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
         let _ = s.fire(&Event::TaskCompleted, &mut world);
@@ -838,10 +822,7 @@ mod tests {
 
         let out = ModelOutput {
             text: Some("session chat".into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         };
         let _ = s.fire(&Event::PostModel { out: &out }, &mut world);
         let _ = s.fire(&Event::TaskCompleted, &mut world);
