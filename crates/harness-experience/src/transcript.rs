@@ -132,7 +132,7 @@ pub fn spawn_transcript_writer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::{Action, MemoryError, StopReason, ToolResult, Usage};
+    use harness_core::{Action, MemoryError, ToolResult};
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -151,10 +151,7 @@ mod tests {
     fn out(text: &str) -> ModelOutput {
         ModelOutput {
             text: Some(text.into()),
-            tool_calls: vec![],
-            usage: Usage::default(),
-            stop_reason: StopReason::EndTurn,
-            reasoning: None,
+            ..Default::default()
         }
     }
 

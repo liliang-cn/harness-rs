@@ -72,6 +72,51 @@ where
     }
 }
 
+/// Like [`with_retry`], but preserves the caller's error type.
+///
+/// [`with_retry`] collapses failures to `String`, which is fine when the only
+/// question left is "what went wrong". The image and speech adapters need more:
+/// their callers branch on `RateLimited` vs `Provider`, and re-deriving that
+/// distinction by pattern-matching an error message afterwards is exactly the
+/// kind of stringly-typed guessing that goes wrong silently. So the classifier
+/// is passed in and the error type survives.
+///
+/// Same policy as [`with_retry`]: 1 initial attempt + 3 retries, 1s → 2s → 4s.
+pub async fn with_retry_typed<F, Fut, T, E>(
+    label: &'static str,
+    is_transient: impl Fn(&E) -> bool,
+    mut f: F,
+) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let mut attempt = 0u32;
+    let mut delay = Duration::from_secs(1);
+    loop {
+        attempt += 1;
+        match f().await {
+            Ok(v) => {
+                if attempt > 1 {
+                    tracing::info!(label, attempt, "✓ recovered after retry");
+                }
+                return Ok(v);
+            }
+            Err(e) if is_transient(&e) && attempt < 4 => {
+                tracing::warn!(label, attempt, delay_ms = delay.as_millis() as u64, reason = %e,
+                    "transient failure, retrying");
+                tokio::time::sleep(delay).await;
+                delay = std::cmp::min(delay * 2, Duration::from_secs(4));
+            }
+            Err(e) => {
+                tracing::error!(label, attempt, reason = %e, "giving up");
+                return Err(e);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +176,58 @@ mod tests {
         .await;
         assert!(r.is_err());
         assert_eq!(count.load(Ordering::SeqCst), 4); // 1 initial + 3 retries
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum E {
+        Limited,
+        Fatal,
+    }
+    impl std::fmt::Display for E {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{self:?}")
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_retry_preserves_the_error_variant() {
+        // The whole point: after exhausting retries the caller still gets
+        // `Limited`, not a string it has to re-parse.
+        let count = Arc::new(AtomicU32::new(0));
+        let c = count.clone();
+        let r: Result<(), E> = with_retry_typed(
+            "test:typed",
+            |e| matches!(e, E::Limited),
+            || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(E::Limited)
+                }
+            },
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), E::Limited);
+        assert_eq!(count.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn typed_retry_skips_non_transient() {
+        let count = Arc::new(AtomicU32::new(0));
+        let c = count.clone();
+        let r: Result<(), E> = with_retry_typed(
+            "test:typed-perm",
+            |e| matches!(e, E::Limited),
+            || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(E::Fatal)
+                }
+            },
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), E::Fatal);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }

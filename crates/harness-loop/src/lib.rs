@@ -1146,6 +1146,11 @@ impl<M: Model> AgentLoop<M> {
             } else {
                 Some(reasoning)
             },
+            // `ModelDelta` has no image variant: the verified image-output
+            // path (Gemini image models over chat) answers non-streamed, so
+            // there is nothing to accumulate here. A streaming provider that
+            // emits images would need a `ModelDelta::Image` first.
+            images: Vec::new(),
         })
     }
 

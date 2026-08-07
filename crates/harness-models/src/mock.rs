@@ -15,13 +15,13 @@
 
 use async_trait::async_trait;
 use harness_core::{
-    Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall, Usage,
+    Context, GeneratedImage, Model, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall, Usage,
 };
 use serde_json::Value;
 use std::sync::Mutex;
 
 /// One scripted response the mock will return when `complete()` is called.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MockResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
@@ -29,6 +29,9 @@ pub struct MockResponse {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub reasoning: Option<String>,
+    /// Images the scripted turn "emitted". Lets a pipeline that consumes
+    /// `ModelOutput.images` be tested with no network at all.
+    pub images: Vec<GeneratedImage>,
 }
 
 impl MockResponse {
@@ -36,11 +39,7 @@ impl MockResponse {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
-            tool_calls: Vec::new(),
-            stop_reason: StopReason::EndTurn,
-            input_tokens: 0,
-            output_tokens: 0,
-            reasoning: None,
+            ..Default::default()
         }
     }
 
@@ -49,12 +48,9 @@ impl MockResponse {
         let name = name.into();
         let id = format!("mock_call_{}", short_hash(&name, &args));
         Self {
-            text: None,
             tool_calls: vec![ToolCall { id, name, args }],
             stop_reason: StopReason::ToolUse,
-            input_tokens: 0,
-            output_tokens: 0,
-            reasoning: None,
+            ..Default::default()
         }
     }
 
@@ -70,12 +66,9 @@ impl MockResponse {
             })
             .collect();
         Self {
-            text: None,
             tool_calls,
             stop_reason: StopReason::ToolUse,
-            input_tokens: 0,
-            output_tokens: 0,
-            reasoning: None,
+            ..Default::default()
         }
     }
 
@@ -87,6 +80,13 @@ impl MockResponse {
 
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
+        self
+    }
+
+    /// Attach images to this scripted turn, as an image-capable chat model
+    /// would return them.
+    pub fn with_images(mut self, images: Vec<GeneratedImage>) -> Self {
+        self.images = images;
         self
     }
 }
@@ -204,6 +204,7 @@ impl Model for MockModel {
                 cached_input_tokens: 0,
             },
             reasoning: resp.reasoning.clone(),
+            images: resp.images.clone(),
         })
     }
 
