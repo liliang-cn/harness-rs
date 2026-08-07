@@ -99,7 +99,10 @@ fn lint_flags_a_metric_with_no_description() {
     let mut m = test_model();
     m.metrics[0].description = String::new();
     m.index().unwrap();
-    let errs: Vec<_> = lint(&m).into_iter().filter(|i| i.severity == "error").collect();
+    let errs: Vec<_> = lint(&m)
+        .into_iter()
+        .filter(|i| i.severity == "error")
+        .collect();
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert_eq!(errs[0].target, "revenue");
 }
@@ -247,8 +250,12 @@ metrics:
         .expect("bridge measure by either side is safe");
 
     // A measure on the student side cannot reach course: refuse.
-    let err = compile(&m, &q(&["student_fees"], &["course_name"]), &dialect::Postgres)
-        .unwrap_err();
+    let err = compile(
+        &m,
+        &q(&["student_fees"], &["course_name"]),
+        &dialect::Postgres,
+    )
+    .unwrap_err();
     assert!(
         err.to_string().contains("no declared join path"),
         "expected a refusal, got: {err}"
@@ -298,7 +305,11 @@ fn filters_bind_and_never_inline() {
     }];
     let c = compile(&m, &query, &dialect::Postgres).unwrap();
     assert!(c.sql.contains("$1"), "{}", c.sql);
-    assert!(!c.sql.contains("2026-01-01"), "value was inlined:\n{}", c.sql);
+    assert!(
+        !c.sql.contains("2026-01-01"),
+        "value was inlined:\n{}",
+        c.sql
+    );
     assert_eq!(c.args, vec![Value::Str("2026-01-01".into())]);
 }
 
@@ -308,8 +319,12 @@ fn filters_bind_and_never_inline() {
 #[test]
 fn every_base_metric_aggregates_in_its_own_cte() {
     let m = test_model();
-    let c = compile(&m, &q(&["revenue", "order_count"], &["order_date"]), &dialect::Postgres)
-        .unwrap();
+    let c = compile(
+        &m,
+        &q(&["revenue", "order_count"], &["order_date"]),
+        &dialect::Postgres,
+    )
+    .unwrap();
     assert!(c.sql.contains(r#""m_revenue" AS ("#), "{}", c.sql);
     assert!(c.sql.contains(r#""m_order_count" AS ("#), "{}", c.sql);
     // The spine is UNION-ed and LEFT JOINed, never a FULL JOIN (Postgres
@@ -323,7 +338,12 @@ fn every_base_metric_aggregates_in_its_own_cte() {
 #[test]
 fn the_generated_spine_alias_is_quoted() {
     let m = test_model();
-    let c = compile(&m, &q(&["revenue", "order_count"], &["order_date"]), &dialect::MySql).unwrap();
+    let c = compile(
+        &m,
+        &q(&["revenue", "order_count"], &["order_date"]),
+        &dialect::MySql,
+    )
+    .unwrap();
     assert!(c.sql.contains("`keys`"), "{}", c.sql);
 }
 
@@ -404,10 +424,18 @@ metrics:
     };
     let out = compile(&m, &q, &dialect::Postgres).unwrap();
     assert!(out.sql.contains("SUM(amount * qty)"), "{}", out.sql);
-    assert!(out.sql.contains("COUNT(*)"), "限定过的 * 是语法错误:\n{}", out.sql);
+    assert!(
+        out.sql.contains("COUNT(*)"),
+        "限定过的 * 是语法错误:\n{}",
+        out.sql
+    );
     assert!(out.sql.contains("SUM(COALESCE(amount, 0))"), "{}", out.sql);
     // 而裸列名照常限定。
-    assert!(out.sql.contains(r#"COUNT(DISTINCT "item"."sku")"#), "{}", out.sql);
+    assert!(
+        out.sql.contains(r#"COUNT(DISTINCT "item"."sku")"#),
+        "{}",
+        out.sql
+    );
 }
 
 /// **写错一个键是错误，不是一个空值。**

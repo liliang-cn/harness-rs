@@ -155,7 +155,13 @@ pub fn apply_rls(q: &mut Query, p: &Principal, pol: &Policy) -> Result<(), Gover
 /// Masking happens on the way out rather than in the SQL so the same compiled
 /// query serves every role — and so a mask can never be the reason two roles
 /// get different *numbers*, only different *labels*.
-pub fn mask_columns(m: &Model, columns: &[String], rows: &mut [Vec<Value>], role: &str, pol: &Policy) {
+pub fn mask_columns(
+    m: &Model,
+    columns: &[String],
+    rows: &mut [Vec<Value>],
+    role: &str,
+    pol: &Policy,
+) {
     if pol.unmask.contains(role) {
         return;
     }
@@ -383,7 +389,11 @@ metrics:
         let n = k_anon_suppress(&mut cols, &mut rows, &pol);
         assert_eq!(n, 1);
         assert_eq!(rows.len(), 2);
-        assert_eq!(cols, vec!["customer_email".to_string()], "the count goes too");
+        assert_eq!(
+            cols,
+            vec!["customer_email".to_string()],
+            "the count goes too"
+        );
         assert_eq!(rows[0].len(), 1);
     }
 }
@@ -405,6 +415,9 @@ mod baseline_tests {
         assert_eq!(b.k, 5);
         assert!(b.unmask.contains("admin"));
         assert!(b.k_anon_exempt.contains("admin"));
-        assert!(!b.count_metric.is_empty(), "k 匿名要数群体大小，没有计数指标就不成立");
+        assert!(
+            !b.count_metric.is_empty(),
+            "k 匿名要数群体大小，没有计数指标就不成立"
+        );
     }
 }
