@@ -1,6 +1,6 @@
 # harness media — Image & Speech Generation (Framework Capability)
 
-**Status:** Draft (brainstorming) → awaiting approval
+**Status:** Implemented — `feat/media-image-speech`, workspace 0.0.38
 **Date:** 2026-08-07
 **Layer:** harness-rs framework (NOT the picture-book product)
 **Driver:** an English children's picture-book backend needs to generate
@@ -289,3 +289,63 @@ requirement, not a nicety.
 ## Version
 
 Workspace `0.0.37` → `0.0.38`.
+
+---
+
+## As built — where the implementation diverged from this draft
+
+Recorded because the draft is now the historical record and the code is the
+truth.
+
+**`mime` → `media_type`.** The draft named the field `mime`; `harness-core`
+already says `media_type` on `Block::Image` / `Block::Audio`. Consistency with
+the surrounding code beat consistency with this document.
+
+**`harness-core::b64` is new, and was not planned.** `context.rs` already
+carried a dependency-free base64 *encoder* with an explicit comment about
+keeping the crate lean. Decoding provider data URIs needed the other half, and
+three modules now share it, so it was lifted into its own module rather than
+duplicated. `parse_data_uri` and a `serde_with` adapter live there too — the
+latter because serde's default `Vec<u8>` encoding would inflate a 1 MB JPEG
+into ~4 MB of JSON in every recorded session.
+
+**`harness-models::media_http` is new.** Five adapters were about to carry five
+copies of "is this a rate limit". That drifts, and it drifts silently: one
+adapter retries `Throttling.RateQuota`, another fails the job. One classifier,
+one place to fix it.
+
+**`retry::with_retry_typed` is new.** The existing `with_retry` collapses errors
+to `String`, which would have thrown away the `RateLimited` vs `Provider`
+distinction the adapters had just established — leaving callers to re-derive it
+by grepping an error message. The typed variant keeps the enum.
+
+**`ModelOutput` and `StopReason` now derive `Default`.** Not in the draft. The
+28-site churn was going to recur on every future field; `..Default::default()`
+makes this the last time.
+
+**`ModelDelta` was not extended.** Streaming image output has no verified
+provider — the Gemini image path answers non-streamed — so `AgentLoop`'s
+streaming accumulator sets `images: Vec::new()` with a comment naming what
+would have to exist first.
+
+**Open question 1 resolved as recommended:** no feature gate on
+`ModelOutput.images`.
+
+**Open question 2 resolved as deferred:** `AnthropicNative` and `gemini.rs`
+native `inline_data` still return empty `images`, both with comments saying so.
+No verified provider to test against.
+
+### Verification
+
+- 452 workspace tests pass; `cargo clippy --workspace --all-targets` clean.
+- 44 new unit tests across the new modules, all fixture-driven from bodies
+  captured on 2026-08-07.
+- 3 live tests (`tests/live_media.rs`, `#[ignore]`, key-gated) run green
+  against the real endpoints: 1,089,423 bytes of `image/jpeg`; 291,884 bytes of
+  RIFF/WAVE audio; and the reference-image path returning a distinct image.
+
+### Still open
+
+- MaaS image quota (`Throttling.RateQuota`) — needs an account-side fix before
+  `DashScopeImage`'s response parsing can be confirmed against reality.
+- `OpenAiImage` / `OpenAiSpeech` have no live verification either; no key.
