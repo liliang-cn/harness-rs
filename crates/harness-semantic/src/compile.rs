@@ -116,9 +116,7 @@ pub enum CompileError {
     BadWindow { metric: String, got: String },
     #[error("metric {metric:?}: unsupported agg {got:?}")]
     BadAgg { metric: String, got: String },
-    #[error(
-        "no declared join path from {from:?} to {to:?} (refused — add the relationship edge)"
-    )]
+    #[error("no declared join path from {from:?} to {to:?} (refused — add the relationship edge)")]
     NoJoinPath { from: String, to: String },
     #[error(
         "time grain {grain:?} was requested but none of the group-by dimensions {dims:?} is declared type: time — fix the dimension's type in the model, or drop the grain"
@@ -126,15 +124,17 @@ pub enum CompileError {
     GrainMatchedNothing { grain: String, dims: Vec<String> },
 }
 
-static IDENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap());
+static IDENT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap());
 static WINDOW_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(rolling|prior|delta):(\d+)$").unwrap());
 
 /// Identifiers in an expression, in order — how a formula's metric references
 /// are found.
 pub(crate) fn idents(s: &str) -> Vec<String> {
-    IDENT_RE.find_iter(s).map(|m| m.as_str().to_string()).collect()
+    IDENT_RE
+        .find_iter(s)
+        .map(|m| m.as_str().to_string())
+        .collect()
 }
 
 /// Rewrites every identifier in `s` through `f`.
@@ -235,7 +235,11 @@ impl<'a> Compiler<'a> {
     /// CTE, or from the UNION-ed key spine.
     fn dim_ref(&self, d: &ResolvedDim) -> String {
         if self.single {
-            format!("{}.{}", self.cte(&self.base_order[0]), self.d.quote_ident(&d.name))
+            format!(
+                "{}.{}",
+                self.cte(&self.base_order[0]),
+                self.d.quote_ident(&d.name)
+            )
         } else {
             format!("{}.{}", self.keys_alias(), self.d.quote_ident(&d.name))
         }
@@ -252,7 +256,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn collect_bases(&mut self, name: &str, visiting: &mut Vec<String>) -> Result<(), CompileError> {
+    fn collect_bases(
+        &mut self,
+        name: &str,
+        visiting: &mut Vec<String>,
+    ) -> Result<(), CompileError> {
         let Some(mt) = self.m.metric(name) else {
             return Err(CompileError::UnknownMetric(name.into()));
         };
@@ -457,11 +465,12 @@ impl<'a> Compiler<'a> {
         // as ambiguous. The metric is fine, the model is fine, and the failure
         // surfaces only for *some* group-by dimensions, which reads as "this
         // dimension is broken" rather than "the column was never qualified".
-        let agg = agg_expr(&mt.agg, &qualified_expr(self.d, &base, &mt.expr))
-            .ok_or_else(|| CompileError::BadAgg {
+        let agg = agg_expr(&mt.agg, &qualified_expr(self.d, &base, &mt.expr)).ok_or_else(|| {
+            CompileError::BadAgg {
                 metric: metric_name.into(),
                 got: mt.agg.clone(),
-            })?;
+            }
+        })?;
 
         let mut sel = Vec::new();
         let mut grp = Vec::new();
@@ -513,8 +522,7 @@ impl<'a> Compiler<'a> {
             let col = self.qualify(&fd.entity, &fd.column);
             match f.op.to_lowercase().as_str() {
                 "in" => {
-                    let phs: Vec<String> =
-                        f.values.iter().map(|v| self.ph(v.clone())).collect();
+                    let phs: Vec<String> = f.values.iter().map(|v| self.ph(v.clone())).collect();
                     preds.push(format!("{col} IN ({})", phs.join(", ")));
                 }
                 op @ ("=" | "!=" | ">" | ">=" | "<" | "<=") => {

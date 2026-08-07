@@ -24,7 +24,11 @@ pub enum ModelError {
     #[error("join {from}->{to} references an unknown entity")]
     UnknownJoinEntity { from: String, to: String },
     #[error("join {from}->{to}: bad cardinality {got:?}")]
-    BadCardinality { from: String, to: String, got: String },
+    BadCardinality {
+        from: String,
+        to: String,
+        got: String,
+    },
     #[error("{0}")]
     Parse(String),
 }
