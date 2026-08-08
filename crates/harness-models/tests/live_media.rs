@@ -169,7 +169,8 @@ async fn embeddings_place_similar_sentences_near_each_other() {
         eprintln!("skipped: set HARNESS_EMBED_URL and HARNESS_EMBED_KEY");
         return;
     };
-    let model = std::env::var("HARNESS_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma:latest".into());
+    let model =
+        std::env::var("HARNESS_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma:latest".into());
     let dim: usize = std::env::var("HARNESS_EMBED_DIM")
         .ok()
         .and_then(|d| d.parse().ok())
