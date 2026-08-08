@@ -7,20 +7,31 @@ use harness_mcp_client::McpClient;
 use std::io::Write;
 
 /// A throwaway executable script, so each case can choose exactly how the server dies.
+///
+/// Written to a scratch name and *renamed* into place, and the name carries a counter rather than
+/// only the pid and the body length. Both exist for the same failure: on Linux, exec'ing a file that
+/// any process still holds open for writing is `ETXTBSY` — "Text file busy" — which surfaced here as
+/// a CI failure on ubuntu that macOS never reproduces, because macOS does not enforce it. Renaming
+/// means the inode that gets executed was never the one open for writing, and a unique name means
+/// two concurrent tests cannot land on the same path however their bodies are edited later.
 fn server_that(body: &str) -> ScriptPath {
-    let path = std::env::temp_dir().join(format!(
-        "harness-diagnose-{}-{}.sh",
-        std::process::id(),
-        body.len()
-    ));
-    let mut file = std::fs::File::create(&path).expect("write the stand-in server");
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("harness-diagnose-{}-{n}.sh", std::process::id()));
+    let scratch = path.with_extension("tmp");
+
+    let mut file = std::fs::File::create(&scratch).expect("write the stand-in server");
     write!(file, "#!/bin/sh\n{body}\n").expect("write the script");
+    file.sync_all().expect("flush the script");
     drop(file);
     std::fs::set_permissions(
-        &path,
+        &scratch,
         <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
     )
     .expect("make it executable");
+    std::fs::rename(&scratch, &path).expect("put the script in place");
     ScriptPath(path)
 }
 
