@@ -143,3 +143,57 @@ async fn live_dashscope_speech_returns_playable_wav() {
     assert_eq!(&audio.bytes[..4], b"RIFF");
     assert_eq!(&audio.bytes[8..12], b"WAVE");
 }
+
+/// Live check of the OpenAI-compatible embeddings route.
+///
+/// ```bash
+/// HARNESS_EMBED_URL=https://… HARNESS_EMBED_KEY=… \
+///   cargo test -p harness-rs-models --test live_media embeddings -- --ignored --nocapture
+/// ```
+///
+/// The unit tests only prove the adapter refuses bad input. What they cannot
+/// prove is that the vectors mean anything — so this asserts the property the
+/// whole feature rests on: similar sentences must score closer than unrelated
+/// ones. An adapter that returned the right *shape* of garbage would pass
+/// every offline test and rank a corpus at random.
+#[tokio::test]
+#[ignore = "calls a paid third-party service"]
+async fn embeddings_place_similar_sentences_near_each_other() {
+    use harness_core::{Embedder, l2_normalize};
+    use harness_models::OpenAiEmbed;
+
+    let (Ok(url), Ok(key)) = (
+        std::env::var("HARNESS_EMBED_URL"),
+        std::env::var("HARNESS_EMBED_KEY"),
+    ) else {
+        eprintln!("skipped: set HARNESS_EMBED_URL and HARNESS_EMBED_KEY");
+        return;
+    };
+    let model = std::env::var("HARNESS_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma:latest".into());
+    let dim: usize = std::env::var("HARNESS_EMBED_DIM")
+        .ok()
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(768);
+
+    let e = OpenAiEmbed::with_key(url, model, key, dim);
+    let inputs = [
+        "a lost kitten finds her way home in the snow",
+        "a little cat is lost in the winter and walks back home",
+        "a spreadsheet of quarterly revenue projections",
+    ];
+    let mut vs = e.embed(&inputs).await.expect("embedding failed");
+    assert_eq!(vs.len(), 3);
+    for v in &mut vs {
+        assert_eq!(v.len(), dim);
+        l2_normalize(v);
+    }
+
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let near = dot(&vs[0], &vs[1]);
+    let far = dot(&vs[0], &vs[2]);
+    eprintln!("similar={near:.3} unrelated={far:.3}");
+    assert!(
+        near > far,
+        "the two kitten sentences must be closer than the spreadsheet: {near} vs {far}"
+    );
+}
