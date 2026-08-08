@@ -24,6 +24,7 @@ pub mod anthropic;
 pub mod config;
 pub mod embed_gemini;
 pub mod embed_ollama;
+pub mod embed_openai;
 pub mod gemini;
 pub mod image_chat;
 pub mod image_dashscope;
@@ -44,6 +45,8 @@ pub use kind::*;
 // `embed_ollama` shares `DEFAULT_MODEL` / `DEFAULT_DIM` names with
 // `embed_gemini`; re-export only the adapter type to avoid a glob clash.
 pub use embed_ollama::OllamaEmbed;
+// Same reason as `embed_ollama`: shares `DEFAULT_MODEL` / `DEFAULT_DIM`.
+pub use embed_openai::OpenAiEmbed;
 pub use gemini::*;
 pub use image_chat::*;
 pub use image_dashscope::*;
