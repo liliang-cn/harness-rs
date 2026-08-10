@@ -122,6 +122,10 @@ pub enum CompileError {
         "time grain {grain:?} was requested but none of the group-by dimensions {dims:?} is declared type: time — fix the dimension's type in the model, or drop the grain"
     )]
     GrainMatchedNothing { grain: String, dims: Vec<String> },
+    #[error(
+        "the model declares timezone {tz:?} but the {dialect} dialect cannot bucket in a named zone — refused. Bucketing in the session zone instead would shift every period boundary without saying so."
+    )]
+    TimezoneUnsupported { dialect: String, tz: String },
 }
 
 static IDENT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap());
@@ -415,7 +419,17 @@ impl<'a> Compiler<'a> {
             let raw = self.qualify(&dim.entity, &dim.column);
             let mut expr = raw.clone();
             if dim.kind == "time" && !self.q.time_grain.is_empty() {
-                expr = self.d.date_trunc(&self.q.time_grain, &raw);
+                let tz = &self.m.timezone;
+                expr = if tz.is_empty() {
+                    self.d.date_trunc(&self.q.time_grain, &raw)
+                } else {
+                    self.d
+                        .date_trunc_tz(&self.q.time_grain, &raw, tz)
+                        .ok_or_else(|| CompileError::TimezoneUnsupported {
+                            dialect: self.d.name().into(),
+                            tz: tz.clone(),
+                        })?
+                };
                 applied = true;
             }
             out.push(ResolvedDim {

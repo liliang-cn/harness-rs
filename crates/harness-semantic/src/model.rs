@@ -29,6 +29,14 @@ pub enum ModelError {
         to: String,
         got: String,
     },
+    #[error(
+        "timezone {0:?} is not an IANA zone name (letters, digits, and _ + - / only, e.g. Asia/Shanghai)"
+    )]
+    BadTimezone(String),
+    #[error(
+        "metric {metric:?} is declared semi_additive but aggregates with {agg:?} — refused at load. A semi-additive measure is one row per period per entity, so summing it adds yesterday's balance to today's. Use min/max/avg for a point query, or drop the semi_additive declaration if it really is summable."
+    )]
+    SemiAdditiveSummed { metric: String, agg: String },
     #[error("{0}")]
     Parse(String),
 }
@@ -74,6 +82,21 @@ pub struct Dimension {
     /// SQL expression returned when the caller may not see the raw value.
     #[serde(default)]
     pub mask: String,
+    /// If set, only these roles may group or filter by this dimension.
+    ///
+    /// **Masking is not a substitute for this.** A mask changes the *label*; it
+    /// does not stop the caller from slicing by the column. `revenue by
+    /// customer_email` with a masked email still returns one row per customer —
+    /// the cohort structure, the count, and the ordering are the customer list,
+    /// spelled with `***` where the name would be. And a filter is worse: given
+    /// `where customer_email = ?`, whether the number moves answers the question
+    /// directly.
+    ///
+    /// k-anonymity covers part of this, but only for dimensions someone
+    /// remembered to name in `k_anon_dims`, and only when `k > 0` — which
+    /// `Policy::default()` is not.
+    #[serde(default)]
+    pub roles: Vec<String>,
     /// The values this dimension actually takes, when there are few enough to
     /// list. Empty means "not enumerated" — never "no values".
     ///
@@ -181,6 +204,23 @@ pub struct Model {
     #[serde(default)]
     pub metrics: Vec<Metric>,
 
+    /// The timezone the business is transacted in, as an IANA name
+    /// (`Asia/Shanghai`). Empty means **the database session's timezone**,
+    /// whatever that happens to be.
+    ///
+    /// Every time bucket in this layer is a `date_trunc`, and `date_trunc` has no
+    /// opinion about timezones — it truncates in whatever zone the session is in.
+    /// A warehouse storing `timestamptz` in UTC therefore cuts "this month" at
+    /// 08:00 on the 1st for a business in UTC+8: the last eight hours of every
+    /// month land in the next one. Both months are off, both look plausible, and
+    /// nothing in the answer says which zone it was bucketed in.
+    ///
+    /// Declared here rather than per query because it is a property of the
+    /// business, not of the question. Two people asking "本月流水" must not get
+    /// two different months because one of them passed the parameter.
+    #[serde(default)]
+    pub timezone: String,
+
     #[serde(skip)]
     entity_ix: HashMap<String, usize>,
     #[serde(skip)]
@@ -207,6 +247,19 @@ impl Model {
         self.entity_ix.clear();
         self.dim_ix.clear();
         self.metric_ix.clear();
+
+        // The zone name is inlined into SQL by the dialect — `AT TIME ZONE 'x'`
+        // takes no bind parameter on most engines — so it is validated here
+        // instead. This is the only string in the model that reaches SQL without
+        // going through a placeholder, and the check is what keeps that true.
+        if !self.timezone.is_empty()
+            && !self
+                .timezone
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-' | '/'))
+        {
+            return Err(ModelError::BadTimezone(self.timezone.clone()));
+        }
 
         for (i, e) in self.entities.iter().enumerate() {
             if e.name.is_empty() || e.table.is_empty() || e.primary_key.is_empty() {
@@ -241,6 +294,24 @@ impl Model {
                         got: got.to_string(),
                     });
                 }
+            }
+            // A declared `semi_additive` used to be pure decoration: the
+            // compiler consults `additivity` only on the window path, so a base
+            // metric declared semi-additive was summed like any other. Sliced by
+            // month, a stock level came back as the sum of every day's balance —
+            // a number roughly thirty times the truth, in the right units, with
+            // no error anywhere. Refuse the combination at load: it is decidable
+            // from the model alone, and a defect that only appears for *some*
+            // group-bys is one nobody finds by querying.
+            if mt.additivity == SEMI_ADDITIVE
+                && !mt.is_derived()
+                && !mt.is_window()
+                && matches!(mt.agg.to_lowercase().as_str(), "sum" | "count")
+            {
+                return Err(ModelError::SemiAdditiveSummed {
+                    metric: mt.name.clone(),
+                    agg: mt.agg.clone(),
+                });
             }
             if !mt.reset.is_empty() {
                 if !mt.is_window() {

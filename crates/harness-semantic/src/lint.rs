@@ -28,6 +28,21 @@ impl fmt::Display for Issue {
 /// Issues come back in model order; callers gate on the error count.
 pub fn lint(m: &Model) -> Vec<Issue> {
     let mut out = Vec::new();
+
+    // A model with time dimensions and no declared zone buckets in whatever zone
+    // the session happens to be in. That is a legal deployment — a warehouse
+    // storing local time in a single-zone business needs nothing else — so this
+    // is a warning, not an error. It is here because the failure is otherwise
+    // invisible: the numbers are plausible, the boundaries are eight hours off,
+    // and nothing in the answer says which zone it used.
+    if m.timezone.is_empty() && m.dimensions.iter().any(|d| d.kind == "time") {
+        out.push(Issue {
+            severity: "warn",
+            target: "(model)".into(),
+            message: "time dimensions but no timezone: — buckets follow the database session's zone, so period boundaries move with it",
+        });
+    }
+
     for mt in &m.metrics {
         if mt.description.is_empty() {
             out.push(Issue {

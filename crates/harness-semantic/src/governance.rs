@@ -99,17 +99,30 @@ impl Policy {
 pub enum GovernanceError {
     #[error("metric {metric:?} not authorized for role {role:?}")]
     NotAuthorized { metric: String, role: String },
+    #[error("dimension {dimension:?} not authorized for role {role:?}")]
+    DimensionNotAuthorized { dimension: String, role: String },
     #[error("row policy: caller {user:?} has no {attr:?} attribute")]
     MissingAttr { user: String, attr: String },
 }
 
-/// Refuses a query naming a metric this role may not resolve.
+/// Refuses a query naming a metric **or a dimension** this role may not use.
 ///
-/// An unknown metric is *not* refused here — the compiler reports it, and
+/// An unknown name is *not* refused here — the compiler reports it, and
 /// reporting "not authorized" for something that doesn't exist tells a caller
-/// probing for metric names that it does.
-pub fn authorize(m: &Model, metrics: &[String], role: &str) -> Result<(), GovernanceError> {
-    for name in metrics {
+/// probing for names that it does.
+///
+/// # Dimensions are checked in `group_by` **and** in `where_`
+///
+/// Slicing by a gated dimension hands over the thing the gate protects: one row
+/// per customer *is* the customer list, whatever the label column says. And a
+/// filter gives the same answer more cheaply — ask for the total, then ask again
+/// with `customer_email = ?`, and whether the number moves is the answer.
+///
+/// So both halves of the query are checked, and this runs **before** `apply_rls`
+/// so a row filter the layer injects on the caller's behalf is never the thing
+/// that gets refused.
+pub fn authorize(m: &Model, q: &Query, role: &str) -> Result<(), GovernanceError> {
+    for name in &q.metrics {
         let Some(mt) = m.metric(name) else { continue };
         if mt.roles.is_empty() {
             continue;
@@ -117,6 +130,22 @@ pub fn authorize(m: &Model, metrics: &[String], role: &str) -> Result<(), Govern
         if !mt.roles.iter().any(|r| r == role) {
             return Err(GovernanceError::NotAuthorized {
                 metric: name.clone(),
+                role: role.into(),
+            });
+        }
+    }
+    let used = q
+        .group_by
+        .iter()
+        .chain(q.where_.iter().map(|f| &f.dimension));
+    for name in used {
+        let Some(d) = m.dimension(name) else { continue };
+        if d.roles.is_empty() {
+            continue;
+        }
+        if !d.roles.iter().any(|r| r == role) {
+            return Err(GovernanceError::DimensionNotAuthorized {
+                dimension: name.clone(),
                 role: role.into(),
             });
         }
@@ -258,7 +287,7 @@ entities:
   - {name: order, table: orders, primary_key: id}
 dimensions:
   - {name: region, entity: order, column: region, type: categorical}
-  - {name: customer_email, entity: order, column: email, type: categorical, mask: "'***'"}
+  - {name: customer_email, entity: order, column: email, type: categorical, mask: "'***'", roles: [admin]}
 metrics:
   - {name: revenue, entity: order, agg: sum, expr: amount, roles: [finance, admin]}
   - {name: order_count, entity: order, agg: count, expr: id}
@@ -267,12 +296,19 @@ metrics:
         .unwrap()
     }
 
+    fn asking(metric: &str) -> Query {
+        Query {
+            metrics: vec![metric.into()],
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn a_gated_metric_is_refused_for_other_roles() {
         let m = model();
-        assert!(authorize(&m, &["revenue".into()], "finance").is_ok());
-        assert!(authorize(&m, &["order_count".into()], "clerk").is_ok()); // ungated
-        let err = authorize(&m, &["revenue".into()], "ceo").unwrap_err();
+        assert!(authorize(&m, &asking("revenue"), "finance").is_ok());
+        assert!(authorize(&m, &asking("order_count"), "clerk").is_ok()); // ungated
+        let err = authorize(&m, &asking("revenue"), "ceo").unwrap_err();
         assert_eq!(
             err.to_string(),
             r#"metric "revenue" not authorized for role "ceo""#
@@ -284,7 +320,38 @@ metrics:
         // Answering "not authorized" for a metric that doesn't exist tells a
         // caller probing for names that it does.
         let m = model();
-        assert!(authorize(&m, &["nope".into()], "ceo").is_ok());
+        assert!(authorize(&m, &asking("nope"), "ceo").is_ok());
+    }
+
+    /// Slicing by a gated dimension is the leak the mask does not stop: one row
+    /// per customer is the customer list, spelled `***`.
+    #[test]
+    fn a_gated_dimension_is_refused_in_group_by_and_in_a_filter() {
+        let m = model();
+
+        let mut by = asking("order_count");
+        by.group_by = vec!["customer_email".into()];
+        let err = authorize(&m, &by, "analyst").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            r#"dimension "customer_email" not authorized for role "analyst""#
+        );
+        assert!(authorize(&m, &by, "admin").is_ok());
+
+        // A filter answers the same question more cheaply: ask for the total,
+        // then ask again with the predicate, and watch whether it moves.
+        let mut filtered = asking("order_count");
+        filtered.where_ = vec![Filter {
+            dimension: "customer_email".into(),
+            op: "=".into(),
+            values: vec![Value::Str("a@b.com".into())],
+        }];
+        assert!(authorize(&m, &filtered, "analyst").is_err());
+
+        // An ungated dimension is untouched.
+        let mut region = asking("order_count");
+        region.group_by = vec!["region".into()];
+        assert!(authorize(&m, &region, "analyst").is_ok());
     }
 
     #[test]
