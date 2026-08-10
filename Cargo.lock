@@ -1803,16 +1803,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-rs-semantic"
-version = "0.0.39"
-dependencies = [
- "regex",
- "serde",
- "serde_yaml",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "harness-rs-sensors-common"
 version = "0.0.39"
 dependencies = [
