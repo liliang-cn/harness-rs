@@ -5,6 +5,17 @@ pub trait Dialect: Send + Sync {
     fn name(&self) -> &'static str;
     fn quote_ident(&self, id: &str) -> String;
     fn date_trunc(&self, grain: &str, expr: &str) -> String;
+
+    /// Truncate to `grain` **in `tz`**, an IANA zone name.
+    ///
+    /// `None` means this engine cannot do it, and the compiler then refuses the
+    /// query. There is deliberately **no default implementation**: a default
+    /// returning `None` would let a newly added dialect lose timezone support
+    /// without anybody writing a line about it, and a default that ignored `tz`
+    /// would bucket in the session zone while the model says otherwise — the
+    /// silent version of the bug this method exists to fix.
+    fn date_trunc_tz(&self, grain: &str, expr: &str, tz: &str) -> Option<String>;
+
     /// Bind placeholder for the i-th argument (1-based).
     fn placeholder(&self, i: usize) -> String;
     /// Null-safe equality, for joining CTEs on dimensions that may be NULL.
@@ -46,6 +57,11 @@ impl Dialect for Postgres {
     fn date_trunc(&self, g: &str, e: &str) -> String {
         format!("date_trunc('{g}', {e})")
     }
+    /// `timestamptz AT TIME ZONE 'x'` yields the local wall clock as a plain
+    /// `timestamp`, which is exactly what a bucket label should be.
+    fn date_trunc_tz(&self, g: &str, e: &str, tz: &str) -> Option<String> {
+        Some(format!("date_trunc('{g}', ({e}) AT TIME ZONE '{tz}')"))
+    }
     fn placeholder(&self, i: usize) -> String {
         format!("${i}")
     }
@@ -69,6 +85,13 @@ impl Dialect for Ansi {
     fn date_trunc(&self, g: &str, e: &str) -> String {
         format!("date_trunc('{g}', {e})")
     }
+    /// Refused. There is no portable spelling — `AT TIME ZONE`,
+    /// `CONVERT_TIMEZONE` and `from_utc_timestamp` are three different engines'
+    /// answers, and picking one here would produce a syntax error on the other
+    /// two while claiming to be the portable dialect.
+    fn date_trunc_tz(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        None
+    }
     fn placeholder(&self, _: usize) -> String {
         "?".into()
     }
@@ -90,6 +113,11 @@ impl Dialect for Snowflake {
     }
     fn date_trunc(&self, g: &str, e: &str) -> String {
         format!("DATE_TRUNC('{g}', {e})")
+    }
+    fn date_trunc_tz(&self, g: &str, e: &str, tz: &str) -> Option<String> {
+        Some(format!(
+            "DATE_TRUNC('{g}', CONVERT_TIMEZONE('{tz}', {e}))"
+        ))
     }
     fn placeholder(&self, i: usize) -> String {
         format!(":{i}")
@@ -113,6 +141,12 @@ impl Dialect for Databricks {
     fn date_trunc(&self, g: &str, e: &str) -> String {
         format!("date_trunc('{}', {e})", g.to_uppercase())
     }
+    fn date_trunc_tz(&self, g: &str, e: &str, tz: &str) -> Option<String> {
+        Some(format!(
+            "date_trunc('{}', from_utc_timestamp({e}, '{tz}'))",
+            g.to_uppercase()
+        ))
+    }
     fn placeholder(&self, _: usize) -> String {
         "?".into()
     }
@@ -134,6 +168,9 @@ impl Dialect for DuckDb {
     }
     fn date_trunc(&self, g: &str, e: &str) -> String {
         format!("date_trunc('{g}', {e})")
+    }
+    fn date_trunc_tz(&self, g: &str, e: &str, tz: &str) -> Option<String> {
+        Some(format!("date_trunc('{g}', ({e}) AT TIME ZONE '{tz}')"))
     }
     fn placeholder(&self, i: usize) -> String {
         format!("${i}")
@@ -179,6 +216,18 @@ impl Dialect for MySql {
             _ => format!("DATE_TRUNC('{g}', {e})"),
         }
     }
+    /// Converts first, then truncates with the same emulation.
+    ///
+    /// **`CONVERT_TZ` with a named zone needs the timezone tables loaded**
+    /// (`mysql_tzinfo_to_sql`); without them it returns NULL. That failure is
+    /// loud in the right way — every row lands in one NULL bucket, which nobody
+    /// mistakes for a correct answer — rather than the quiet eight-hour shift
+    /// this method exists to remove. Offsets (`+08:00`) work without the tables,
+    /// but they do not know about DST, so a zone name is the right thing to
+    /// declare and a NULL column is the right way to find out it is missing.
+    fn date_trunc_tz(&self, g: &str, e: &str, tz: &str) -> Option<String> {
+        Some(self.date_trunc(g, &format!("CONVERT_TZ({e}, '+00:00', '{tz}')")))
+    }
     fn placeholder(&self, _: usize) -> String {
         "?".into()
     }
@@ -217,6 +266,13 @@ impl Dialect for Sqlite {
             _ => format!("DATE_TRUNC('{g}', {e})"),
         }
     }
+    /// Refused. SQLite ships no timezone database — `date(x, 'localtime')` uses
+    /// the *host's* zone, which makes the same query bucket differently on a
+    /// developer's laptop and on the server. A fixed `'+8 hours'` would ignore
+    /// DST. Neither is a timezone; both are a wrong answer that runs.
+    fn date_trunc_tz(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        None
+    }
     fn placeholder(&self, _: usize) -> String {
         "?".into()
     }
@@ -250,6 +306,14 @@ impl Dialect for SqlServer {
             }
             _ => format!("DATETRUNC({g}, {e})"),
         }
+    }
+    /// Refused. T-SQL's `AT TIME ZONE` takes **Windows** zone names
+    /// (`China Standard Time`), not IANA ones (`Asia/Shanghai`), and the model
+    /// declares IANA. Translating between the two needs a mapping table that
+    /// would be wrong for exactly the zones nobody tests. A refusal names the
+    /// problem; a guessed mapping ships a query that buckets by the wrong offset.
+    fn date_trunc_tz(&self, _: &str, _: &str, _: &str) -> Option<String> {
+        None
     }
     fn placeholder(&self, i: usize) -> String {
         format!("@p{i}")

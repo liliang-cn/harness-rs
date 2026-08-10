@@ -478,3 +478,132 @@ metrics: [{name: revenue, entity: sale, agg: sum, expr: amount}]
     let typo_entity = good.replace("primary_key:", "primarykey:");
     assert!(Model::from_yaml(&typo_entity).is_err());
 }
+
+/// `additivity: semi_additive` used to be pure decoration.
+///
+/// The compiler consults `additivity` only on the window path, so a base metric
+/// declared semi-additive was summed like anything else. Sliced by month, a
+/// stock level came back as the sum of every day's balance — about thirty times
+/// the truth, in the right units, with nothing anywhere saying so.
+///
+/// Refused at **load**, not at query time: it is decidable from the model alone,
+/// and a defect that only shows up for *some* group-bys is one nobody finds by
+/// querying.
+#[test]
+fn a_semi_additive_measure_may_not_be_summed() {
+    let src = |extra: &str| {
+        format!(
+            r#"
+entities: [{{name: stock, table: stock_daily, primary_key: id}}]
+dimensions: [{{name: as_of, entity: stock, column: as_of, type: time}}]
+metrics: [{{name: on_hand, description: d, entity: stock, agg: {extra}, expr: qty, additivity: semi_additive}}]
+"#
+        )
+    };
+
+    let err = Model::from_yaml(&src("sum")).unwrap_err();
+    assert!(
+        err.to_string().contains("semi_additive"),
+        "要点名是这个声明: {err}"
+    );
+    assert!(Model::from_yaml(&src("count")).is_err(), "count 也在重复计数");
+
+    // 时点取值是合法的：一个余额的最大/最小/平均都不跨期相加。
+    for agg in ["max", "min", "avg"] {
+        assert!(
+            Model::from_yaml(&src(agg)).is_ok(),
+            "{agg} 是时点查询，不该被拒"
+        );
+    }
+
+    // 没声明 semi_additive 的 sum 照旧。这条闸只拦「说了自己是半可加、然后又求和」。
+    let plain = src("sum").replace(", additivity: semi_additive", "");
+    assert!(Model::from_yaml(&plain).is_ok());
+}
+
+/// `date_trunc` has no opinion about timezones — it truncates in whatever zone
+/// the session is in. A warehouse holding UTC therefore cuts "this month" at
+/// 08:00 on the 1st for a business in UTC+8, and the last eight hours of every
+/// month land in the next one. Both months are plausible. Both are wrong.
+#[test]
+fn a_declared_timezone_buckets_in_that_zone_on_every_engine_that_can() {
+    let src = r#"
+timezone: Asia/Shanghai
+entities: [{name: order, table: orders, primary_key: id}]
+dimensions: [{name: order_time, entity: order, column: order_time, type: time}]
+metrics: [{name: revenue, description: d, entity: order, agg: sum, expr: amount}]
+"#;
+    let m = Model::from_yaml(src).expect("model");
+    let mut query = q(&["revenue"], &["order_time"]);
+    query.time_grain = "month".into();
+
+    for (name, want) in [
+        ("postgres", r#"AT TIME ZONE 'Asia/Shanghai'"#),
+        ("duckdb", r#"AT TIME ZONE 'Asia/Shanghai'"#),
+        ("snowflake", r#"CONVERT_TIMEZONE('Asia/Shanghai'"#),
+        ("databricks", r#"from_utc_timestamp"#),
+        ("mysql", r#"CONVERT_TZ("#),
+    ] {
+        let d = dialect::by_name(name).unwrap();
+        let sql = compile(&m, &query, d.as_ref()).expect(name).sql;
+        assert!(sql.contains(want), "{name} 该在 {want} 里分桶:\n{sql}");
+    }
+
+    // 接不住命名时区的引擎**拒绝**，不是退回会话时区偷偷分错桶。
+    for name in ["sqlite", "sqlserver", "ansi"] {
+        let d = dialect::by_name(name).unwrap();
+        let err = compile(&m, &query, d.as_ref()).expect_err(name);
+        assert!(
+            err.to_string().contains("Asia/Shanghai"),
+            "{name} 的拒绝要说出是哪个时区: {err}"
+        );
+    }
+
+    // 不声明时区 = 跟着会话走，照旧编，不拒。单区业务的库本来就不需要别的。
+    let no_tz = Model::from_yaml(&src.replace("timezone: Asia/Shanghai\n", "")).unwrap();
+    let d = dialect::by_name("sqlite").unwrap();
+    assert!(compile(&no_tz, &query, d.as_ref()).is_ok());
+
+    // 时区名是唯一一个不走占位符就进 SQL 的字符串，所以它在装载时就被验。
+    let bad = src.replace("Asia/Shanghai", "Asia/Shanghai'; DROP TABLE orders --");
+    assert!(Model::from_yaml(&bad).is_err(), "非 IANA 的名字该在装载时拒");
+}
+
+/// 一份有时间维、却没写时区的模型是合法部署（单区业务的库存的就是本地时间），
+/// 所以这是 warn 不是 error —— 但它必须说出来：这类错的边界，答案里没有任何
+/// 东西会提示它用的是哪个时区。
+#[test]
+fn lint_warns_when_time_dimensions_have_no_declared_timezone() {
+    let m = Model::from_yaml(
+        r#"
+entities: [{name: order, table: orders, primary_key: id}]
+dimensions: [{name: order_time, entity: order, column: order_time, type: time}]
+metrics: [{name: revenue, description: d, synonyms: [sales], entity: order, agg: sum, expr: amount}]
+"#,
+    )
+    .unwrap();
+    let issues = lint::lint(&m);
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == "warn" && i.message.contains("timezone")),
+        "{issues:?}"
+    );
+    assert!(lint::lint_errors(&m).is_empty(), "只是 warn，不该挡 CI");
+
+    // 声明了就不再抱怨。
+    let with_tz = Model::from_yaml(
+        r#"
+timezone: Asia/Shanghai
+entities: [{name: order, table: orders, primary_key: id}]
+dimensions: [{name: order_time, entity: order, column: order_time, type: time}]
+metrics: [{name: revenue, description: d, synonyms: [sales], entity: order, agg: sum, expr: amount}]
+"#,
+    )
+    .unwrap();
+    assert!(
+        !lint::lint(&with_tz)
+            .iter()
+            .any(|i| i.message.contains("timezone"))
+    );
+}
