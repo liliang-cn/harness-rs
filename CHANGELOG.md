@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **`CortexdbGrpcMemory` — `Memory` over CortexDB's own gRPC API** (`grpc` feature, off by default:
+  it pulls in tonic/prost and wants `protoc`). The MCP path reaches an MCP server; that is not what
+  a running deployment is. The openclaw sidecar talks to `host:47821` over gRPC, and that port
+  answers nothing at all to HTTP — so `connect_http`, which speaks MCP Streamable HTTP, cannot join
+  the brain a cluster already runs, however alike the two endpoints look written down. Field mapping
+  matches the MCP path exactly (`role:` / `session:` tags promoted to typed fields, the rest into
+  `metadata`), so an entry written over either transport reads back the same: two ways in, one
+  brain.
+
+  Everything here that matters was found by a live round-trip against a real CortexDB, and none of
+  it by the unit tests: no bearer token (the server announces `auth=bearer token` and answers
+  `Unauthenticated` without one — `with_token`, defaulting to `$CORTEXDB_GRPC_TOKEN`, the variable
+  the sidecar sets), and no session id (`InvalidArgument: session_id is required for session scope`
+  — a memory configured for that scope and given none is broken by construction, so
+  `with_session_id`). `tests/grpc_live.rs` is that round-trip, skipped unless `CORTEXDB_GRPC` names
+  a server.
+
 ## 0.0.40
 
 Everything below came out of one exercise: point the framework's own telemetry at real runs and

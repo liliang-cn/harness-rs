@@ -17,6 +17,12 @@ name = "harness_cortexdb"
 # deployment once more than one agent shares the brain.
 default = ["http"]
 http = ["harness-mcp-client/http"]
+# Speak CortexDB's own gRPC API instead of MCP. This is the protocol an existing
+# deployment already serves — the openclaw sidecar talks to `host:47821` over
+# gRPC, not MCP — so it is how a harness agent joins a brain that is already
+# running. Off by default: it pulls in tonic/prost and needs `protoc` at build
+# time, which the MCP path does not.
+grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tonic-build"]
 
 [dependencies]
 harness-core       = { workspace = true }
@@ -27,6 +33,13 @@ serde_json         = { workspace = true }
 anyhow             = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
+tonic              = { version = "0.12", optional = true }
+prost              = { version = "0.13", optional = true }
+prost-types        = { version = "0.13", optional = true }
+
+[build-dependencies]
+# Only compiled when the `grpc` feature is enabled (see build.rs).
+tonic-build = { version = "0.12", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

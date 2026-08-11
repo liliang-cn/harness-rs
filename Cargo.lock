@@ -1568,8 +1568,12 @@ dependencies = [
  "harness-rs-context",
  "harness-rs-core",
  "harness-rs-mcp-client",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "serde_json",
  "tokio",
+ "tonic 0.12.3",
+ "tonic-build",
  "tracing",
 ]
 

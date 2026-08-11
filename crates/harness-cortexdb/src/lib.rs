@@ -19,10 +19,17 @@
 //!
 //! The memory does not have to be a process this agent spawns. Point it at a
 //! CortexDB that is already running — one brain shared by a fleet of agents, an
-//! editor and a chat client, and highly available in the ordinary way:
+//! editor and a chat client, and highly available in the ordinary way. Which
+//! constructor depends on what that CortexDB serves, and the two look alike
+//! written down:
 //!
 //! ```ignore
+//! // An MCP server reachable over Streamable HTTP:
 //! let mem = Arc::new(CortexdbMemory::connect_http("https://cortex.internal/mcp").await?);
+//!
+//! // CortexDB's own gRPC API — what the openclaw sidecar runs, on :47821.
+//! // Requires the `grpc` feature; see `grpc::CortexdbGrpcMemory`.
+//! let mem = Arc::new(CortexdbGrpcMemory::connect("http://127.0.0.1:47821").await?);
 //! ```
 //!
 //! Harness `MemoryEntry` fields round-trip through CortexDB: `content` maps to
@@ -53,6 +60,13 @@
 //! ```
 
 use async_trait::async_trait;
+/// `Memory` over CortexDB's own gRPC API — what a deployment already serves.
+/// See [`grpc::CortexdbGrpcMemory`]. Requires the `grpc` feature.
+#[cfg(feature = "grpc")]
+pub mod grpc;
+#[cfg(feature = "grpc")]
+pub use grpc::CortexdbGrpcMemory;
+
 use harness_core::{Memory, MemoryEntry, MemoryError, Tool};
 use harness_mcp_client::McpClient;
 use serde_json::{Value, json};
@@ -81,14 +95,16 @@ impl CortexdbMemory {
         Self::from_client(McpClient::connect_stdio(program, args).await?)
     }
 
-    /// Connect to a **remote** CortexDB over MCP Streamable HTTP.
+    /// Connect to a remote **MCP** server over Streamable HTTP.
     ///
-    /// The memory does not have to be a process this agent spawns. One CortexDB
-    /// behind an HTTP endpoint is the same brain for every client that reaches
-    /// it — a fleet of agents, an editor, a chat bot — instead of one private
-    /// store per process, and it can be made highly available in the ordinary
-    /// way. `connect_stdio` was the only documented path, which read as though
-    /// it were the only one.
+    /// This is an MCP endpoint, not CortexDB's own API. The distinction is easy
+    /// to lose because both are written as a URL: a CortexDB started the way the
+    /// openclaw sidecar starts one serves **gRPC** on `host:47821` and answers
+    /// nothing at all to HTTP, so pointing this at it fails at the transport.
+    /// For that deployment use [`CortexdbGrpcMemory`](crate::grpc::CortexdbGrpcMemory)
+    /// (`grpc` feature), which speaks the protocol the server actually serves.
+    ///
+    /// Use this one when the CortexDB in front of you exposes MCP over HTTP.
     ///
     /// Requires the `http` feature of `harness-rs-mcp-client` (on by default,
     /// with rustls). For an untrusted URL use
