@@ -11,6 +11,16 @@ was the framework, which ruled out the loop as a place worth optimising — and 
 that was a tool given the wrong shape, a guard that was never reached, or a mechanism nobody had
 watched run.
 
+### Added
+
+- **`CortexdbMemory::connect_http` — the memory can be a CortexDB that is already running.**
+  `McpClient` has had a Streamable-HTTP transport all along and `from_client` was public, so this
+  worked; nothing said so. Every example and every constructor named `connect_stdio`, which reads as
+  though a private per-process store were the only option. One endpoint is one brain for a fleet of
+  agents, an editor and a chat client at once, and can be made highly available in the ordinary way.
+  For an untrusted URL, `McpClient::connect_http_with_client` + `from_client` leaves the redirect
+  and DNS policy with the caller.
+
 ### Changed (breaking)
 
 - `Event::PostCompact` carries `before` / `after`. Destructuring it as `{ stage }` no longer
