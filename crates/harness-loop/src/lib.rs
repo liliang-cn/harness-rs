@@ -187,6 +187,25 @@ pub struct AgentLoop<M: Model> {
     pub system: Vec<Block>,
 }
 
+impl AgentLoop<harness_core::DynModel> {
+    /// Build a loop from a boxed model — what every model factory hands back
+    /// (`ApiKind::build`, a router, anything stored behind a trait object).
+    ///
+    /// `Arc<dyn Model>` deliberately does not implement `Model` (see
+    /// [`DynModel`](harness_core::DynModel) for why), so `AgentLoop::new` cannot
+    /// take one. Without this constructor every caller writes the wrapper
+    /// themselves, and the first thing a new user meets is a trait-bound error
+    /// naming a type they have never heard of.
+    ///
+    /// ```ignore
+    /// let model = ApiKind::OpenAI.build(base_url, model_id, key);
+    /// let agent = AgentLoop::boxed(model).with_tool(Arc::new(ReadFile));
+    /// ```
+    pub fn boxed(model: Arc<dyn Model>) -> Self {
+        Self::new(harness_core::DynModel(model))
+    }
+}
+
 impl<M: Model> AgentLoop<M> {
     pub fn new(model: M) -> Self {
         Self {
@@ -628,9 +647,17 @@ impl<M: Model> AgentLoop<M> {
                         break;
                     }
                     self.hooks.fire(&Event::PreCompact { stage }, world);
+                    let before = budget.used;
                     self.compactor.compact(stage, &mut ctx).await?;
-                    self.hooks.fire(&Event::PostCompact { stage }, world);
                     budget = self.compactor.budget(&ctx);
+                    self.hooks.fire(
+                        &Event::PostCompact {
+                            stage,
+                            before,
+                            after: budget.used,
+                        },
+                        world,
+                    );
                 }
             }
 

@@ -104,6 +104,11 @@ enum Cmd {
         /// Print the full Outcome as JSON instead of just the final text.
         #[arg(long)]
         json: bool,
+        /// Print structured telemetry to stderr: per-turn tokens, tool calls and
+        /// durations, compaction savings, and a closing summary of the whole run.
+        /// Shorthand for RUST_LOG=harness.telemetry=info.
+        #[arg(long)]
+        telemetry: bool,
         /// Record the session to a JSONL log for later `harness replay`/`trace`.
         #[arg(long)]
         record: Option<PathBuf>,
@@ -263,8 +268,16 @@ enum SkillsCmd {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber_init();
+    // Parse first: `run --telemetry` has to raise the filter before the
+    // subscriber is built, or the flag would need a second process to take.
     let cli = Cli::parse();
+    tracing_subscriber_init(matches!(
+        cli.cmd,
+        Cmd::Run {
+            telemetry: true,
+            ..
+        }
+    ));
     match cli.cmd {
         Cmd::Skills {
             cmd: SkillsCmd::Validate { path },
@@ -373,6 +386,7 @@ async fn main() -> anyhow::Result<()> {
             shell,
             progress,
             json,
+            telemetry: _,
             record,
         } => {
             run_agent(RunOpts {
@@ -429,6 +443,11 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
 
     let model = OpenAiCompat::with_key(base_url, model_id, key);
     let mut loop_ = AgentLoop::new(model)
+        // Always on: the hook only emits `tracing` spans/events, which cost
+        // nothing without a subscriber. Without it, `RUST_LOG=harness.telemetry=info`
+        // — the documented way to watch a run — produces silence, and the
+        // framework's GenAI instrumentation is unreachable from its own CLI.
+        .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
         .with_tool(Arc::new(harness_tools_fs::ReadFile))
         .with_tool(Arc::new(harness_tools_fs::ListDir));
     if opts.write {
@@ -805,15 +824,27 @@ fn resolve_endpoint(
     model: Option<String>,
     base_url: Option<String>,
 ) -> anyhow::Result<(String, String, String)> {
-    let key = std::env::var("HARNESS_API_KEY")
-        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+    let (key, key_var) = std::env::var("HARNESS_API_KEY")
+        .map(|k| (k, "HARNESS_API_KEY"))
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY").map(|k| (k, "DEEPSEEK_API_KEY")))
         .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY (or DEEPSEEK_API_KEY)"))?;
+    let explicit_url = base_url.is_some() || std::env::var("HARNESS_BASE_URL").is_ok();
     let base_url = base_url
         .or_else(|| std::env::var("HARNESS_BASE_URL").ok())
         .unwrap_or_else(|| "https://api.deepseek.com".to_string());
     let model_id = model
         .or_else(|| std::env::var("HARNESS_MODEL").ok())
         .unwrap_or_else(|| "deepseek-chat".to_string());
+
+    // A key set for one provider, sent to the default endpoint of another, is a
+    // 401 that reads like a bad key rather than a misrouted one. Say the pairing
+    // out loud before the request, while it can still be acted on.
+    if !explicit_url && key_var == "HARNESS_API_KEY" {
+        eprintln!(
+            "note: using $HARNESS_API_KEY against the default endpoint {base_url} \
+             (set --base-url or $HARNESS_BASE_URL if that key belongs elsewhere)"
+        );
+    }
     Ok((base_url, model_id, key))
 }
 
@@ -1179,6 +1210,10 @@ harness-rs-mcp            = {{ path = "{root}/crates/harness-mcp" }}
         String::new()
     };
 
+    // The workspace ships one version across every crate, and this binary is
+    // built from it — so the scaffold pins whatever `harness new` itself is,
+    // instead of a literal that goes stale the next release.
+    let v = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
@@ -1191,12 +1226,12 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-harness-rs           = "0.0.4"
-harness-rs-core      = "0.0.4"
-harness-rs-loop      = "0.0.4"
-harness-rs-models    = "0.0.4"
-harness-rs-tools-fs  = "0.0.4"
-harness-rs-context   = "0.0.4"
+harness-rs           = "{v}"
+harness-rs-core      = "{v}"
+harness-rs-loop      = "{v}"
+harness-rs-models    = "{v}"
+harness-rs-tools-fs  = "{v}"
+harness-rs-context   = "{v}"
 tokio                = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 anyhow               = "1"
 serde_json           = "1"
@@ -1290,10 +1325,9 @@ async fn main() -> anyhow::Result<()> {
         println!("  └─ [patch.crates-io] → {}", root.display());
     } else {
         println!();
-        println!("Note: the framework isn't on crates.io yet. To build this project");
-        println!("today, either re-run with `--local` (auto-detects the harness");
-        println!("workspace from the installed binary) or `--workspace <path>`,");
-        println!("or add a [patch.crates-io] section manually.");
+        println!("Depends on the published harness-rs {v}. To build against a local");
+        println!("checkout instead, re-run with `--local` (auto-detects the harness");
+        println!("workspace from the installed binary) or `--workspace <path>`.");
     }
     println!();
     println!("Next steps:");
@@ -1350,15 +1384,41 @@ fn detect_local_workspace() -> anyhow::Result<PathBuf> {
     }
 }
 
-fn tracing_subscriber_init() {
+fn tracing_subscriber_init(telemetry: bool) {
     use tracing_subscriber::{EnvFilter, fmt};
     // Default to `warn` so real failures (model 401s, delivery errors, dropped
     // jobs) surface instead of vanishing; override verbosity with RUST_LOG,
     // e.g. `RUST_LOG=harness_scheduler=info,harness_loop=debug`. Logs go to
     // stderr so they never pollute `run --json` / MCP stdout.
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    // `--telemetry` is the discoverable form of RUST_LOG=harness.telemetry=info.
+    // An explicit RUST_LOG still wins, so the flag never overrides a deliberate
+    // filter — it only supplies one for the reader who has not learned the env
+    // var yet.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(if telemetry {
+            "warn,harness.telemetry=info"
+        } else {
+            "warn"
+        })
+    });
     let _ = fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+#[cfg(test)]
+mod scaffold_tests {
+    // `harness new` used to pin the generated project to a literal "0.0.4"
+    // while the workspace shipped 0.0.39 — a scaffold that compiles, against a
+    // framework 35 releases behind, with no sign anything is wrong. The pin now
+    // comes from this binary's own version, which is the workspace version.
+    #[test]
+    fn scaffold_pins_the_current_version() {
+        let v = env!("CARGO_PKG_VERSION");
+        assert_ne!(v, "0.0.4", "the scaffold must not carry a stale literal");
+        // Every dependency line the template writes uses the same `{v}`.
+        let rendered = format!(r#"harness-rs = "{v}""#);
+        assert!(rendered.contains(v));
+    }
 }

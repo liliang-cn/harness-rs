@@ -20,3 +20,9 @@ quote       = { workspace = true }
 syn         = { workspace = true }
 serde_json  = { workspace = true }
 serde_yaml  = { workspace = true }
+
+# The macros are the front door; these let the tests compile what they expand to.
+[dev-dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+tokio           = { workspace = true, features = ["macros", "rt-multi-thread"] }

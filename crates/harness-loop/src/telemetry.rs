@@ -33,9 +33,10 @@
 //!   ├─ tool.call       (gen_ai.operation.name=execute_tool, gen_ai.tool.name,
 //!   │                   ok, duration_ms + alias: tool)
 //!   ├─ sensor          (sensor, signals)
-//!   ├─ compact         (stage)
+//!   ├─ compact         (stage, tokens_before, tokens_after, tokens_saved)
 //!   ├─ budget.warning  (ratio)
-//!   └─ run.end
+//!   └─ run.end         (gen_ai.usage.*, total_tokens, model_calls, tool_calls,
+//!                       tool_failures, compactions, tokens_saved, duration_ms)
 //! ```
 //!
 //! To export over OTLP, enable the crate's `otel` feature and call
@@ -60,6 +61,23 @@ pub struct TelemetryHook {
     run: Mutex<Option<tracing::Span>>,
     /// `call_id -> dispatch start`, so `tool.call` can report a duration.
     tool_starts: Mutex<HashMap<String, Instant>>,
+    /// Running totals for the whole run, so `run.end` can answer "what did this
+    /// cost?" without the reader summing per-turn lines by hand.
+    totals: Mutex<RunTotals>,
+}
+
+/// What a run added up to, accumulated across its turns.
+#[derive(Default)]
+struct RunTotals {
+    started: Option<Instant>,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    model_calls: u64,
+    tool_calls: u64,
+    tool_failures: u64,
+    compactions: u64,
+    tokens_saved: u64,
 }
 
 impl TelemetryHook {
@@ -67,6 +85,7 @@ impl TelemetryHook {
         Self {
             run: Mutex::new(None),
             tool_starts: Mutex::new(HashMap::new()),
+            totals: Mutex::new(RunTotals::default()),
         }
     }
 
@@ -108,11 +127,22 @@ impl Hook for TelemetryHook {
                     tracing::info!(target: "harness.telemetry", event = "run.start");
                 });
                 *self.run.lock().unwrap() = Some(span);
+                *self.totals.lock().unwrap() = RunTotals {
+                    started: Some(Instant::now()),
+                    ..Default::default()
+                };
             }
             Event::Heartbeat { iter } => self.in_run(|| {
                 tracing::info!(target: "harness.telemetry", event = "iter", iter = *iter);
             }),
             Event::PostModel { out } => self.in_run(|| {
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    t.model_calls += 1;
+                    t.input_tokens += out.usage.input_tokens as u64;
+                    t.output_tokens += out.usage.output_tokens as u64;
+                    t.cached_input_tokens += out.usage.cached_input_tokens as u64;
+                }
                 let stop = format!("{:?}", out.stop_reason);
                 tracing::info!(
                     target: "harness.telemetry",
@@ -145,6 +175,13 @@ impl Hook for TelemetryHook {
                     .remove(&action.call_id)
                     .map(|s| s.elapsed().as_millis() as u64)
                     .unwrap_or(0);
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    t.tool_calls += 1;
+                    if !result.ok {
+                        t.tool_failures += 1;
+                    }
+                }
                 self.in_run(|| {
                     tracing::info!(
                         target: "harness.telemetry",
@@ -165,11 +202,27 @@ impl Hook for TelemetryHook {
                     signals = signals.len(),
                 );
             }),
-            Event::PostCompact { stage } => self.in_run(|| {
-                tracing::debug!(
+            Event::PostCompact {
+                stage,
+                before,
+                after,
+            } => self.in_run(|| {
+                let saved = before.saturating_sub(*after);
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    t.compactions += 1;
+                    t.tokens_saved += saved as u64;
+                }
+                // At info, not debug: compaction is what keeps a long run
+                // affordable, and "it ran" without "it saved 12k" is not an
+                // observation anyone can act on.
+                tracing::info!(
                     target: "harness.telemetry",
                     event = "compact",
                     stage = format!("{stage:?}"),
+                    tokens_before = *before,
+                    tokens_after = *after,
+                    tokens_saved = saved,
                 );
             }),
             Event::BudgetWarning { ratio } => self.in_run(|| {
@@ -180,8 +233,26 @@ impl Hook for TelemetryHook {
                 );
             }),
             Event::SessionEnd => {
+                let t = std::mem::take(&mut *self.totals.lock().unwrap());
                 self.in_run(|| {
-                    tracing::info!(target: "harness.telemetry", event = "run.end");
+                    // One line with the whole bill. Per-turn events answer "what
+                    // happened"; this answers "what did it cost", which is the
+                    // question asked after every run and previously required
+                    // adding the turns up by hand.
+                    tracing::info!(
+                        target: "harness.telemetry",
+                        event = "run.end",
+                        "gen_ai.usage.input_tokens" = t.input_tokens,
+                        "gen_ai.usage.output_tokens" = t.output_tokens,
+                        "gen_ai.usage.cached_input_tokens" = t.cached_input_tokens,
+                        total_tokens = t.input_tokens + t.output_tokens,
+                        model_calls = t.model_calls,
+                        tool_calls = t.tool_calls,
+                        tool_failures = t.tool_failures,
+                        compactions = t.compactions,
+                        tokens_saved = t.tokens_saved,
+                        duration_ms = t.started.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0),
+                    );
                 });
                 *self.run.lock().unwrap() = None;
             }

@@ -23,17 +23,18 @@
 //! OpenAI-compatible endpoint, and run the loop:
 //!
 //! ```ignore
-//! use harness::{tool, ToolError};
+//! use harness::tool;
+//! use harness_core::{Task, ToolError, ToolResult, World};
 //! use harness_loop::AgentLoop;
 //! use harness_models::OpenAiCompat;
 //! use harness_context::default_world;
-//! use harness_core::{Policy, Task};
-//! use std::sync::Arc;
+//! use serde_json::json;
 //!
 //! /// Add two integers.
-//! #[tool(name = "add", risk = "Safe")]
-//! async fn add(a: i64, b: i64) -> Result<i64, ToolError> {
-//!     Ok(a + b)
+//! #[tool(name = "add", risk = "read-only")]
+//! async fn add(args: serde_json::Value, _world: &mut World) -> Result<ToolResult, ToolError> {
+//!     let sum = args["a"].as_i64().unwrap_or(0) + args["b"].as_i64().unwrap_or(0);
+//!     Ok(ToolResult { ok: true, content: json!({ "sum": sum }), trace: None })
 //! }
 //!
 //! # async fn run() -> anyhow::Result<()> {
@@ -42,7 +43,12 @@
 //!     "deepseek-chat",
 //!     std::env::var("DEEPSEEK_API_KEY")?,
 //! );
-//! let loop_ = AgentLoop::new(model).with_tool(Arc::new(add()));
+//! // `#[tool]` registers via `inventory`; `with_macro_hooks` is not needed for
+//! // tools — collect them with `harness_core::iter_macro_tools()`.
+//! let mut loop_ = AgentLoop::new(model);
+//! for t in harness_core::iter_macro_tools() {
+//!     loop_ = loop_.with_tool(t);
+//! }
 //! let mut world = default_world(std::env::current_dir()?);
 //! let outcome = loop_
 //!     .run(

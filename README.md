@@ -59,7 +59,8 @@ async fn main() -> Result<(), harness::HarnessError> {
     let model = ApiKind::OpenAI.build("https://api.deepseek.com", "deepseek-chat",
         std::env::var("DEEPSEEK_API_KEY").unwrap());
     let mut world = default_world(".");
-    let outcome = AgentLoop::new(model)
+    // `boxed` takes the Arc<dyn Model> a factory hands back; `new` takes a concrete one.
+    let outcome = AgentLoop::boxed(model)
         .with_tool(Arc::new(ReadFile))
         .with_tool(Arc::new(ListDir))
         .run(Task { description: "What is the workspace name?".into(),

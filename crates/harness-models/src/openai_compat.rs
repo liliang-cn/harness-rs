@@ -63,6 +63,28 @@ fn transport_detail(url: &str, err: &reqwest::Error) -> String {
     detail
 }
 
+/// Detail for a non-2xx response. The provider's body is the real message, but
+/// a bare `404 page not found` — what an OpenAI-compatible server returns when
+/// the request never reached a route — leaves the caller with nothing to act on.
+/// The commonest cause by far is a `base_url` missing its `/v1`, so say the URL
+/// we posted to and name that suspicion. The key travels in a header, so nothing
+/// secret is added here.
+fn http_detail(url: &str, status: reqwest::StatusCode, body: &str) -> String {
+    let mut msg = format!("HTTP {status}: {body}");
+    if status == reqwest::StatusCode::NOT_FOUND {
+        msg.push_str(&format!("\n  posted to {url}"));
+        // `…/v1/chat/completions` is the shape that works; anything else means
+        // the base_url was not an OpenAI-compatible root.
+        if !url.contains("/v1/") {
+            msg.push_str(
+                "\n  hint: base_url looks like it is missing `/v1` \
+                 (e.g. http://127.0.0.1:11434/v1, not http://127.0.0.1:11434)",
+            );
+        }
+    }
+    msg
+}
+
 fn request_body<T: Serialize>(req: &T) -> serde_json::Value {
     let mut v = serde_json::to_value(req).unwrap_or_else(|_| serde_json::json!({}));
     if let (Some(obj), Some(extra)) = (v.as_object_mut(), extra_body()) {
@@ -555,7 +577,7 @@ impl Model for OpenAiCompat {
             if !status.is_success() {
                 // 5xx + 429 → retryable, other 4xx → permanent
                 let body = String::from_utf8_lossy(&bytes).to_string();
-                let msg = format!("HTTP {status}: {body}");
+                let msg = http_detail(&url, status, &body);
                 return Err(
                     if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     {
@@ -715,7 +737,7 @@ impl Model for OpenAiCompat {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ModelError::Transport(format!("HTTP {status}: {body}")));
+            return Err(ModelError::Transport(http_detail(&url, status, &body)));
         }
         let byte_stream = resp.bytes_stream();
         let delta_stream = parse_sse_stream(byte_stream);
@@ -1251,6 +1273,44 @@ mod tests {
     use super::*;
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
+
+    // A base_url without `/v1` is the commonest way to misconfigure a local
+    // server, and the reply is a bare "404 page not found" that names nothing.
+    #[test]
+    fn missing_v1_is_named_in_the_404() {
+        let msg = http_detail(
+            "http://127.0.0.1:11434/chat/completions",
+            reqwest::StatusCode::NOT_FOUND,
+            "404 page not found",
+        );
+        assert!(msg.contains("posted to http://127.0.0.1:11434/chat/completions"));
+        assert!(msg.contains("missing `/v1`"), "{msg}");
+    }
+
+    // A 404 from a correctly-rooted URL means something else (usually a bad
+    // model id) — the hint would send the reader down the wrong path.
+    #[test]
+    fn correct_root_gets_no_v1_hint() {
+        let msg = http_detail(
+            "http://127.0.0.1:11434/v1/chat/completions",
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"error":{"message":"model 'x' not found"}}"#,
+        );
+        assert!(msg.contains("model 'x' not found"));
+        assert!(!msg.contains("missing `/v1`"), "{msg}");
+    }
+
+    // Non-404 statuses carry the provider's own message; adding a URL line to
+    // every 401/429/500 is noise.
+    #[test]
+    fn other_statuses_are_left_alone() {
+        let msg = http_detail(
+            "http://x/v1/chat/completions",
+            reqwest::StatusCode::UNAUTHORIZED,
+            "Authentication Fails",
+        );
+        assert_eq!(msg, "HTTP 401 Unauthorized: Authentication Fails");
+    }
 
     /// Feed one SSE payload through the parser, split at `at` BYTES —
     /// deliberately including splits that land inside a multi-byte character.

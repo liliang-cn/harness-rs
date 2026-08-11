@@ -1668,11 +1668,14 @@ dependencies = [
 name = "harness-rs-macros"
 version = "0.0.39"
 dependencies = [
+ "harness-rs-context",
+ "harness-rs-core",
  "proc-macro2",
  "quote",
  "serde_json",
  "serde_yaml",
  "syn",
+ "tokio",
 ]
 
 [[package]]
