@@ -17,6 +17,25 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   answer differently), and any non-read-only call clears the record — after a write, re-reading is
   correct. Counted as `repeat_calls` in the run summary.
 
+- **`read_file` is bounded in bytes, not only lines** (`max_bytes`, default 16 KiB). A line limit
+  bounds nothing on its own: 2000 lines of a lock file measured 54 KB, and one line of minified JSON
+  is one line and can be megabytes. The cut lands on a line boundary and never inside a character,
+  so `offset + lines` resumes exactly where the page ended, and the result stays a *structured* page
+  the model can continue from — the default sits under the loop's `ToolResultPolicy` backstop on
+  purpose, so an oversized read pages instead of collapsing to a marker. `truncated` now accounts
+  for a byte cut too: a one-line file that lost 384 KB previously reported `truncated: false`,
+  because the line arithmetic could not see it, and the model would read that as having the file.
+
+- **Time to first token** — `model.first_token` per streamed call, `first_token_ms` in the run
+  summary. Measured on a real streamed turn: `first_token_ms=5174` against `duration_ms=6563` —
+  **79% of what the person waited was before the first character appeared**, and only 1.4s was the
+  answer arriving. A single `duration_ms` cannot tell "thinking for five seconds" from "typing
+  slowly", and they call for opposite fixes.
+
+- **`harness code` attaches `TelemetryHook` too.** It was left out when `run` got it, which meant
+  the one streaming command in the CLI — the only place time-to-first-token exists — reported none
+  of it.
+
 - **Latency attribution in the run summary** — `model_ms` and `tool_ms` alongside `duration_ms`, and
   a per-call `duration_ms` on `model.complete`. The first real measurement it produced:
   `model_ms=36764 tool_ms=3 duration_ms=36769` — the wall clock is the provider, the framework's own

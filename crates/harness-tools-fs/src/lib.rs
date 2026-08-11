@@ -43,20 +43,33 @@ struct ReadArgs {
     offset: Option<usize>,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    max_bytes: Option<usize>,
 }
+
+/// Byte ceiling for one read, independent of the line count.
+///
+/// A line limit bounds nothing on its own: 2000 lines of a lock file measured
+/// 54 KB, and a single line of minified JSON can be megabytes — the line count
+/// says 1 either way. Sized to stay under the loop's own `ToolResultPolicy`
+/// backstop once serialized, so an oversized read comes back as a *structured*
+/// page the model can continue from, rather than being flattened to a marker.
+const DEFAULT_MAX_BYTES: usize = 16 * 1024;
 
 pub struct ReadFile;
 static READ_FILE_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
     name: "read_file".into(),
     description: "Read a UTF-8 text file from the workspace, optionally a line range. \
-                  Returns up to 2000 lines unless `limit` is set."
+                  Returns up to 2000 lines and 16 KB unless `limit` / `max_bytes` \
+                  are set; when `truncated` is true, continue with `offset`."
         .into(),
     input: json!({
         "type": "object",
         "properties": {
             "path":   {"type": "string", "description": "Path relative to the workspace root."},
             "offset": {"type": "integer", "minimum": 0, "description": "1-based line offset"},
-            "limit":  {"type": "integer", "minimum": 1, "description": "Max lines to return"}
+            "limit":  {"type": "integer", "minimum": 1, "description": "Max lines to return"},
+            "max_bytes": {"type": "integer", "minimum": 1, "description": "Max bytes to return (default 16384)"}
         },
         "required": ["path"]
     }),
@@ -103,9 +116,28 @@ impl Tool for ReadFile {
             .take(limit)
             .copied()
             .collect::<Vec<&str>>();
-        let returned = take.len();
-        let truncated = offset + returned < total;
-        let snippet = take.join("\n");
+        let mut returned = take.len();
+        let mut snippet = take.join("\n");
+
+        // Byte ceiling, applied after the line window: keep whole lines so the
+        // caller can resume at `offset + lines`, and never split a character.
+        let max_bytes = a.max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
+        let byte_capped = snippet.len() > max_bytes;
+        if byte_capped {
+            let mut end = max_bytes;
+            while end > 0 && !snippet.is_char_boundary(end) {
+                end -= 1;
+            }
+            // Prefer the last complete line inside the budget; fall back to the
+            // raw cut when a single line is longer than the whole allowance.
+            let cut = snippet[..end].rfind('\n').map(|i| i + 1).unwrap_or(end);
+            snippet.truncate(cut);
+            returned = if cut == 0 { 0 } else { snippet.lines().count() };
+        }
+        // Line arithmetic cannot see a byte cut: a one-line file that lost 384 KB
+        // still reports `returned == total`, and the model would read that as
+        // "you have the whole file". Either kind of cut means there is more.
+        let truncated = byte_capped || offset + returned < total;
 
         Ok(ToolResult {
             ok: true,
@@ -115,7 +147,9 @@ impl Tool for ReadFile {
                 "total":     total,
                 "offset":    offset,
                 "limit":     limit,
+                "bytes":     snippet.len(),
                 "truncated": truncated,
+                "truncated_by": if byte_capped { "bytes" } else if truncated { "lines" } else { "" },
                 "content":   snippet,
             }),
             trace: None,
@@ -818,6 +852,95 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content["content"].as_str().unwrap().contains("BETA"));
+    }
+
+    /// A line limit bounds nothing on its own. One line of minified JSON is one
+    /// line and can be megabytes — the shape that put 53,487 input tokens into a
+    /// single run. The byte ceiling is what actually holds.
+    #[tokio::test]
+    async fn one_enormous_line_is_capped_by_bytes_not_lines() {
+        let (_td, mut w) = tmp_world();
+        let huge = "x".repeat(400_000); // a single line
+        WriteFile
+            .invoke(json!({"path": "min.json", "content": huge}), &mut w)
+            .await
+            .unwrap();
+
+        let out = ReadFile
+            .invoke(json!({"path": "min.json"}), &mut w)
+            .await
+            .unwrap();
+
+        let bytes = out.content["bytes"].as_u64().unwrap();
+        assert!(
+            bytes <= 16 * 1024,
+            "the default byte ceiling must hold on a 400 KB single line, got {bytes}"
+        );
+        assert_eq!(out.content["truncated_by"], "bytes");
+        assert_eq!(out.content["truncated"], true);
+    }
+
+    /// Truncation cuts on a line boundary so `offset + lines` resumes exactly
+    /// where the page ended — a cut mid-line would silently lose or repeat one.
+    #[tokio::test]
+    async fn a_byte_cut_lands_on_a_line_boundary_and_can_be_resumed() {
+        let (_td, mut w) = tmp_world();
+        // 4000 lines of ~20 bytes ≈ 80 KB, well past the ceiling.
+        let body: String = (0..4000)
+            .map(|i| format!("line {i:06} padding"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        WriteFile
+            .invoke(json!({"path": "big.txt", "content": body}), &mut w)
+            .await
+            .unwrap();
+
+        let first = ReadFile
+            .invoke(json!({"path": "big.txt"}), &mut w)
+            .await
+            .unwrap();
+        assert_eq!(first.content["truncated_by"], "bytes");
+        let got = first.content["content"].as_str().unwrap();
+        assert!(
+            got.ends_with("padding") || got.ends_with('\n'),
+            "the cut must not land inside a line"
+        );
+
+        // Resume from where it stopped; the next page starts at the next line.
+        let n = first.content["lines"].as_u64().unwrap() as usize;
+        let second = ReadFile
+            .invoke(json!({"path": "big.txt", "offset": n}), &mut w)
+            .await
+            .unwrap();
+        let next = second.content["content"].as_str().unwrap();
+        assert!(
+            next.starts_with(&format!("line {n:06}")),
+            "page 2 must begin at line {n}, got {:?}",
+            &next[..next.len().min(30)]
+        );
+    }
+
+    /// Multi-byte text must not be split mid-character — the result has to stay
+    /// valid UTF-8, and Chinese content is the normal case, not the edge.
+    #[tokio::test]
+    async fn a_byte_cut_never_splits_a_character() {
+        let (_td, mut w) = tmp_world();
+        let body: String = std::iter::repeat_n("每行都是中文内容需要占三个字节", 3000)
+            .collect::<Vec<_>>()
+            .join("\n");
+        WriteFile
+            .invoke(json!({"path": "cjk.txt", "content": body}), &mut w)
+            .await
+            .unwrap();
+
+        let out = ReadFile
+            .invoke(json!({"path": "cjk.txt", "max_bytes": 1000}), &mut w)
+            .await
+            .unwrap();
+        // Reaching this line at all means the JSON held valid UTF-8.
+        let got = out.content["content"].as_str().unwrap();
+        assert!(got.contains("中文"), "content survived: {got:.60}");
+        assert!(got.len() <= 1000, "{} bytes", got.len());
     }
 
     #[tokio::test]

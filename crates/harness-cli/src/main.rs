@@ -735,6 +735,11 @@ async fn run_code(
 
     let loop_ = AgentLoop::new(model)
         .with_streaming(true)
+        // Same reasoning as `run`, and more so here: this is the streaming
+        // command, so it is the only one that can report time-to-first-token —
+        // the latency a person actually feels, as opposed to how long the whole
+        // answer took.
+        .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
         .with_tool(Arc::new(harness_tools_fs::ReadFile))
         .with_tool(Arc::new(harness_tools_fs::ListDir))
         .with_tool(Arc::new(harness_tools_fs::Grep))
