@@ -35,6 +35,13 @@ pub enum Event<'a> {
     },
     PostCompact {
         stage: CompactionStage,
+        /// Estimated context tokens before this stage ran.
+        before: u32,
+        /// …and after. The difference is what the stage actually bought, which
+        /// is otherwise unknowable from outside: compaction is the component
+        /// whose whole job is to spend less, and a `stage` label alone says it
+        /// happened, not whether it worked.
+        after: u32,
     },
 
     // guides

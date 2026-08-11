@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
 
     let tools = cortex.tools_with_read_only(READ_ONLY);
     let model: Arc<dyn Model> = ApiKind::OpenAI.build(DASHSCOPE_BASE, MODEL, key);
-    let mut agent = AgentLoop::new(harness_core::DynModel(model));
+    let mut agent = AgentLoop::boxed(model);
     for t in tools {
         agent = agent.with_tool(t);
     }

@@ -56,6 +56,12 @@ pub enum SessionEvent {
     PostCompact {
         ts_ms: i64,
         stage: CompactionStage,
+        /// Estimated context tokens before and after the stage ran. `serde`
+        /// defaults keep logs recorded before these existed readable.
+        #[serde(default)]
+        before: u32,
+        #[serde(default)]
+        after: u32,
     },
     Heartbeat {
         ts_ms: i64,
@@ -151,9 +157,15 @@ impl Hook for SessionRecorder {
                 ts_ms: ts,
                 stage: *stage,
             }),
-            Event::PostCompact { stage } => Some(SessionEvent::PostCompact {
+            Event::PostCompact {
+                stage,
+                before,
+                after,
+            } => Some(SessionEvent::PostCompact {
                 ts_ms: ts,
                 stage: *stage,
+                before: *before,
+                after: *after,
             }),
             Event::Heartbeat { iter } => Some(SessionEvent::Heartbeat {
                 ts_ms: ts,
@@ -524,9 +536,15 @@ impl Hook for LiveProgressHook {
                 ts_ms: ts,
                 stage: *stage,
             }),
-            Event::PostCompact { stage } => Some(SessionEvent::PostCompact {
+            Event::PostCompact {
+                stage,
+                before,
+                after,
+            } => Some(SessionEvent::PostCompact {
                 ts_ms: ts,
                 stage: *stage,
+                before: *before,
+                after: *after,
             }),
             Event::BudgetWarning { ratio } => Some(SessionEvent::BudgetWarning {
                 ts_ms: ts,

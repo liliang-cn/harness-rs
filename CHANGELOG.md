@@ -3,6 +3,71 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **`AgentLoop::boxed(model)` — the constructor for what a model factory returns.** `ApiKind::build`,
+  a router, anything kept behind a trait object hands back an `Arc<dyn Model>`, which deliberately
+  does not implement `Model` (doing so changes `.stream()` resolution for every `Arc<dyn Model>` in
+  the program and overflows the auto-trait solver inside a `Send` context — see `DynModel`). So the
+  first line of the README's quick start did not compile, and the error named `DynModel`, a type the
+  reader meets for the first time in a trait bound. `boxed` takes the `Arc` directly.
+
+- **Compaction now reports what it bought.** `Event::PostCompact` carries `before`/`after` context
+  tokens, and the `compact` telemetry event reports `tokens_before`, `tokens_after`, `tokens_saved`
+  — at `info`, not `debug`. The component whose entire job is to spend fewer tokens previously
+  emitted only which stage had run: "it happened", never "it worked", and no way to tell a
+  compactor that saves 12k from one that saves nothing. The run summary totals it as `compactions`
+  and `tokens_saved`. `SessionEvent::PostCompact` records the pair too (with `serde` defaults, so
+  logs written before this stay readable).
+
+- **`harness run --telemetry`** — the discoverable form of `RUST_LOG=harness.telemetry=info`. An
+  explicit `RUST_LOG` still wins, so the flag never overrides a deliberate filter; it supplies one
+  for the reader who has not learned the env var yet.
+
+- **`run.end` now carries the whole bill** — total input/output/cached tokens, model calls, tool
+  calls, tool *failures*, and wall-clock duration, in one line. Per-turn events already said what
+  happened; the question asked after every run is what it cost, and answering it meant adding the
+  turns up by hand. The failure count earns its place immediately: the framework's own telemetry
+  test runs "green" while its single tool call fails and the model works around it — visible now,
+  invisible before.
+
+### Fixed
+
+- **`harness run` never attached `TelemetryHook`, so the framework's own CLI could not see the
+  framework's instrumentation.** The GenAI spans, the token counts, the OTLP bridge — all present,
+  all unreachable from the command most people run first: `RUST_LOG=harness.telemetry=info harness
+  run …` printed nothing at all. The hook is now always attached; it only emits `tracing`
+  spans/events, which cost nothing without a subscriber.
+
+- **Three of the documented entry points were wrong, in the way only unexecuted documentation gets
+  wrong.** Found by writing the quick start out as an external crate and compiling it:
+  - The README's quick start used `AgentLoop::new` on a boxed model (does not compile — above).
+  - The `#[tool]` example in the `harness` facade specified `risk = "Safe"` (not one of
+    `read-only|idempotent|destructive|network`), gave the annotated function a
+    `(a: i64, b: i64) -> Result<i64, _>` signature (the macro requires
+    `(args: Value, world: &mut World) -> Result<ToolResult, ToolError>`), and called
+    `Arc::new(add())` as though the macro emitted a constructor — it emits a hidden marker type and
+    registers it through `inventory`. Nothing in the workspace used `#[tool]`, and `harness-macros`
+    had no tests at all, so nothing held the documentation to the macro. Both now exist: the
+    corrected example is what `crates/harness-macros/tests/tool_macro.rs` compiles and runs.
+  - `harness new` pinned the generated project to a literal `"0.0.4"` while the workspace shipped
+    `0.0.39` — a scaffold that builds cleanly against a framework 35 releases old, with nothing to
+    suggest anything is wrong, under a note claiming the framework "isn't on crates.io yet". The pin
+    now comes from the CLI's own version, which is the workspace version.
+
+- **A `base_url` missing its `/v1` said only `404 page not found`.** The commonest way to
+  misconfigure a local OpenAI-compatible server (Ollama, vLLM), answered with the one message that
+  names nothing — while the framework knew the URL it had posted to. 404s now carry that URL, and
+  name the missing `/v1` when the URL lacks it. A 404 from a correctly-rooted URL (a bad model id,
+  say) is left alone, so the hint never points the wrong way.
+
+- **`harness run` did not say which env var supplied the key.** `HARNESS_API_KEY` set for one
+  provider, sent to the default DeepSeek endpoint, is a 401 that reads like a bad key rather than a
+  misrouted one. The pairing is now printed before the request, and only when it is ambiguous —
+  silent for an explicit `--base-url`/`$HARNESS_BASE_URL`, and for `DEEPSEEK_API_KEY`.
+
 ## 0.0.37
 
 ### Added
