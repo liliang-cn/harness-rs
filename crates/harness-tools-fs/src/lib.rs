@@ -56,6 +56,17 @@ struct ReadArgs {
 /// page the model can continue from, rather than being flattened to a marker.
 const DEFAULT_MAX_BYTES: usize = 16 * 1024;
 
+/// How much of a matching line grep shows.
+const MATCH_PREVIEW_BYTES: usize = 100;
+
+/// Total serialized budget for a grep result. A count cap alone does not bound
+/// the output — 200 matches of long lines runs past the loop's
+/// `ToolResultPolicy` backstop, and the whole structured result is then
+/// flattened into a marker the model cannot page through. Stopping here instead
+/// returns fewer matches that are still *matches*, with `capped` set so the
+/// caller knows to narrow the pattern.
+const GREP_MAX_BYTES: usize = 16 * 1024;
+
 pub struct ReadFile;
 static READ_FILE_SCHEMA: Lazy<ToolSchema> = Lazy::new(|| ToolSchema {
     name: "read_file".into(),
@@ -467,6 +478,7 @@ impl Tool for Grep {
         let cap = a.max_results.unwrap_or(200);
 
         let mut matches = Vec::new();
+        let mut bytes_used = 0usize;
         'walk: for entry in walk_files(&base) {
             if let Some(inc) = &include {
                 let fname = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -485,11 +497,20 @@ impl Tool for Grep {
             for (i, line) in content.lines().enumerate() {
                 if re.is_match(line) {
                     let mut text = line.trim_end().to_string();
-                    if text.len() > 300 {
-                        text.truncate(300);
+                    if text.len() > MATCH_PREVIEW_BYTES {
+                        // `String::truncate` panics off a char boundary, so walk
+                        // back to one. A long line of Chinese with a single ASCII
+                        // character ahead of it lands mid-character at 300 and
+                        // used to take the whole tool down.
+                        let mut end = MATCH_PREVIEW_BYTES;
+                        while end > 0 && !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        text.truncate(end);
                     }
+                    bytes_used += text.len() + rel.len() + 40; // + json scaffolding
                     matches.push(json!({ "path": rel, "line": i + 1, "text": text }));
-                    if matches.len() >= cap {
+                    if matches.len() >= cap || bytes_used >= GREP_MAX_BYTES {
                         break 'walk;
                     }
                 }
@@ -498,7 +519,11 @@ impl Tool for Grep {
         let hits = matches.len();
         Ok(ToolResult {
             ok: true,
-            content: json!({ "matches": matches, "count": hits, "capped": hits >= cap }),
+            content: json!({
+                "matches": matches,
+                "count": hits,
+                "capped": hits >= cap || bytes_used >= GREP_MAX_BYTES,
+            }),
             trace: None,
         })
     }
@@ -852,6 +877,67 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content["content"].as_str().unwrap().contains("BETA"));
+    }
+
+    /// A count cap does not bound bytes. 200 matches of long lines runs past the
+    /// loop's own backstop, and a structured result the model could have paged
+    /// through gets flattened into a marker instead.
+    #[tokio::test]
+    async fn grep_stops_on_its_byte_budget_and_says_so() {
+        let (_td, mut w) = tmp_world();
+        // 400 matching lines of ~200 bytes: well inside the 200-match count cap,
+        // well past the byte budget.
+        let body: String = (0..400)
+            .map(|i| format!("needle {i} {}", "padding ".repeat(24)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        WriteFile
+            .invoke(json!({"path": "many.txt", "content": body}), &mut w)
+            .await
+            .unwrap();
+
+        let out = Grep
+            .invoke(json!({"pattern": "needle", "path": "."}), &mut w)
+            .await
+            .unwrap();
+
+        let serialized = out.content.to_string().len();
+        assert!(
+            serialized < 24 * 1024,
+            "a grep result must stay under the loop backstop, got {serialized} bytes"
+        );
+        assert_eq!(
+            out.content["capped"], true,
+            "and must say it stopped early: {:?}",
+            out.content["count"]
+        );
+        // Still matches, not a blob: the model can act on what came back.
+        assert!(out.content["matches"][0]["line"].is_number());
+    }
+
+    /// `String::truncate` panics off a char boundary, and grep cut every long
+    /// match at byte 300 — so one long line of Chinese with anything ahead of it
+    /// took the tool down. Pure CJK happened to survive (300 is divisible by 3);
+    /// a single ASCII character before it is enough to land mid-character.
+    #[tokio::test]
+    async fn grep_survives_a_long_multibyte_line() {
+        let (_td, mut w) = tmp_world();
+        let mut line = String::from("x"); // shifts every following char off /3
+        line.push_str(&"中文内容说明".repeat(60));
+        WriteFile
+            .invoke(json!({"path": "cjk.rs", "content": line}), &mut w)
+            .await
+            .unwrap();
+
+        let out = Grep
+            .invoke(json!({"pattern": "中文", "path": "."}), &mut w)
+            .await
+            .unwrap();
+
+        let hits = out.content["count"].as_u64().unwrap();
+        assert_eq!(hits, 1, "the line must be found: {:?}", out.content);
+        let text = out.content["matches"][0]["text"].as_str().unwrap();
+        assert!(text.contains("中文"), "and come back readable: {text:.40}");
     }
 
     /// A line limit bounds nothing on its own. One line of minified JSON is one

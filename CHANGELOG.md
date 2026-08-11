@@ -17,6 +17,24 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   answer differently), and any non-read-only call clears the record — after a write, re-reading is
   correct. Counted as `repeat_calls` in the run summary.
 
+- **A flaky test in the gate.** `seatbelt_denies_child_network_without_touching_parent` closes by
+  curling a live URL to prove the parent process was never sandboxed, and a network blip during a
+  full parallel run failed it — blaming the sandbox for the weather. The two causes are not
+  symmetrical: a leaked profile fails *every* attempt, a blip does not repeat. It now needs one
+  success out of three, which keeps the claim and drops the false alarm.
+
+- **`grep` panicked on a long multibyte line.** Every match longer than 300 bytes was cut with
+  `String::truncate`, which panics off a char boundary — so one long line of Chinese with any ASCII
+  ahead of it took the tool down mid-run. Pure CJK survived by luck (300 divides by 3); a single
+  leading character is enough to land mid-character. This failure mode has bitten this codebase
+  before — `harness-orchestrator` carries a regression test for the same byte-slicing panic — and
+  this instance outlived it.
+
+- **`grep` is bounded in bytes, not only in match count.** 200 matches of long lines ran past the
+  loop's own `ToolResultPolicy` backstop, so a structured result the model could have paged through
+  was flattened into a marker instead. It now stops on a 16 KiB budget and sets `capped`, returning
+  fewer matches that are still matches.
+
 - **`read_file` is bounded in bytes, not only lines** (`max_bytes`, default 16 KiB). A line limit
   bounds nothing on its own: 2000 lines of a lock file measured 54 KB, and one line of minified JSON
   is one line and can be megabytes. The cut lands on a line boundary and never inside a character,

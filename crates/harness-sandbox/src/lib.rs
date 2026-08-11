@@ -884,8 +884,16 @@ mod tests {
         // networked child blocked
         let blocked = h.world.runner.exec(curl, &probe, None).await.unwrap();
         assert_ne!(blocked.status, 0, "child network must be denied");
-        // parent still unrestricted (the whole point vs birdcage)
-        assert_eq!(parent_net(), 0, "parent must remain unsandboxed");
+        // Parent still unrestricted — the whole point versus birdcage.
+        //
+        // This is a live network call, so a single failure has two possible
+        // causes and they are not equally likely: if the sandbox had leaked into
+        // the parent, the profile is applied to the process and *every* attempt
+        // fails; a network hiccup does not repeat. Under a full parallel test
+        // run this assertion failed on a blip and blamed the sandbox. Requiring
+        // one success out of three separates the two.
+        let unrestricted = (0..3).any(|_| parent_net() == 0);
+        assert!(unrestricted, "parent must remain unsandboxed");
     }
 
     #[tokio::test]
