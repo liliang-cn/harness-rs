@@ -17,6 +17,14 @@
 //! let recorder = harness_experience::ExperienceRecorder::new(mem); // semantic!
 //! ```
 //!
+//! The memory does not have to be a process this agent spawns. Point it at a
+//! CortexDB that is already running — one brain shared by a fleet of agents, an
+//! editor and a chat client, and highly available in the ordinary way:
+//!
+//! ```ignore
+//! let mem = Arc::new(CortexdbMemory::connect_http("https://cortex.internal/mcp").await?);
+//! ```
+//!
 //! Harness `MemoryEntry` fields round-trip through CortexDB: `content` maps to
 //! the memory content; `tags` + `source` are stored under CortexDB's
 //! `metadata` and read back on recall.
@@ -73,7 +81,30 @@ impl CortexdbMemory {
         Self::from_client(McpClient::connect_stdio(program, args).await?)
     }
 
-    /// Adapt an already-connected CortexDB MCP client.
+    /// Connect to a **remote** CortexDB over MCP Streamable HTTP.
+    ///
+    /// The memory does not have to be a process this agent spawns. One CortexDB
+    /// behind an HTTP endpoint is the same brain for every client that reaches
+    /// it — a fleet of agents, an editor, a chat bot — instead of one private
+    /// store per process, and it can be made highly available in the ordinary
+    /// way. `connect_stdio` was the only documented path, which read as though
+    /// it were the only one.
+    ///
+    /// Requires the `http` feature of `harness-rs-mcp-client` (on by default,
+    /// with rustls). For an untrusted URL use
+    /// [`McpClient::connect_http_with_client`] and [`from_client`](Self::from_client),
+    /// which leaves the redirect and DNS policy with the caller.
+    ///
+    /// ```ignore
+    /// let mem = CortexdbMemory::connect_http("https://cortex.internal/mcp").await?;
+    /// ```
+    #[cfg(feature = "http")]
+    pub async fn connect_http(url: &str) -> anyhow::Result<Self> {
+        Self::from_client(McpClient::connect_http(url).await?)
+    }
+
+    /// Adapt an already-connected CortexDB MCP client — stdio, HTTP, or any
+    /// transport [`McpClient`] grows later.
     pub fn from_client(client: McpClient) -> anyhow::Result<Self> {
         let tools = client.tools();
         let find = |name: &str| tools.iter().find(|t| t.name() == name).cloned();

@@ -11,6 +11,13 @@ description = "CortexDB-backed Memory for harness-rs: implements the harness-cor
 [lib]
 name = "harness_cortexdb"
 
+[features]
+# Forwards to the MCP client's HTTP transport, which is what `connect_http`
+# needs. On by default there and here: a remote CortexDB is the ordinary
+# deployment once more than one agent shares the brain.
+default = ["http"]
+http = ["harness-mcp-client/http"]
+
 [dependencies]
 harness-core       = { workspace = true }
 harness-context    = { workspace = true }
