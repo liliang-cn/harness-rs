@@ -195,3 +195,109 @@ async fn compaction_reports_what_it_saved() {
         "run.end must total the compactions and their saving:\n{output}"
     );
 }
+
+/// Time to first token is the latency a person feels; total duration is what
+/// the machine spent. On a streaming provider they are very different numbers,
+/// and only one of them was being reported.
+#[tokio::test]
+async fn streaming_reports_time_to_first_token() {
+    use futures::StreamExt;
+    use harness_core::{
+        Context, Model, ModelDelta, ModelError, ModelInfo, ModelOutput, StopReason,
+    };
+    use std::time::Duration;
+
+    /// Thinks for 120ms, then streams three fragments. TTFT must reflect the
+    /// think time, not the whole answer.
+    struct SlowStart;
+    #[async_trait::async_trait]
+    impl Model for SlowStart {
+        async fn complete(&self, _ctx: &Context) -> Result<ModelOutput, ModelError> {
+            Ok(ModelOutput {
+                text: Some("hello world".into()),
+                stop_reason: StopReason::EndTurn,
+                ..Default::default()
+            })
+        }
+        async fn stream(
+            &self,
+            _ctx: &Context,
+        ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError>
+        {
+            let s = futures::stream::iter(vec![
+                Ok(ModelDelta::Text("hel".into())),
+                Ok(ModelDelta::Text("lo ".into())),
+                Ok(ModelDelta::Text("world".into())),
+                Ok(ModelDelta::Stop(StopReason::EndTurn)),
+            ])
+            .then(|d| async move {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                d
+            });
+            Ok(s.boxed())
+        }
+        fn info(&self) -> ModelInfo {
+            ModelInfo {
+                handle: "slow".into(),
+                provider: "test".into(),
+                model: "slow".into(),
+                context_window: 8192,
+                input_cost_usd_per_million_tokens: None,
+                output_cost_usd_per_million_tokens: None,
+                supports_tool_use: false,
+                supports_streaming: true,
+                supports_web_grounding: false,
+            }
+        }
+    }
+
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .without_time()
+        .with_ansi(false)
+        .finish();
+
+    let output = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let ws = std::env::temp_dir().join(format!("telem-ttft-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+        let mut world = default_world(&ws);
+
+        AgentLoop::new(SlowStart)
+            .with_streaming(true)
+            .with_hook(Arc::new(TelemetryHook::new()))
+            .run(task("say hello"), &mut world)
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&ws);
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    };
+
+    assert!(
+        output.contains("model.first_token"),
+        "a streamed call must report its first fragment:\n{output}"
+    );
+    assert!(
+        output.contains("first_token_ms="),
+        "the run summary must carry it:\n{output}"
+    );
+    // The first fragment lands well before the last: TTFT is not the duration.
+    let ttft: u64 = output
+        .split("first_token_ms=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .expect("first_token_ms in run.end");
+    let total: u64 = output
+        .rsplit("duration_ms=")
+        .next()
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .expect("duration_ms in run.end");
+    assert!(
+        ttft < total,
+        "TTFT ({ttft}ms) must be shorter than the whole run ({total}ms)"
+    );
+}

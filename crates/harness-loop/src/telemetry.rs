@@ -64,6 +64,10 @@ pub struct TelemetryHook {
     /// When the current model call was handed off, so the run summary can say
     /// how much of the wall clock was spent waiting on the provider.
     model_start: Mutex<Option<Instant>>,
+    /// True until the current streamed call produces its first fragment — the
+    /// latency a person actually experiences, as distinct from how long the
+    /// whole answer took.
+    awaiting_first_token: Mutex<bool>,
     /// Running totals for the whole run, so `run.end` can answer "what did this
     /// cost?" without the reader summing per-turn lines by hand.
     totals: Mutex<RunTotals>,
@@ -89,6 +93,10 @@ struct RunTotals {
     /// Read-only calls that exactly repeated an earlier one — wasted rounds the
     /// stuck-detector cannot see, because they are not consecutive.
     repeats: u64,
+    /// Time to the first streamed fragment of the run's first model call: what
+    /// the person watching waited before anything appeared. Zero when the run
+    /// did not stream.
+    first_token_ms: u64,
 }
 
 impl TelemetryHook {
@@ -97,6 +105,7 @@ impl TelemetryHook {
             run: Mutex::new(None),
             tool_starts: Mutex::new(HashMap::new()),
             model_start: Mutex::new(None),
+            awaiting_first_token: Mutex::new(false),
             totals: Mutex::new(RunTotals::default()),
         }
     }
@@ -146,6 +155,37 @@ impl Hook for TelemetryHook {
             }
             Event::PreModel { .. } => {
                 *self.model_start.lock().unwrap() = Some(Instant::now());
+                *self.awaiting_first_token.lock().unwrap() = true;
+            }
+            Event::ModelTokenDelta { .. } => {
+                // Only the first fragment of each call; the rest are noise.
+                let mut awaiting = self.awaiting_first_token.lock().unwrap();
+                if !*awaiting {
+                    return HookOutcome::Allow;
+                }
+                *awaiting = false;
+                drop(awaiting);
+                let ttft = self
+                    .model_start
+                    .lock()
+                    .unwrap()
+                    .map(|s| s.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    // The first call's figure is the one a person felt; later
+                    // calls are the agent thinking, not the answer starting.
+                    if t.first_token_ms == 0 {
+                        t.first_token_ms = ttft;
+                    }
+                }
+                self.in_run(|| {
+                    tracing::info!(
+                        target: "harness.telemetry",
+                        event = "model.first_token",
+                        ttft_ms = ttft,
+                    );
+                });
             }
             Event::Heartbeat { iter } => self.in_run(|| {
                 tracing::info!(target: "harness.telemetry", event = "iter", iter = *iter);
@@ -287,6 +327,7 @@ impl Hook for TelemetryHook {
                         model_ms = t.model_ms,
                         tool_ms = t.tool_ms,
                         repeat_calls = t.repeats,
+                        first_token_ms = t.first_token_ms,
                         duration_ms = t.started.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0),
                     );
                 });
