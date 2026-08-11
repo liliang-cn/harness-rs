@@ -104,6 +104,13 @@ enum Cmd {
         /// Print the full Outcome as JSON instead of just the final text.
         #[arg(long)]
         json: bool,
+        /// The model's real context window in tokens. Compaction fires at a
+        /// fraction of it, and an OpenAI-compatible endpoint does not report it,
+        /// so the default is a 128k guess — right for a hosted model, badly wrong
+        /// for a local 8k or 32k one, which the provider then rejects before the
+        /// compactor ever runs.
+        #[arg(long)]
+        context_window: Option<u32>,
         /// Print structured telemetry to stderr: per-turn tokens, tool calls and
         /// durations, compaction savings, and a closing summary of the whole run.
         /// Shorthand for RUST_LOG=harness.telemetry=info.
@@ -386,6 +393,7 @@ async fn main() -> anyhow::Result<()> {
             shell,
             progress,
             json,
+            context_window,
             telemetry: _,
             record,
         } => {
@@ -399,6 +407,7 @@ async fn main() -> anyhow::Result<()> {
                 shell,
                 progress,
                 json,
+                context_window,
                 record,
             })
             .await
@@ -425,6 +434,7 @@ struct RunOpts {
     shell: bool,
     progress: bool,
     json: bool,
+    context_window: Option<u32>,
     record: Option<PathBuf>,
 }
 
@@ -441,7 +451,10 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let mut world = harness_context::default_world(root);
 
-    let model = OpenAiCompat::with_key(base_url, model_id, key);
+    let mut model = OpenAiCompat::with_key(base_url, model_id, key);
+    if let Some(w) = opts.context_window {
+        model = model.with_context_window(w);
+    }
     let mut loop_ = AgentLoop::new(model)
         // Always on: the hook only emits `tracing` spans/events, which cost
         // nothing without a subscriber. Without it, `RUST_LOG=harness.telemetry=info`

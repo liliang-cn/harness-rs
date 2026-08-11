@@ -282,19 +282,43 @@ fn block_chars(b: &Block) -> usize {
 
 /// Trim redundant content: keep the most recent N turns intact, summarise older.
 /// Conservative — only collapses big tool results, leaves text alone.
+///
+/// Recency protects a turn from being *summarised away*, but it cannot protect
+/// one from being *too large to send*. Every stage here guards on
+/// `history.len() <= keep_recent`, and a context does not blow up by turn count:
+/// an agent reads one large file and two turns later there is no room. Measured
+/// on that exact shape — three turns, one big tool result — all five stages
+/// returned immediately and the context came out 20 tokens *larger* than it went
+/// in. So a genuinely oversized result is trimmed wherever it sits, recent or
+/// not, at a much higher threshold than the one used for old turns.
 fn budget_reduce(ctx: &mut Context) {
+    const OLD_TRIM_BYTES: usize = 800;
+    /// A recent result is only touched when it is large enough to be the reason
+    /// the context does not fit — far above the threshold for stale ones.
+    const RECENT_TRIM_BYTES: usize = 16 * 1024;
+
     let keep_recent = 8;
-    if ctx.history.len() <= keep_recent {
-        return;
-    }
-    let split = ctx.history.len() - keep_recent;
-    for turn in ctx.history.iter_mut().take(split) {
+    let split = ctx.history.len().saturating_sub(keep_recent);
+    for (i, turn) in ctx.history.iter_mut().enumerate() {
+        let limit = if i < split {
+            OLD_TRIM_BYTES
+        } else {
+            RECENT_TRIM_BYTES
+        };
         for b in turn.blocks.iter_mut() {
-            if let Block::ToolResult { call_id, content } = b
-                && content.to_string().len() > 800
-            {
-                let preview = content.to_string().chars().take(200).collect::<String>();
-                *b = Block::Text(format!("[tool-result:{call_id} (trimmed)] {preview}…"));
+            if let Block::ToolResult { call_id, content } = b {
+                let body = content.to_string();
+                if body.len() > limit {
+                    // Keep more of a recent result: it is probably still the
+                    // thing being worked on, and the point is to make it fit,
+                    // not to erase it.
+                    let keep = if i < split { 200 } else { 2_000 };
+                    let preview = body.chars().take(keep).collect::<String>();
+                    *b = Block::Text(format!(
+                        "[tool-result:{call_id} (trimmed from {} bytes)] {preview}…",
+                        body.len()
+                    ));
+                }
             }
         }
     }

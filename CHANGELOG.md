@@ -17,6 +17,31 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   answer differently), and any non-read-only call clears the record — after a write, re-reading is
   correct. Counted as `repeat_calls` in the run summary.
 
+- **Compaction never ran, and when forced to run it saved nothing.** Every live measurement in this
+  repo reported `compactions=0`, so the five-stage pipeline had never actually met a real context.
+  Two faults, found by making it fire:
+
+  *The budget was unrelated to the model.* `Policy::max_input_tokens` is a fixed 150,000 default and
+  nothing read `ModelInfo::context_window` — the framework's own numbers disagreed, 150,000 against
+  `OpenAiCompat`'s 128,000. Compaction fires at 0.75 of that budget, so a 32k model would need
+  112,500 tokens before the compactor stirred, and it cannot hold that many: the provider rejects
+  the request first and the mechanism meant to prevent exactly that never gets a turn. The budget
+  now derives from the model's declared window (minus a reply allowance, itself capped at a quarter
+  of the window — reserving a default 8k output out of an 8k model left *one* token for input, and
+  every 26-token turn ran all five stages against it). An explicit policy is a decision and is left
+  alone. `harness run --context-window` supplies the real figure, which an OpenAI-compatible
+  endpoint does not report.
+
+  *Compaction decided by turn count; contexts blow up by size.* Every stage guards on
+  `history.len() <= keep_recent`, and the ordinary way an agent fills a window is not fifty turns —
+  it is reading one large file and having no room two turns later. On that shape (three turns, one
+  big tool result) all five stages returned immediately and the context came out **20 tokens
+  larger** than it went in. `BudgetReduce` now trims a genuinely oversized result wherever it sits,
+  recent or not, at a much higher threshold and keeping much more of it: recency should protect a
+  turn from being summarised away, not make it impossible to send. Live, on the same run that
+  previously saved nothing: **55,280 → 7,110 tokens in one stage**, and the remaining four correctly
+  did not run.
+
 - **A flaky test in the gate.** `seatbelt_denies_child_network_without_touching_parent` closes by
   curling a live URL to prove the parent process was never sandboxed, and a network blip during a
   full parallel run failed it — blaming the sandbox for the weather. The two causes are not
