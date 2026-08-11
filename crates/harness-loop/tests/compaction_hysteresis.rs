@@ -141,3 +141,219 @@ async fn loop_writes_real_token_calibration() {
         "expected calibration 5.0, saw {seen}"
     );
 }
+
+/// The compaction threshold has to be a fraction of the *model's* window.
+///
+/// It was a fixed 150,000 default that nothing connected to `ModelInfo`, so a
+/// small-window model needed 112,500 tokens before the compactor would run —
+/// more than it can hold. The provider rejects the request first, and the
+/// mechanism meant to prevent exactly that never gets a turn.
+#[tokio::test]
+async fn the_budget_window_comes_from_the_model() {
+    use harness_core::{
+        Block, Context, Event, Hook, HookOutcome, Model, ModelError, ModelInfo, ModelOutput,
+        StopReason, Turn, TurnRole, World,
+    };
+    use std::sync::Mutex;
+
+    /// Declares a small window, the shape of a local 32k model.
+    struct SmallWindow;
+    #[async_trait::async_trait]
+    impl Model for SmallWindow {
+        async fn complete(&self, _ctx: &Context) -> Result<ModelOutput, ModelError> {
+            Ok(ModelOutput {
+                text: Some("done".into()),
+                stop_reason: StopReason::EndTurn,
+                ..Default::default()
+            })
+        }
+        fn info(&self) -> ModelInfo {
+            ModelInfo {
+                handle: "small".into(),
+                provider: "test".into(),
+                model: "small".into(),
+                context_window: 32_000,
+                input_cost_usd_per_million_tokens: None,
+                output_cost_usd_per_million_tokens: None,
+                supports_tool_use: false,
+                supports_streaming: false,
+                supports_web_grounding: false,
+            }
+        }
+    }
+
+    /// Reads the budget the loop actually handed the compactor.
+    #[derive(Default)]
+    struct SeenPolicy(Mutex<u32>);
+    impl Hook for SeenPolicy {
+        fn name(&self) -> &str {
+            "seen-policy"
+        }
+        fn matches(&self, ev: &Event<'_>) -> bool {
+            matches!(ev, Event::PreModel { .. })
+        }
+        fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+            if let Event::PreModel { ctx } = ev {
+                *self.0.lock().unwrap() = ctx.policy.max_input_tokens;
+            }
+            HookOutcome::Allow
+        }
+    }
+
+    let ws = std::env::temp_dir().join(format!("budget-window-{}", std::process::id()));
+    std::fs::create_dir_all(&ws).unwrap();
+    let mut world = default_world(&ws);
+    let seen = Arc::new(SeenPolicy::default());
+
+    // A seeded history big enough to matter against a 32k window but nowhere
+    // near the old fixed 150k default.
+    let bulk = Turn {
+        role: TurnRole::User,
+        blocks: vec![Block::Text("x".repeat(80_000))],
+    };
+    AgentLoop::new(SmallWindow)
+        .with_hook(seen.clone())
+        .run_with_seed_history(task("go"), vec![bulk], &mut world, 2)
+        .await
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&ws);
+
+    let budget = *seen.0.lock().unwrap();
+    assert!(
+        budget < 32_000,
+        "the input budget must come from the model's 32k window, got {budget}"
+    );
+    assert!(
+        budget >= 20_000,
+        "and must not be needlessly small (window minus the reply allowance), got {budget}"
+    );
+}
+
+/// Compaction, end to end, with the real `DefaultCompactor` — not a stub.
+///
+/// Every live measurement in this repo reported `compactions=0`: the default
+/// budget was large enough that nothing ever crossed the high-water mark, so the
+/// five-stage pipeline had never actually run against a real context. This drives
+/// it with a genuinely oversized history and checks it both fires and lands under
+/// the target.
+#[tokio::test]
+async fn a_real_oversized_context_is_compacted_under_target() {
+    use harness_compactor::DefaultCompactor;
+    use harness_core::{Block, Compactor, Context, Task, Turn, TurnRole};
+
+    let compactor = DefaultCompactor::default();
+
+    // A history shaped like a long agent run: many turns, several fat tool
+    // results — the thing that actually fills a window in practice.
+    let mut ctx = Context::new(Task {
+        description: "summarise the work so far".into(),
+        source: None,
+        deadline: None,
+    });
+    ctx.policy.max_input_tokens = 32_000;
+    for i in 0..40 {
+        ctx.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::Text(format!("step {i}: looked at the module"))],
+        });
+        ctx.history.push(Turn {
+            role: TurnRole::Tool,
+            blocks: vec![Block::ToolResult {
+                call_id: format!("c{i}"),
+                content: serde_json::json!({ "content": "line of file\n".repeat(200) }),
+            }],
+        });
+    }
+
+    let before = compactor.budget(&ctx);
+    assert!(
+        before.ratio() > 0.75,
+        "the fixture must actually be over the high-water mark, got {:.2}",
+        before.ratio()
+    );
+
+    // Drive the same stage sequence the loop does.
+    let mut budget = before;
+    let mut ran = 0;
+    for stage in harness_core::CompactionStage::ALL {
+        if budget.ratio() <= 0.55 {
+            break;
+        }
+        compactor.compact(stage, &mut ctx).await.unwrap();
+        budget = compactor.budget(&ctx);
+        ran += 1;
+    }
+
+    assert!(ran > 0, "compaction must run");
+    assert!(
+        budget.ratio() <= 0.55,
+        "compaction must reach the target: {:.2} after {ran} stage(s)",
+        budget.ratio()
+    );
+    // The conversation must survive: compaction shrinks content, it does not
+    // empty the history.
+    assert!(
+        !ctx.history.is_empty(),
+        "compaction must not discard the conversation outright"
+    );
+}
+
+/// Compaction decides by turn count; a context blows up by size. A short
+/// conversation carrying one enormous tool result is the ordinary way an agent
+/// fills a window — read a large file, and two turns later there is no room —
+/// and every stage guards on `history.len() <= keep_recent`, so all five bail
+/// out and the run proceeds straight into a provider rejection.
+#[tokio::test]
+async fn a_short_history_with_one_huge_turn_is_still_compacted() {
+    use harness_compactor::DefaultCompactor;
+    use harness_core::{Block, Compactor, Context, Task, Turn, TurnRole};
+
+    let compactor = DefaultCompactor::default();
+    let mut ctx = Context::new(Task {
+        description: "what does this file do".into(),
+        source: None,
+        deadline: None,
+    });
+    ctx.policy.max_input_tokens = 8_000;
+
+    // Three turns — well under every stage's `keep_recent` — one of which is
+    // a large file read.
+    ctx.history.push(Turn {
+        role: TurnRole::User,
+        blocks: vec![Block::Text("read big.txt".into())],
+    });
+    ctx.history.push(Turn {
+        role: TurnRole::Assistant,
+        blocks: vec![Block::Text("reading".into())],
+    });
+    ctx.history.push(Turn {
+        role: TurnRole::Tool,
+        blocks: vec![Block::ToolResult {
+            call_id: "c1".into(),
+            content: serde_json::json!({ "content": "a line of source code\n".repeat(4000) }),
+        }],
+    });
+
+    let before = compactor.budget(&ctx);
+    assert!(
+        before.ratio() > 0.75,
+        "fixture must be over the high-water mark, got {:.2}",
+        before.ratio()
+    );
+
+    let mut budget = before;
+    for stage in harness_core::CompactionStage::ALL {
+        if budget.ratio() <= 0.55 {
+            break;
+        }
+        compactor.compact(stage, &mut ctx).await.unwrap();
+        budget = compactor.budget(&ctx);
+    }
+
+    assert!(
+        budget.used < before.used,
+        "five stages must reduce something: {} tokens before, {} after",
+        before.used,
+        budget.used
+    );
+}

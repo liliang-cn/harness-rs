@@ -592,6 +592,33 @@ impl<M: Model> AgentLoop<M> {
         if ctx.system.is_empty() && !self.system.is_empty() {
             ctx.system = self.system.clone();
         }
+
+        // Size the context budget to the model actually in use.
+        //
+        // Compaction fires at a fraction of `max_input_tokens`, so a value
+        // unrelated to the model is wrong in one of two directions: too high and
+        // the provider rejects the request before the compactor ever runs (a 32k
+        // model under the 150k default would need 112,500 tokens to trigger, and
+        // it cannot hold that many); too low and the loop discards history it
+        // could have kept. Nothing read `ModelInfo::context_window` before this —
+        // the framework's own defaults disagreed, 150,000 against 128,000.
+        //
+        // Only when the caller left the default in place; an explicit policy is
+        // a decision and stays untouched. The output allowance is reserved,
+        // because the window is shared between the prompt and the reply.
+        if ctx.policy.max_input_tokens == harness_core::Policy::default().max_input_tokens {
+            let window = self.model.info().context_window;
+            if window > 0 {
+                // Reserve room for the reply, but never let the reservation eat
+                // the window: an 8k model with the default 8k output allowance
+                // would leave 0 tokens for input, and every turn — a 26-token
+                // one included — would run all five compaction stages against a
+                // budget of 1. Cap the reservation at a quarter of the window.
+                let reserve = ctx.policy.max_output_tokens.min(window / 4);
+                ctx.policy.max_input_tokens = window.saturating_sub(reserve).max(1);
+            }
+        }
+
         self.hooks.fire(
             &Event::SessionStart {
                 source: SessionSource::Startup,
