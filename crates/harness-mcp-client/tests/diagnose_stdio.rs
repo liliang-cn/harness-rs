@@ -6,14 +6,16 @@
 use harness_mcp_client::McpClient;
 use std::io::Write;
 
-/// A throwaway executable script, so each case can choose exactly how the server dies.
+/// A throwaway script, so each case can choose exactly how the server dies.
 ///
-/// Written to a scratch name and *renamed* into place, and the name carries a counter rather than
-/// only the pid and the body length. Both exist for the same failure: on Linux, exec'ing a file that
-/// any process still holds open for writing is `ETXTBSY` — "Text file busy" — which surfaced here as
-/// a CI failure on ubuntu that macOS never reproduces, because macOS does not enforce it. Renaming
-/// means the inode that gets executed was never the one open for writing, and a unique name means
-/// two concurrent tests cannot land on the same path however their bodies are edited later.
+/// Handed to `/bin/sh` as an *argument* rather than executed directly, and that is the point: on
+/// Linux, `execve` on a file any process still holds open for writing is `ETXTBSY` — "Text file
+/// busy" — and with four tests spawning processes in parallel, one of them writing a script is
+/// enough to make another's exec fail. It surfaced as a CI failure on ubuntu that macOS never
+/// reproduces, because macOS does not enforce it. Writing to a scratch name and renaming into place
+/// was not enough: rename moves the path, not the inode, and ETXTBSY is about the inode. Reading a
+/// file carries no such restriction, so not exec'ing it removes the class rather than narrowing the
+/// window. The name still carries a counter so two concurrent tests cannot collide on a path.
 fn server_that(body: &str) -> ScriptPath {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -23,14 +25,9 @@ fn server_that(body: &str) -> ScriptPath {
     let scratch = path.with_extension("tmp");
 
     let mut file = std::fs::File::create(&scratch).expect("write the stand-in server");
-    write!(file, "#!/bin/sh\n{body}\n").expect("write the script");
+    writeln!(file, "{body}").expect("write the script");
     file.sync_all().expect("flush the script");
     drop(file);
-    std::fs::set_permissions(
-        &scratch,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .expect("make it executable");
     std::fs::rename(&scratch, &path).expect("put the script in place");
     ScriptPath(path)
 }
@@ -51,9 +48,13 @@ impl Drop for ScriptPath {
 }
 
 /// The connect error, insisting there was one. `McpClient` is not `Debug`, so `expect_err` is out.
-async fn connect_error(program: &str) -> String {
-    match McpClient::connect_stdio(program, &[]).await {
-        Ok(_) => panic!("`{program}` is not a working MCP server, yet connecting to it succeeded"),
+///
+/// The stand-in runs as `/bin/sh <script>` — see [`server_that`] for why it is read rather than
+/// executed. `$$` inside the script is still the spawned child, so a case that kills itself kills
+/// the process the client is talking to.
+async fn connect_error(script: &str) -> String {
+    match McpClient::connect_stdio("/bin/sh", &[script]).await {
+        Ok(_) => panic!("`{script}` is not a working MCP server, yet connecting to it succeeded"),
         Err(e) => e.to_string(),
     }
 }
