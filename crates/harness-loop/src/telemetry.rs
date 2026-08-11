@@ -61,6 +61,9 @@ pub struct TelemetryHook {
     run: Mutex<Option<tracing::Span>>,
     /// `call_id -> dispatch start`, so `tool.call` can report a duration.
     tool_starts: Mutex<HashMap<String, Instant>>,
+    /// When the current model call was handed off, so the run summary can say
+    /// how much of the wall clock was spent waiting on the provider.
+    model_start: Mutex<Option<Instant>>,
     /// Running totals for the whole run, so `run.end` can answer "what did this
     /// cost?" without the reader summing per-turn lines by hand.
     totals: Mutex<RunTotals>,
@@ -78,6 +81,14 @@ struct RunTotals {
     tool_failures: u64,
     compactions: u64,
     tokens_saved: u64,
+    /// Wall-clock spent inside model calls, and the summed duration of tool
+    /// calls. Tools dispatched in parallel overlap, so `tool_ms` can exceed the
+    /// wall clock it occupied — it is a cost, not a span.
+    model_ms: u64,
+    tool_ms: u64,
+    /// Read-only calls that exactly repeated an earlier one — wasted rounds the
+    /// stuck-detector cannot see, because they are not consecutive.
+    repeats: u64,
 }
 
 impl TelemetryHook {
@@ -85,6 +96,7 @@ impl TelemetryHook {
         Self {
             run: Mutex::new(None),
             tool_starts: Mutex::new(HashMap::new()),
+            model_start: Mutex::new(None),
             totals: Mutex::new(RunTotals::default()),
         }
     }
@@ -132,13 +144,24 @@ impl Hook for TelemetryHook {
                     ..Default::default()
                 };
             }
+            Event::PreModel { .. } => {
+                *self.model_start.lock().unwrap() = Some(Instant::now());
+            }
             Event::Heartbeat { iter } => self.in_run(|| {
                 tracing::info!(target: "harness.telemetry", event = "iter", iter = *iter);
             }),
             Event::PostModel { out } => self.in_run(|| {
+                let waited = self
+                    .model_start
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(|s| s.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
                 {
                     let mut t = self.totals.lock().unwrap();
                     t.model_calls += 1;
+                    t.model_ms += waited;
                     t.input_tokens += out.usage.input_tokens as u64;
                     t.output_tokens += out.usage.output_tokens as u64;
                     t.cached_input_tokens += out.usage.cached_input_tokens as u64;
@@ -159,6 +182,7 @@ impl Hook for TelemetryHook {
                     cached_input_tokens = out.usage.cached_input_tokens,
                     tool_calls = out.tool_calls.len(),
                     stop = %stop,
+                    duration_ms = waited,
                 );
             }),
             Event::PreToolUse { action } => {
@@ -175,9 +199,18 @@ impl Hook for TelemetryHook {
                     .remove(&action.call_id)
                     .map(|s| s.elapsed().as_millis() as u64)
                     .unwrap_or(0);
+                let repeat = result
+                    .content
+                    .get("repeat_of_earlier_call")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 {
                     let mut t = self.totals.lock().unwrap();
                     t.tool_calls += 1;
+                    t.tool_ms += duration_ms;
+                    if repeat {
+                        t.repeats += 1;
+                    }
                     if !result.ok {
                         t.tool_failures += 1;
                     }
@@ -251,6 +284,9 @@ impl Hook for TelemetryHook {
                         tool_failures = t.tool_failures,
                         compactions = t.compactions,
                         tokens_saved = t.tokens_saved,
+                        model_ms = t.model_ms,
+                        tool_ms = t.tool_ms,
+                        repeat_calls = t.repeats,
                         duration_ms = t.started.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0),
                     );
                 });

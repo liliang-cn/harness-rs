@@ -7,6 +7,62 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Added
 
+- **Repeated read-only calls are answered with a pointer, not the payload again**
+  (`ToolResultPolicy::dedupe_repeats`, on by default). `StuckPolicy` only sees *consecutive*
+  identical rounds; reading a file at iteration 1 and again at iteration 5 is not that, and looks
+  like progress — while the same bytes land in the context twice and the model learns nothing the
+  second time. Measured on a real run, model wait was 36.7s against **3ms** of tool execution, so
+  what a repeat costs is context, not time: the call still runs, its payload does not come back.
+  Only `ToolRisk::ReadOnly` qualifies (`Network` is a separate risk, and an external endpoint may
+  answer differently), and any non-read-only call clears the record — after a write, re-reading is
+  correct. Counted as `repeat_calls` in the run summary.
+
+- **Latency attribution in the run summary** — `model_ms` and `tool_ms` alongside `duration_ms`, and
+  a per-call `duration_ms` on `model.complete`. The first real measurement it produced:
+  `model_ms=36764 tool_ms=3 duration_ms=36769` — the wall clock is the provider, the framework's own
+  share is about 2ms. Worth knowing before optimising anything: `tool_ms` sums per-call durations,
+  and parallel dispatch overlaps, so it is a cost rather than a span.
+
+- **The result a hook sees is the result the model saw.** Truncation and repeat suppression are
+  applied *before* `PostToolUse` fires, so an audit log, a recorder and the telemetry summary all
+  describe the same event. Logging a 200 KB blob the model never received is not an audit of what
+  happened.
+
+- **`harness run` now has `grep` and `glob`.** It shipped with `read_file` and `list_dir` only, so
+  "which files mention X" had exactly one available shape: list everything, read everything, decide
+  inside the model. Measured on a two-file project, that brute force cost **54,505 tokens, 5 tool
+  calls and 159s**. With search available the same question is **2,504 tokens, 1 tool call, 24s** —
+  a twentieth of the cost, and the model was never the problem: it had no way to ask. Both tools are
+  read-only, so this holds the command's read-only default. `harness code` has had them all along,
+  which is how the gap survived.
+
+- **A ceiling on a single tool result — `ToolResultPolicy`, on by default at 24 KiB.** One call can
+  return more than the whole conversation, and the framework cannot vet the tools: a third-party
+  MCP server is outside it entirely. Measured on a real run, *"search these files for a word"* cost
+  **53,487 input tokens** because one `read_file` returned a lock file; the model then re-paid for
+  that blob every following turn. The same task with the ceiling in place: **31,571 tokens (−42%),
+  159s → 120s**, with the *same* 4 model calls, 5 tool calls and 0 failures — the rounds were never
+  the problem, the payload was. Over the limit, the result is replaced by a marker that says how
+  much was dropped and to narrow the request rather than repeat it, and a
+  `tool.result.truncated` telemetry event fires. `with_tool_result_policy(ToolResultPolicy {
+  max_bytes: None })` turns it off for callers who really do want the whole blob.
+
+- **Anthropic prompt caching — the framework never asked for it.** The adapter read
+  `cache_read_input_tokens` but never wrote a `cache_control` breakpoint, and Anthropic caches only
+  what is explicitly marked: every run re-read the system prompt and every tool schema at full
+  price, on every turn, forever. The system prompt is now sent as structured blocks (a breakpoint
+  has nowhere to live on a bare `String`), with one `ephemeral` breakpoint on the last tool — which
+  covers the tools *and* the system block before them. With no tools registered the mark moves to
+  the system block, so a tool-less agent still caches. `cache_creation_input_tokens` is logged too:
+  the first turn's payment for the cheap ones after it was previously invisible.
+
+- **"Tool not found" now names the nearest tool.** `tool \`read_files\` not found` was the model's
+  only clue, so the next turn was another guess — a wasted round trip at best, and a small model
+  can circle a name it nearly had until the budget is gone. The error now carries a `hint`:
+  the closest registered name by edit distance, then the full list. A name unlike anything in the
+  registry gets the list without a guess — pointing at `grep` for `book_flight` sends the model
+  somewhere wrong with confidence.
+
 - **`AgentLoop::boxed(model)` — the constructor for what a model factory returns.** `ApiKind::build`,
   a router, anything kept behind a trait object hands back an `Arc<dyn Model>`, which deliberately
   does not implement `Model` (doing so changes `.stream()` resolution for every `Arc<dyn Model>` in
