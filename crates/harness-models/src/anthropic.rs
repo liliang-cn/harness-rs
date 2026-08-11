@@ -81,11 +81,42 @@ impl AnthropicNative {
 struct AnthropicRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    /// Structured blocks rather than a bare string: Anthropic's prompt cache is
+    /// opt-in per block, so the breakpoint has nowhere to live on a plain
+    /// `String`. See [`SystemBlock`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    system: Vec<SystemBlock>,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<AnthropicTool>,
+}
+
+/// One system block, optionally marked as the end of the cacheable prefix.
+///
+/// Unlike DeepSeek-style automatic prefix caching, Anthropic only caches what is
+/// explicitly marked: without a `cache_control` breakpoint the system prompt and
+/// tool schemas are re-read at full price on every turn of every run. They are
+/// also the largest fixed cost in a loop — the same bytes, resent each iteration.
+#[derive(Debug, Serialize)]
+struct SystemBlock {
+    #[serde(rename = "type")]
+    kind: &'static str, // "text"
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
+}
+
+/// `{"type": "ephemeral"}` — Anthropic's ~5-minute prompt cache.
+#[derive(Debug, Serialize, Clone, Copy)]
+struct CacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+impl CacheControl {
+    fn ephemeral() -> Self {
+        Self { kind: "ephemeral" }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,6 +170,10 @@ struct AnthropicTool {
     name: String,
     description: String,
     input_schema: JsonValue,
+    /// Set on the *last* tool only: the breakpoint caches everything before it,
+    /// and Anthropic allows a small number of breakpoints per request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +193,10 @@ struct AnthropicUsage {
     output_tokens: u32,
     #[serde(default)]
     cache_read_input_tokens: u32,
+    /// Tokens written into the cache on this call — what the first turn pays to
+    /// make the later ones cheap.
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
 }
 
 // ----------------------------------------------------------------
@@ -174,20 +213,33 @@ impl Model for AnthropicNative {
         // any others). Best-effort approach: append the schema/JSON
         // instruction to the system prompt and trust the model to follow.
         let system = augment_system_for_response_format(system, &ctx.response_format);
-        let tools = ctx
+        let mut tools: Vec<AnthropicTool> = ctx
             .tools
             .iter()
             .map(|t| AnthropicTool {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 input_schema: t.input.clone(),
+                cache_control: None,
             })
             .collect();
+        // One breakpoint at the end of the prefix — system + every tool schema.
+        // Those bytes are identical on every iteration of a run and on every run
+        // of a long-lived service; unmarked, Anthropic re-reads them at full
+        // price each time. Marking the last tool covers the tools *and* the
+        // system block before them, which is why the system block itself is left
+        // unmarked when tools are present.
+        let cache_on_system = if let Some(last) = tools.last_mut() {
+            last.cache_control = Some(CacheControl::ephemeral());
+            false
+        } else {
+            true
+        };
 
         let req = AnthropicRequest {
             model: &self.cfg.model,
             max_tokens: ctx.policy.max_output_tokens.max(1024),
-            system,
+            system: system_blocks(system, cache_on_system),
             messages,
             tools,
         };
@@ -274,6 +326,19 @@ impl Model for AnthropicNative {
             }
         }
 
+        // `Usage` has no field for cache *writes* — the first turn's payment for
+        // the cheap ones after it. Without this the breakpoint's effect is only
+        // half visible: reads show up, the cost that bought them does not.
+        if parsed.usage.cache_creation_input_tokens > 0 || parsed.usage.cache_read_input_tokens > 0
+        {
+            tracing::debug!(
+                target: "harness.models",
+                cache_creation_input_tokens = parsed.usage.cache_creation_input_tokens,
+                cache_read_input_tokens = parsed.usage.cache_read_input_tokens,
+                "anthropic prompt cache"
+            );
+        }
+
         let stop_reason = match parsed.stop_reason.as_deref() {
             Some("end_turn") => StopReason::EndTurn,
             Some("tool_use") => StopReason::ToolUse,
@@ -351,6 +416,19 @@ fn augment_system_for_response_format(
         Some(s) if !s.trim().is_empty() => format!("{s}\n\n{extra}"),
         _ => extra,
     })
+}
+
+/// Wrap the system prompt as a block list, marking it as the cacheable prefix
+/// when nothing later in the request carries the breakpoint.
+fn system_blocks(system: Option<String>, cache: bool) -> Vec<SystemBlock> {
+    match system {
+        Some(text) if !text.trim().is_empty() => vec![SystemBlock {
+            kind: "text",
+            text,
+            cache_control: cache.then(CacheControl::ephemeral),
+        }],
+        _ => Vec::new(),
+    }
 }
 
 fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
@@ -634,5 +712,75 @@ mod tests {
             assistant.content[0],
             AnthropicBlock::RedactedThinking { ref data } if data == "OPAQUE_BLOB"
         ));
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn tool(name: &str) -> AnthropicTool {
+        AnthropicTool {
+            name: name.into(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cache_control: None,
+        }
+    }
+
+    /// The prefix — system prompt plus every tool schema — is byte-identical on
+    /// every turn, and Anthropic only caches what a breakpoint marks. One
+    /// breakpoint on the last tool covers the whole prefix.
+    #[test]
+    fn the_last_tool_carries_the_breakpoint() {
+        let mut tools = vec![tool("read_file"), tool("list_dir")];
+        let cache_on_system = if let Some(last) = tools.last_mut() {
+            last.cache_control = Some(CacheControl::ephemeral());
+            false
+        } else {
+            true
+        };
+        assert!(
+            !cache_on_system,
+            "tools present → system needs no breakpoint"
+        );
+
+        let req = AnthropicRequest {
+            model: "claude-x",
+            max_tokens: 1024,
+            system: system_blocks(Some("be helpful".into()), cache_on_system),
+            messages: vec![],
+            tools,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+
+        assert!(
+            v["tools"][0].get("cache_control").is_none(),
+            "only the final tool is marked: {v}"
+        );
+        assert_eq!(v["tools"][1]["cache_control"]["type"], "ephemeral", "{v}");
+        assert!(
+            v["system"][0].get("cache_control").is_none(),
+            "the tool breakpoint already covers the system block: {v}"
+        );
+    }
+
+    /// With no tools there is nothing after the system prompt to carry the mark,
+    /// so it goes on the system block itself — otherwise a tool-less agent
+    /// (a summariser, a classifier) never caches at all.
+    #[test]
+    fn without_tools_the_system_block_is_marked() {
+        let blocks = system_blocks(Some("be helpful".into()), true);
+        let v = serde_json::to_value(&blocks).unwrap();
+        assert_eq!(v[0]["type"], "text");
+        assert_eq!(v[0]["cache_control"]["type"], "ephemeral", "{v}");
+    }
+
+    /// An empty system prompt must not produce an empty block: Anthropic rejects
+    /// a blank `text`, and `system` is skipped entirely when the list is empty.
+    #[test]
+    fn empty_system_produces_no_block() {
+        assert!(system_blocks(None, true).is_empty());
+        assert!(system_blocks(Some("   ".into()), true).is_empty());
     }
 }

@@ -69,6 +69,47 @@ impl Default for StuckPolicy {
     }
 }
 
+/// A ceiling on how much of one tool result reaches the context.
+///
+/// A single call can return more than the whole conversation: a lock file, a
+/// `SELECT *`, an MCP tool the framework does not control. Measured on a real
+/// run, "search these files for a word" cost 53,487 input tokens because one
+/// `read_file` returned a lock file — the model then paid for it on every
+/// subsequent turn, and compaction started throwing away real history to make
+/// room. A per-result ceiling is the only place to stop that: the tools cannot
+/// all be trusted (third-party MCP), and the compactor only runs after the
+/// damage is in the context.
+#[derive(Debug, Clone)]
+pub struct ToolResultPolicy {
+    /// Max serialized bytes of a single tool result. `None` disables the guard.
+    /// Default ~24 KiB — roughly 6k tokens of English, generous for a file page
+    /// or a query result, far below what blows a window.
+    pub max_bytes: Option<usize>,
+    /// Replace the payload of a read-only call that exactly repeats an earlier
+    /// one in the same run, when nothing has modified the world in between.
+    ///
+    /// [`StuckPolicy`] only sees *consecutive* identical rounds. Reading a file
+    /// at iteration 1 and again at iteration 5 is not that, and looks like
+    /// progress — but the same bytes land in the context twice and the model
+    /// learns nothing the second time. Measured on a real run, model wait was
+    /// 36.7s against 3ms of tool execution: a repeat costs context, not time,
+    /// so what is suppressed is the payload, not the call.
+    ///
+    /// Only `ToolRisk::ReadOnly` qualifies (`Network` is a separate risk, and an
+    /// external endpoint may answer differently), and any non-read-only call
+    /// clears the record — after a write, re-reading is the correct move.
+    pub dedupe_repeats: bool,
+}
+
+impl Default for ToolResultPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: Some(24 * 1024),
+            dedupe_repeats: true,
+        }
+    }
+}
+
 /// Governs *when* and *how far* the loop compacts context. Hysteresis: only
 /// start compacting once usage crosses `high_water`, and stop as soon as it's
 /// back under `target` — instead of running every stage above a threshold on
@@ -174,6 +215,8 @@ pub struct AgentLoop<M: Model> {
     pub stuck: StuckPolicy,
     /// Context-compaction hysteresis. See [`CompactPolicy`].
     pub compaction: CompactPolicy,
+    /// Ceiling on a single tool result. See [`ToolResultPolicy`].
+    pub tool_results: ToolResultPolicy,
     /// Conditions the run must satisfy before the loop reports success. The
     /// model stopping is evidence it *believes* it is finished; these say
     /// whether it is. See [`acceptance`].
@@ -224,6 +267,7 @@ impl<M: Model> AgentLoop<M> {
             compaction: CompactPolicy::default(),
             // On by default, because the failure it catches is invisible: a
             // turn that produced nothing is reported as a turn that finished.
+            tool_results: ToolResultPolicy::default(),
             acceptance: vec![Arc::new(acceptance::NonEmptyAnswer)],
             acceptance_retries: 1,
             system: Vec::new(),
@@ -247,6 +291,12 @@ impl<M: Model> AgentLoop<M> {
     }
 
     /// Override the compaction hysteresis policy. See [`CompactPolicy`].
+    /// Set the ceiling on a single tool result. See [`ToolResultPolicy`].
+    pub fn with_tool_result_policy(mut self, policy: ToolResultPolicy) -> Self {
+        self.tool_results = policy;
+        self
+    }
+
     pub fn with_compact_policy(mut self, policy: CompactPolicy) -> Self {
         self.compaction = policy;
         self
@@ -628,6 +678,9 @@ impl<M: Model> AgentLoop<M> {
         // how many consecutive rounds have repeated it.
         let mut last_fingerprint: Option<String> = None;
         let mut repeat_count: u32 = 0;
+        // Read-only calls already answered this run, cleared whenever anything
+        // mutates the world. See `ToolResultPolicy::dedupe_repeats`.
+        let mut answered: std::collections::HashSet<String> = std::collections::HashSet::new();
         // How many times the model has stopped mid-work with nothing to show.
         let mut acceptance_retries_left = self.acceptance_retries;
 
@@ -943,6 +996,15 @@ impl<M: Model> AgentLoop<M> {
                     }
                 };
                 tools_called += 1;
+
+                // Decide the final payload *before* announcing the result, so
+                // hooks, telemetry and the context all describe the same thing:
+                // an audit that logs a 200 KB blob the model never saw is not an
+                // audit of what happened.
+                let result = ToolResult {
+                    content: self.shape_result(&action, &result, &mut answered),
+                    ..result
+                };
                 self.hooks.fire(
                     &Event::PostToolUse {
                         action: &action,
@@ -1182,6 +1244,89 @@ impl<M: Model> AgentLoop<M> {
     }
 
     /// Best-effort append to the recall store. Never fails the turn.
+    /// What a tool result contributes to the context: repeat suppression first,
+    /// then the size ceiling. A repeat that is also oversized collapses to the
+    /// pointer rather than to a truncated copy of what the model already holds.
+    fn shape_result(
+        &self,
+        action: &Action,
+        result: &ToolResult,
+        answered: &mut std::collections::HashSet<String>,
+    ) -> serde_json::Value {
+        if !(self.tool_results.dedupe_repeats && result.ok) {
+            return self.cap_result(&action.tool, &result.content);
+        }
+        match self.tools.risk(&action.tool) {
+            Some(harness_core::ToolRisk::ReadOnly) => {
+                let fp = format!("{}({})", action.tool, action.args);
+                if answered.contains(&fp) {
+                    tracing::info!(
+                        target: "harness.telemetry",
+                        event = "tool.result.repeat",
+                        "gen_ai.tool.name" = %action.tool,
+                    );
+                    serde_json::json!({
+                        "repeat_of_earlier_call": true,
+                        "tool": action.tool,
+                        "note": "You already made this exact call in this run and nothing has \
+                                 changed the workspace since. The earlier result above still \
+                                 stands — use it rather than asking again.",
+                    })
+                } else {
+                    answered.insert(fp);
+                    self.cap_result(&action.tool, &result.content)
+                }
+            }
+            // A write invalidates every earlier read.
+            _ => {
+                answered.clear();
+                self.cap_result(&action.tool, &result.content)
+            }
+        }
+    }
+
+    /// Enforce [`ToolResultPolicy`] on one result before it reaches the context.
+    ///
+    /// Truncation is at the byte level on the serialized form, then handed back
+    /// as a marker object rather than mangled JSON — a half-parsed blob is worse
+    /// for the model than an honest "this was cut". The marker says how much was
+    /// dropped and what to do instead, so the next turn narrows the request
+    /// rather than repeating it.
+    fn cap_result(&self, tool: &str, content: &serde_json::Value) -> serde_json::Value {
+        let Some(max) = self.tool_results.max_bytes else {
+            return content.clone();
+        };
+        let serialized = content.to_string();
+        if serialized.len() <= max {
+            return content.clone();
+        }
+        // Cut on a char boundary so the kept head is valid UTF-8.
+        let mut end = max;
+        while end > 0 && !serialized.is_char_boundary(end) {
+            end -= 1;
+        }
+        tracing::warn!(
+            target: "harness.telemetry",
+            event = "tool.result.truncated",
+            "gen_ai.tool.name" = %tool,
+            bytes = serialized.len(),
+            max_bytes = max,
+        );
+        serde_json::json!({
+            "truncated": true,
+            "tool": tool,
+            "bytes_total": serialized.len(),
+            "bytes_kept": end,
+            "head": serialized[..end],
+            "note": format!(
+                "This result was {} bytes and was cut to {} to protect the context window. \
+                 Do not ask for it again unchanged — narrow it: request a smaller range, \
+                 a filter, or a specific field.",
+                serialized.len(), end
+            ),
+        })
+    }
+
     async fn recall_append(&self, owner: &str, session: &str, msg: harness_core::RecallMessage) {
         if let Some(store) = &self.recall
             && let Err(e) = store.append(owner, session, &msg).await

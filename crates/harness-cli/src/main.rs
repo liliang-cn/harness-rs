@@ -449,7 +449,14 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         // framework's GenAI instrumentation is unreachable from its own CLI.
         .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
         .with_tool(Arc::new(harness_tools_fs::ReadFile))
-        .with_tool(Arc::new(harness_tools_fs::ListDir));
+        .with_tool(Arc::new(harness_tools_fs::ListDir))
+        // Search is read-only, and without it "which files mention X" has only
+        // one shape: list everything, read everything, decide in the model.
+        // Measured, that brute force cost 54,505 tokens and 159s on a two-file
+        // project — not because the loop was inefficient, but because the agent
+        // had no way to ask the question. `harness code` has had these all along.
+        .with_tool(Arc::new(harness_tools_fs::Grep))
+        .with_tool(Arc::new(harness_tools_fs::Glob));
     if opts.write {
         loop_ = loop_
             .with_tool(Arc::new(harness_tools_fs::WriteFile))

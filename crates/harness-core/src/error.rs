@@ -37,8 +37,12 @@ pub enum ModelError {
 
 #[derive(Debug, Error)]
 pub enum ToolError {
-    #[error("tool `{name}` not found")]
-    NotFound { name: String },
+    /// `hint` names the nearest registered tool and lists the rest. It goes back
+    /// to the model verbatim, and it is the difference between a wasted round
+    /// trip and a single-turn correction — so it is part of the error, not a log
+    /// line beside it. Empty when there is nothing useful to say.
+    #[error("tool `{name}` not found{hint}")]
+    NotFound { name: String, hint: String },
     #[error("invalid args for `{name}`: {reason}")]
     InvalidArgs { name: String, reason: String },
     #[error("execution failed: {0}")]
