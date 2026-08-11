@@ -3,7 +3,20 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.40
+
+Everything below came out of one exercise: point the framework's own telemetry at real runs and
+follow the numbers. A live measurement said 99.99% of the wall clock was the provider and about 2ms
+was the framework, which ruled out the loop as a place worth optimising — and every finding after
+that was a tool given the wrong shape, a guard that was never reached, or a mechanism nobody had
+watched run.
+
+### Changed (breaking)
+
+- `Event::PostCompact` carries `before` / `after`. Destructuring it as `{ stage }` no longer
+  compiles — add `..`. The enum is `#[non_exhaustive]`, which does not cover variant fields.
+- `ToolError::NotFound` carries `hint`. Same for constructing or destructuring it.
+
 
 ### Added
 
