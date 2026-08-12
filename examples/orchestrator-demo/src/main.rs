@@ -72,7 +72,12 @@ async fn main() -> anyhow::Result<()> {
     println!("state:        {:?}", report.state);
     println!("succeeded:    {}/{}", report.succeeded(), report.jobs.len());
     println!("total tokens: {}", report.spent_tokens);
-    if let Some((_, _, Some(text))) = report.jobs.iter().find(|(id, _, _)| id == "compare") {
+    if let Some(text) = report
+        .jobs
+        .iter()
+        .find(|j| j.id == "compare")
+        .and_then(|j| j.result.as_ref())
+    {
         println!("\n=== comparison ===\n{}", text.trim());
     }
     Ok(())

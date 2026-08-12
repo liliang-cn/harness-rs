@@ -10,7 +10,6 @@ use harness_core::{SubagentStatus, Task};
 use harness_loop::{Subagent, SubagentSpec};
 use harness_models::{MockModel, MockResponse};
 use serde_json::json;
-use std::sync::Arc;
 
 fn spec(name: &str, iters: u32) -> SubagentSpec {
     SubagentSpec::new(

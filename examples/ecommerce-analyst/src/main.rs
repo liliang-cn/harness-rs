@@ -116,7 +116,12 @@ async fn main() -> anyhow::Result<()> {
         report.jobs.len(),
         report.spent_tokens
     );
-    if let Some((_, _, Some(text))) = report.jobs.iter().find(|(id, _, _)| id == "report") {
+    if let Some(text) = report
+        .jobs
+        .iter()
+        .find(|j| j.id == "report")
+        .and_then(|j| j.result.as_ref())
+    {
         println!("\n=== EXECUTIVE BRIEF ===\n{}", text.trim());
     }
     Ok(())
