@@ -3,7 +3,18 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.42
+
+Most of this came out of running a real task through the framework rather than a mock: a four-job
+graph auditing this repo for byte-truncation panics, with two parallel greps, a judgement step, a
+verification step, and a router applying a deterministic quality gate. The audit came back correct —
+and the run reported it as a failure.
+
+### Changed (breaking)
+
+- `RunReport::jobs` is `Vec<JobReport>` rather than `Vec<(String, JobState, Option<String>)>`.
+- `Next::Goto` is a struct variant carrying `feedback`; construct it with `Next::back_to` or
+  `Next::back_to_with`.
 
 ### Fixed
 

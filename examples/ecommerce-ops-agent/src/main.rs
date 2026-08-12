@@ -142,8 +142,8 @@ async fn main() -> anyhow::Result<()> {
     let actions = report
         .jobs
         .iter()
-        .find(|(id, _, _)| id == "synthesize")
-        .and_then(|(_, _, t)| t.clone())
+        .find(|j| j.id == "synthesize")
+        .and_then(|j| j.result.clone())
         .map(|t| action::parse_actions(&t))
         .unwrap_or_default();
 
