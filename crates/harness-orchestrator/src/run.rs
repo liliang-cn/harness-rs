@@ -105,21 +105,42 @@ pub struct RunReport {
     pub goal: String,
     pub state: RunState,
     pub spent_tokens: u64,
-    /// `(job_id, state, result_text)` for every Job, DAG order not implied.
-    pub jobs: Vec<(String, JobState, Option<String>)>,
+    /// Every Job's outcome. DAG order not implied.
+    pub jobs: Vec<JobReport>,
+}
+
+/// One Job's outcome, as a reader of the run needs it.
+///
+/// `error` is here because without it a failed run is unreadable: a job shows
+/// as `DeadLettered` with an empty body and the reason — which the job had all
+/// along in `last_error` — never leaves the graph. Measured on a real run, a
+/// `grep` job died on an invalid regex and the report said only "DeadLettered".
+/// `visits` is here for the same reason, one level up: a loop that hit its cap
+/// looks identical to one that failed once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobReport {
+    pub id: String,
+    pub state: JobState,
+    /// What it produced, if it succeeded.
+    pub result: Option<String>,
+    /// Why it failed, if it did.
+    pub error: Option<String>,
+    /// Attempts of the latest entry, and how many times it was entered.
+    pub attempts: u32,
+    pub visits: u32,
 }
 
 impl RunReport {
     pub fn succeeded(&self) -> usize {
         self.jobs
             .iter()
-            .filter(|(_, s, _)| *s == JobState::Succeeded)
+            .filter(|j| j.state == JobState::Succeeded)
             .count()
     }
     pub fn dead_lettered(&self) -> usize {
         self.jobs
             .iter()
-            .filter(|(_, s, _)| *s == JobState::DeadLettered)
+            .filter(|j| j.state == JobState::DeadLettered)
             .count()
     }
 
@@ -131,13 +152,21 @@ impl RunReport {
             format_args!("{} jobs, {} tokens;", self.jobs.len(), self.spent_tokens),
             self.goal,
         );
-        for (id, st, text) in &self.jobs {
-            s.push_str(&format!("  - {id}: {}", st.label()));
-            if let Some(t) = text {
-                let t = t.trim();
-                // Char-safe truncation (text may contain multi-byte chars / emoji).
-                let short: String = t.chars().take(80).collect();
-                s.push_str(&format!(" — {short}"));
+        for j in &self.jobs {
+            s.push_str(&format!("  - {}: {}", j.id, j.state.label()));
+            if j.visits > 1 {
+                // A loop that hit its cap otherwise reads like a single failure.
+                s.push_str(&format!(" (entered {}×)", j.visits));
+            }
+            // Char-safe truncation (text may contain multi-byte chars / emoji).
+            let brief = |t: &str| t.trim().chars().take(80).collect::<String>();
+            if let Some(t) = &j.result {
+                s.push_str(&format!(" — {}", brief(t)));
+            }
+            // The reason comes last and always: a failed job with an empty line
+            // is the report saying nothing at exactly the moment it matters.
+            if let Some(e) = &j.error {
+                s.push_str(&format!(" — failed: {}", brief(e)));
             }
             s.push('\n');
         }
@@ -160,7 +189,14 @@ mod tests {
             goal: "g".into(),
             state: RunState::Completed,
             spent_tokens: 0,
-            jobs: vec![("j".into(), JobState::Succeeded, Some(long))],
+            jobs: vec![JobReport {
+                id: "j".into(),
+                state: JobState::Succeeded,
+                result: Some(long),
+                error: None,
+                attempts: 1,
+                visits: 1,
+            }],
         };
         let out = report.render(); // must not panic
         assert!(out.contains("j: succeeded"));

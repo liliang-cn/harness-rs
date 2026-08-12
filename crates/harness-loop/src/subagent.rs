@@ -104,13 +104,35 @@ impl<M: Model> Subagent<M> {
                 iters,
                 usage,
             },
+            // Running out of iterations is not the same as having nothing to
+            // show. Measured on a real run: a code-audit subagent produced a
+            // complete, correct answer on its last iteration, was reported
+            // `Blocked`, and the orchestrator dead-lettered it — filing the
+            // finished work as an error message and cancelling everything
+            // downstream. Work that exists is reported as work, with the caveat
+            // that it was cut short; only an empty hand is `Blocked`.
             Outcome::BudgetExhausted {
                 iters,
                 last_text,
                 usage,
                 ..
+            } => {
+                let empty_handed = last_text.as_deref().map(str::trim).unwrap_or("").is_empty();
+                SubagentReport {
+                    name,
+                    status: if empty_handed {
+                        SubagentStatus::Blocked
+                    } else {
+                        SubagentStatus::DoneWithConcerns
+                    },
+                    text: last_text,
+                    iters,
+                    usage,
+                }
             }
-            | Outcome::Stuck {
+            // Stuck is different: the loop caught it repeating itself, so
+            // whatever text is there is the thing it kept saying, not an answer.
+            Outcome::Stuck {
                 iters,
                 last_text,
                 usage,

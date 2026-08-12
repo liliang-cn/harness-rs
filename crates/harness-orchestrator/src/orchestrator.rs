@@ -423,12 +423,13 @@ impl Orchestrator {
             jobs: run
                 .dag
                 .jobs()
-                .map(|j| {
-                    (
-                        j.id.clone(),
-                        j.state,
-                        j.result.as_ref().map(|r| r.text.clone()),
-                    )
+                .map(|j| crate::run::JobReport {
+                    id: j.id.clone(),
+                    state: j.state,
+                    result: j.result.as_ref().map(|r| r.text.clone()),
+                    error: j.last_error.clone(),
+                    attempts: j.attempts,
+                    visits: j.visits,
                 })
                 .collect(),
         }
