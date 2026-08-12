@@ -217,3 +217,255 @@ async fn cyclic_dag_is_rejected() {
         .await;
     assert_eq!(report.state, RunState::Failed);
 }
+
+// ── conditional edges + bounded cycles ──────────────────────────────────────
+
+use harness_orchestrator::Next;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// A runner whose `review` job rejects the first `reject_times` drafts, then
+/// approves — the shape of every iterative-refinement loop.
+struct ReviewRunner {
+    started: Mutex<Vec<String>>,
+    reviews: AtomicU32,
+    reject_times: u32,
+}
+
+impl ReviewRunner {
+    fn new(reject_times: u32) -> Self {
+        Self {
+            started: Mutex::new(Vec::new()),
+            reviews: AtomicU32::new(0),
+            reject_times,
+        }
+    }
+    fn started(&self) -> Vec<String> {
+        self.started.lock().unwrap().clone()
+    }
+}
+
+#[async_trait(?Send)]
+impl JobRunner for ReviewRunner {
+    async fn run(&self, job: &Job, _deps: &[(JobId, JobResult)]) -> Result<JobResult, JobError> {
+        self.started.lock().unwrap().push(job.id.clone());
+        if job.id == "review" {
+            let n = self.reviews.fetch_add(1, Ordering::SeqCst);
+            let verdict = if n < self.reject_times {
+                "needs work"
+            } else {
+                "LGTM"
+            };
+            return Ok(JobResult::new(verdict));
+        }
+        Ok(JobResult::new(format!("done:{}", job.id)))
+    }
+}
+
+fn review_dag() -> Dag {
+    Dag::from_jobs([
+        job("draft", &[]),
+        job("revise", &["draft"]),
+        job("review", &["revise"]),
+        job("publish", &["review"]),
+    ])
+}
+
+/// The shape a DAG cannot express: reject → revise → review again. Without a
+/// router the caller unrolls the loop by hand and still guesses the count.
+#[tokio::test]
+async fn a_rejected_review_sends_the_graph_back_and_converges() {
+    let runner = Arc::new(ReviewRunner::new(2)); // reject twice, then approve
+    let orch = Orchestrator::new(runner.clone()).route("review", |r: &JobResult| {
+        if r.text.contains("LGTM") {
+            Next::Continue
+        } else {
+            Next::back_to("revise")
+        }
+    });
+
+    let report = orch
+        .run(Run::new("r-loop", "review loop", review_dag()))
+        .await;
+    assert_eq!(report.state, RunState::Completed, "{report:?}");
+
+    // revise/review ran three times each: the loop actually looped.
+    let started = runner.started();
+    let revises = started.iter().filter(|s| *s == "revise").count();
+    let reviews = started.iter().filter(|s| *s == "review").count();
+    assert_eq!((revises, reviews), (3, 3), "order: {started:?}");
+    // …and `publish` ran once, only after the approval.
+    assert_eq!(started.iter().filter(|s| *s == "publish").count(), 1);
+    assert_eq!(started.last().map(String::as_str), Some("publish"));
+}
+
+/// A router that never approves is the failure mode a cycle introduces, and it
+/// does not announce itself — it just keeps spending. The cap ends it, and says
+/// why.
+#[tokio::test]
+async fn a_loop_that_never_converges_is_dead_lettered_with_the_count() {
+    let runner = Arc::new(ReviewRunner::new(u32::MAX)); // never approves
+    let orch = Orchestrator::new(runner.clone())
+        .route("review", |_: &JobResult| Next::back_to("revise"))
+        .with_max_visits(3);
+
+    let report = orch
+        .run(Run::new("r-spin", "stuck loop", review_dag()))
+        .await;
+
+    let started = runner.started();
+    let revises = started.iter().filter(|s| *s == "revise").count();
+    assert!(
+        revises <= 4,
+        "the cap must stop the loop, ran {revises} times: {started:?}"
+    );
+    assert_ne!(
+        report.state,
+        RunState::Completed,
+        "a stuck loop is not a success"
+    );
+}
+
+/// Converging early should stop the run, not carry on paying for whatever else
+/// the graph still lists — the escalate case in an iterative loop.
+#[tokio::test]
+async fn a_router_can_stop_the_run_early() {
+    let runner = Arc::new(ReviewRunner::new(0)); // approves immediately
+    let orch = Orchestrator::new(runner.clone()).route("review", |_: &JobResult| Next::Stop);
+
+    let report = orch
+        .run(Run::new("r-stop", "early stop", review_dag()))
+        .await;
+
+    assert_eq!(report.state, RunState::Completed, "{report:?}");
+    assert!(
+        !runner.started().contains(&"publish".to_string()),
+        "Stop must leave the rest unrun: {:?}",
+        runner.started()
+    );
+}
+
+/// Without a router nothing changes — the DAG behaves exactly as before.
+#[tokio::test]
+async fn a_graph_without_routers_is_the_dag_it_always_was() {
+    let runner = Arc::new(ReviewRunner::new(0));
+    let report = Orchestrator::new(runner.clone())
+        .run(Run::new("r-plain", "plain dag", review_dag()))
+        .await;
+    assert_eq!(report.state, RunState::Completed);
+    assert_eq!(runner.started().len(), 4, "{:?}", runner.started());
+}
+
+/// A re-entered job must see its own last answer and why it came back.
+///
+/// Measured against a real model before this existed: a `revise` job re-entered
+/// five times produced 33, 33, 33, 31, 33 characters against a limit of 26 — it
+/// received the same draft every lap and no word of the rejection, so it wrote
+/// the same thing. A loop that cannot see its own last attempt repeats; it does
+/// not refine.
+struct EchoPromptRunner {
+    seen: Mutex<Vec<String>>,
+    laps: AtomicU32,
+}
+
+#[async_trait(?Send)]
+impl JobRunner for EchoPromptRunner {
+    async fn run(&self, job: &Job, deps: &[(JobId, JobResult)]) -> Result<JobResult, JobError> {
+        if job.id == "work" {
+            // Record the whole prompt the job was handed, deps and all.
+            // The real assembly, not a copy of it — a copy drifts silently.
+            self.seen
+                .lock()
+                .unwrap()
+                .push(harness_orchestrator::job_prompt(job, deps));
+            let n = self.laps.fetch_add(1, Ordering::SeqCst);
+            return Ok(JobResult::new(format!("attempt-{n}")));
+        }
+        Ok(JobResult::new(format!("done:{}", job.id)))
+    }
+}
+
+#[tokio::test]
+async fn a_re_entered_job_is_told_its_last_answer_and_why_it_came_back() {
+    let runner = Arc::new(EchoPromptRunner {
+        seen: Mutex::new(Vec::new()),
+        laps: AtomicU32::new(0),
+    });
+    let dag = Dag::from_jobs([job("work", &[]), job("check", &["work"])]);
+
+    // Reject the first two laps with a specific, actionable reason.
+    let rejections = Arc::new(AtomicU32::new(0));
+    let r = rejections.clone();
+    let orch = Orchestrator::new(runner.clone())
+        .route("check", move |_: &JobResult| {
+            if r.fetch_add(1, Ordering::SeqCst) < 2 {
+                Next::back_to_with("work", "too long by 7 characters")
+            } else {
+                Next::Continue
+            }
+        })
+        .with_max_visits(5);
+
+    let report = orch.run(Run::new("r-fb", "refine", dag)).await;
+    assert_eq!(report.state, RunState::Completed, "{report:?}");
+
+    let seen = runner.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3, "the job should have run three times");
+
+    // Lap 1 is a clean start: nothing to improve on yet.
+    assert!(!seen[0].contains("rejected"), "lap 1: {}", seen[0]);
+
+    // Laps 2 and 3 carry the reason and the previous answer.
+    for (i, prompt) in seen.iter().enumerate().skip(1) {
+        assert!(
+            prompt.contains("too long by 7 characters"),
+            "lap {} lost the feedback:\n{prompt}",
+            i + 1
+        );
+        assert!(
+            prompt.contains(&format!("attempt-{}", i - 1)),
+            "lap {} cannot see what it answered last time:\n{prompt}",
+            i + 1
+        );
+    }
+}
+
+/// A name that matches nothing is the quietest way a graph goes wrong, and the
+/// two cases fail differently badly: a mistyped dep leaves its job unreachable
+/// (a scheduling mystery), while a mistyped route target never fires at all —
+/// the loop simply does not happen and the run reports success.
+#[tokio::test]
+async fn a_dep_naming_a_job_that_does_not_exist_is_refused_up_front() {
+    let runner = Arc::new(TestRunner::new());
+    let dag = Dag::from_jobs([job("a", &[]), job("b", &["typo"])]);
+
+    let report = Orchestrator::new(runner.clone())
+        .run(Run::new("r-dep", "bad dep", dag))
+        .await;
+
+    assert_eq!(report.state, RunState::Failed);
+    assert!(
+        report.jobs.iter().any(|(_, _, _)| true) && report.jobs.iter().any(|(id, _, _)| id == "b"),
+        "{report:?}"
+    );
+    // Nothing ran: the graph was rejected before spending anything.
+    assert!(runner.started().is_empty(), "{:?}", runner.started());
+}
+
+#[tokio::test]
+async fn a_route_naming_a_job_that_does_not_exist_is_refused_up_front() {
+    let runner = Arc::new(TestRunner::new());
+    let dag = Dag::from_jobs([job("draft", &[]), job("review", &["draft"])]);
+
+    let report = Orchestrator::new(runner.clone())
+        // `reveiw` — the typo that would otherwise mean no loop, silently.
+        .route("reveiw", |_: &JobResult| Next::back_to("draft"))
+        .run(Run::new("r-route", "bad route", dag))
+        .await;
+
+    assert_eq!(
+        report.state,
+        RunState::Failed,
+        "a route pointing at nothing must not pass as a successful run: {report:?}"
+    );
+    assert!(runner.started().is_empty(), "{:?}", runner.started());
+}

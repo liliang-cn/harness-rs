@@ -158,8 +158,22 @@ pub struct Job {
     pub result: Option<JobResult>,
     /// How many times this Job has been run so far.
     pub attempts: u32,
+    /// How many times this Job has been *entered* — one per run, plus one for
+    /// every time a [`Next::Goto`](crate::Next) sent the graph back through it.
+    /// Distinct from `attempts`, which counts retries of a single entry: a job
+    /// that fails twice and is revisited once has 2 attempts and 2 visits, and
+    /// only the second bounds the loop.
+    #[serde(default)]
+    pub visits: u32,
     /// Error from the most recent failed attempt, if any.
     pub last_error: Option<String>,
+    /// What this job produced on the previous lap, and why it was sent back.
+    /// Set only by a [`Next::Goto`](crate::Next); the runner puts both in front
+    /// of the job so it can improve on its own answer instead of reproducing it.
+    #[serde(default)]
+    pub prior_attempt: Option<String>,
+    #[serde(default)]
+    pub feedback: Option<String>,
 }
 
 impl Job {
@@ -172,7 +186,10 @@ impl Job {
             state: JobState::Pending,
             result: None,
             attempts: 0,
+            visits: 0,
             last_error: None,
+            prior_attempt: None,
+            feedback: None,
         }
     }
 
