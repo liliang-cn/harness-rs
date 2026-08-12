@@ -3,6 +3,48 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **Conditional edges and bounded cycles in the orchestrator** — `Orchestrator::route(job, router)`
+  plus `Next::{Continue, Goto, Stop}`. A DAG says what may run in parallel; it cannot say *"if the
+  review fails, revise and review again"*, and that shape is most of agent work. Callers were left
+  unrolling the loop by hand — three copies of the same job, and still a guess at how many — or
+  dropping out of the orchestrator entirely.
+
+  One concept covers both gaps: a router runs after a job succeeds and says what happens next. The
+  `deps` graph stays acyclic, so load-time cycle detection keeps working and re-entry is a
+  scheduling decision instead of a structural one. `Goto` resets the target *and everything
+  downstream of it* — sending the graph back to `revise` while the `review` that rejected it stayed
+  `Succeeded` would revise once and quietly stop being a loop. `Stop` ends the run successfully and
+  leaves the rest unrun, which is the early exit an iterative loop needs when it converges before
+  its budget.
+
+  A cycle's failure mode is that it never converges and does not announce itself — it just keeps
+  spending. `with_max_visits` (default 5) dead-letters the job with the count in its error, so a
+  stuck loop reads as a stuck loop. `Job::visits` is persisted and distinct from `attempts`: retries
+  of one entry versus laps around the loop, and only the second bounds a cycle.
+
+  A graph with no routers behaves exactly as it did before, and there is a test that says so.
+
+  Three things came out of running this against a live model rather than a mock, and all three are
+  in:
+
+  - **A re-entered job now sees its own last answer and why it came back** (`Next::back_to_with`,
+    `Job::prior_attempt` / `feedback`). Without it the loop repeats rather than refines: measured,
+    a `revise` job re-entered five times produced 33, 33, 33, 31, 33 characters against a limit of
+    26, because every lap handed it the same draft and no word of the rejection.
+  - **A name that matches nothing is refused before the run spends anything.** A mistyped dep left
+    its job unreachable, which reads as a scheduling mystery; a mistyped *route* target never fired
+    at all — the loop silently did not happen and the run reported success. Both are now checked up
+    front, named in the error.
+  - **The documented example puts the criterion in the router, not in the prompt.** The old one had
+    a model judge its own output, which is the version that failed live: asked whether a
+    30-character answer met a 15-character limit, it replied "LGTM". The same check as code is
+    exact and costs no tokens — and `job_prompt` is public now, so a custom `JobRunner` composes
+    the same text the built-in one does instead of a copy that drifts.
+
 ## 0.0.41
 
 ### Added

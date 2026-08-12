@@ -68,17 +68,42 @@ impl SubagentJobRunner {
     }
 
     fn task_description(&self, job: &Job, deps: &[(JobId, JobResult)]) -> String {
-        if deps.is_empty() {
-            return job.prompt.clone();
-        }
-        let mut d = String::from("Results from upstream jobs you depend on:\n");
-        for (id, r) in deps {
-            d.push_str(&format!("--- {id} ---\n{}\n", r.text.trim()));
-        }
-        d.push_str("\nYour task:\n");
-        d.push_str(&job.prompt);
-        d
+        job_prompt(job, deps)
     }
+}
+
+/// The exact text a Job is handed: the reason it came back (if it did), its own
+/// previous answer, then its dependencies' results, then its task.
+///
+/// Public and free-standing so a custom [`JobRunner`] can hand its model the
+/// same thing the built-in one does — and so a test asserts on this rather than
+/// on a copy of it that drifts.
+pub fn job_prompt(job: &Job, deps: &[(JobId, JobResult)]) -> String {
+    // A re-entered job reads its own last answer and the reason it came
+    // back, ahead of everything else — that is the difference between a
+    // loop that refines and one that repeats.
+    let mut lead = String::new();
+    if let Some(f) = &job.feedback {
+        lead.push_str(&format!("Your previous answer was rejected: {f}\n"));
+    }
+    if let Some(prev) = &job.prior_attempt {
+        lead.push_str(&format!(
+            "What you answered last time (do not repeat it — improve on it):\n{}\n\n",
+            prev.trim()
+        ));
+    }
+
+    if deps.is_empty() {
+        return format!("{lead}{}", job.prompt);
+    }
+    let mut d = lead;
+    d.push_str("Results from upstream jobs you depend on:\n");
+    for (id, r) in deps {
+        d.push_str(&format!("--- {id} ---\n{}\n", r.text.trim()));
+    }
+    d.push_str("\nYour task:\n");
+    d.push_str(&job.prompt);
+    d
 }
 
 #[async_trait(?Send)]

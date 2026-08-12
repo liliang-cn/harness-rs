@@ -16,6 +16,28 @@
 //!
 //! - **Concurrent DAG** — [`Dag`] of [`Job`]s; the [`Orchestrator`] runs every
 //!   Job whose dependencies have `Succeeded`, up to a concurrency cap.
+//! - **Conditional edges + bounded cycles** — a [`Router`] on a job decides what
+//!   happens after it succeeds: carry on, [`Next::back_to`] an earlier job, or
+//!   [`Next::Stop`] the run. *"If the review fails, revise and review again"* is
+//!   most of agent work and a DAG cannot say it; the `deps` graph stays acyclic
+//!   and re-entry is a scheduling decision, capped by `with_max_visits` so a
+//!   loop that never converges dead-letters instead of billing.
+//!
+//!   ```ignore
+//!   // The criterion lives in the router, where it is code. Asked to judge its
+//!   // own output against a limit, a model will agree with itself: measured on
+//!   // a real run, one answered "LGTM" for a 30-character string against a
+//!   // limit of 15. Counted here instead, the same loop converged.
+//!   Orchestrator::new(runner).route("review", |r: &JobResult| {
+//!       let n = r.text.chars().count();
+//!       if n <= LIMIT {
+//!           Next::Continue
+//!       } else {
+//!           Next::back_to_with("revise", format!("{n} characters, limit is {LIMIT}"))
+//!       }
+//!   })
+//!   ```
+//!
 //! - **Dynamic replanning** — a [`Planner`] is re-invoked with the results so
 //!   far and may merge new Jobs into the running DAG ([`PlanDelta::Add`]).
 //!   This is the feedback edge that makes it an *agent* runtime, not a static
@@ -65,10 +87,13 @@ mod run;
 mod runner;
 mod store;
 
+mod route;
+
 pub use dag::{Dag, PlanDelta};
 pub use job::{Backoff, Job, JobId, JobResult, JobState, RetryPolicy};
 pub use orchestrator::Orchestrator;
 pub use planner::{Planner, PlannerError, StaticPlanner};
+pub use route::{Next, Router};
 pub use run::{Run, RunBudget, RunId, RunReport, RunState};
-pub use runner::{JobError, JobRunner, SubagentJobRunner, WorldFactory};
+pub use runner::{JobError, JobRunner, SubagentJobRunner, WorldFactory, job_prompt};
 pub use store::{FileRunStore, InMemoryRunStore, RunStore, StoreError};

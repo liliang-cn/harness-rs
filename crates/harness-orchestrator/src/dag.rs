@@ -48,6 +48,10 @@ impl Dag {
     pub fn ids(&self) -> Vec<JobId> {
         self.jobs.keys().cloned().collect()
     }
+    pub fn jobs_mut(&mut self) -> impl Iterator<Item = &mut Job> {
+        self.jobs.values_mut()
+    }
+
     pub fn jobs(&self) -> impl Iterator<Item = &Job> {
         self.jobs.values()
     }
@@ -85,6 +89,44 @@ impl Dag {
 
     /// Detect a dependency cycle (returns the first cycle's member ids).
     /// The orchestrator rejects a cyclic DAG up front rather than deadlock.
+    /// `(job, missing_dep)` for every dependency naming a job that is not in
+    /// this graph.
+    ///
+    /// A typo here is not a compile error and does not announce itself: the job
+    /// simply never becomes runnable and is swept up as unreachable, which reads
+    /// as a scheduling mystery rather than as a misspelled id.
+    pub fn unknown_deps(&self) -> Vec<(JobId, JobId)> {
+        self.jobs()
+            .flat_map(|j| {
+                j.deps
+                    .iter()
+                    .filter(|d| !self.jobs.contains_key(*d))
+                    .map(move |d| (j.id.clone(), d.clone()))
+            })
+            .collect()
+    }
+
+    /// `id` plus every job that transitively depends on it.
+    ///
+    /// What a [`Next::Goto`](crate::Next) has to re-run: sending the graph back
+    /// to `revise` while the `review` that rejected it stays `Succeeded` would
+    /// revise once and never look again — the loop would run exactly one lap and
+    /// silently stop being a loop.
+    pub fn downstream_of(&self, id: &str) -> Vec<JobId> {
+        let mut out: Vec<JobId> = vec![id.into()];
+        let mut i = 0;
+        while i < out.len() {
+            let current = out[i].clone();
+            for j in self.jobs() {
+                if j.deps.contains(&current) && !out.contains(&j.id) {
+                    out.push(j.id.clone());
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
     pub fn find_cycle(&self) -> Option<Vec<JobId>> {
         #[derive(Clone, Copy, PartialEq)]
         enum Mark {

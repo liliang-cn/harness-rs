@@ -10,6 +10,7 @@
 use crate::dag::PlanDelta;
 use crate::job::{Job, JobId, JobResult, JobState};
 use crate::planner::Planner;
+use crate::route::{Next, Router};
 use crate::run::{Run, RunReport, RunState};
 use crate::runner::JobRunner;
 use crate::store::RunStore;
@@ -28,6 +29,12 @@ pub struct Orchestrator {
     store: Option<Arc<dyn RunStore>>,
     max_concurrency: usize,
     max_replans: u32,
+    /// Routers live here rather than on the `Dag` because the Dag is state and
+    /// gets restored from the store, while these are code: a resumed run
+    /// rebuilds the Orchestrator and keeps its routes, instead of silently
+    /// losing them and running straight past a loop it was in the middle of.
+    routes: std::collections::HashMap<JobId, Arc<dyn Router>>,
+    max_visits: u32,
 }
 
 impl Orchestrator {
@@ -38,6 +45,8 @@ impl Orchestrator {
             store: None,
             max_concurrency: 4,
             max_replans: 8,
+            routes: std::collections::HashMap::new(),
+            max_visits: 5,
         }
     }
 
@@ -53,6 +62,33 @@ impl Orchestrator {
         self.max_concurrency = n.max(1);
         self
     }
+    /// Decide what happens after `job` succeeds — see [`Next`].
+    ///
+    /// ```ignore
+    /// .route("review", |r: &JobResult| {
+    ///     if r.text.contains("LGTM") { Next::Continue } else { Next::back_to("revise") }
+    /// })
+    /// ```
+    pub fn route<R>(mut self, job: impl Into<JobId>, router: R) -> Self
+    where
+        R: Router + 'static,
+    {
+        self.routes.insert(job.into(), Arc::new(router));
+        self
+    }
+
+    /// How many times one job may be entered before the run gives up on the
+    /// loop. Default 5.
+    ///
+    /// A router that never converges is the failure mode a cycle introduces,
+    /// and it does not announce itself — it just keeps spending. On the cap the
+    /// job is dead-lettered with the count in its error, which reads as a stuck
+    /// loop rather than as a mysterious halt.
+    pub fn with_max_visits(mut self, n: u32) -> Self {
+        self.max_visits = n.max(1);
+        self
+    }
+
     /// Cap on how many times the planner may be (re)invoked. Replanning only
     /// happens when a planner is installed.
     pub fn with_max_replans(mut self, n: u32) -> Self {
@@ -63,6 +99,40 @@ impl Orchestrator {
     /// Run `run` to a terminal state and return its report. Never returns an
     /// `Err`: failures land in Job/Run state, not the call site.
     pub async fn run(&self, mut run: Run) -> RunReport {
+        // Names that match nothing are the quietest way a graph goes wrong: a
+        // mistyped dep leaves its job unreachable and reads as a scheduling
+        // mystery, and a mistyped route target never fires at all — the loop
+        // simply does not happen and the run reports success. Both are cheap to
+        // catch before anything spends a token.
+        let unknown_deps = run.dag.unknown_deps();
+        let unknown_routes: Vec<&JobId> = self
+            .routes
+            .keys()
+            .filter(|id| run.dag.get(id.as_str()).is_none())
+            .collect();
+        if !unknown_deps.is_empty() || !unknown_routes.is_empty() {
+            let mut why = String::new();
+            for (job, dep) in &unknown_deps {
+                why.push_str(&format!(
+                    "job `{job}` depends on `{dep}`, which is not in the graph; "
+                ));
+            }
+            for id in &unknown_routes {
+                why.push_str(&format!(
+                    "a route is registered for `{id}`, which is not in the graph; "
+                ));
+            }
+            tracing::warn!(run = %run.id, %why, "orchestrator: graph names something that does not exist");
+            for j in run.dag.jobs_mut() {
+                if j.last_error.is_none() {
+                    j.last_error = Some(why.clone());
+                }
+            }
+            run.state = RunState::Failed;
+            self.save(&run).await;
+            return self.report(&run);
+        }
+
         if let Some(cycle) = run.dag.find_cycle() {
             tracing::warn!(run = %run.id, ?cycle, "orchestrator: cyclic DAG — aborting");
             run.state = RunState::Failed;
@@ -130,10 +200,35 @@ impl Orchestrator {
             match result {
                 Ok(jr) => {
                     run.spent_tokens += jr.total_tokens();
+                    let routed = self.routes.get(&id).map(|r| r.route(&jr));
                     if let Some(j) = run.dag.get_mut(&id) {
                         j.state = JobState::Succeeded;
                         j.attempts = attempt;
                         j.result = Some(jr);
+                    }
+
+                    match routed {
+                        None | Some(Next::Continue) => {}
+                        Some(Next::Stop) => {
+                            // The loop converged. Everything still pending was
+                            // only worth running if it had not.
+                            self.cancel_all_nonterminal(&mut run, "run stopped by router");
+                            run.state = RunState::Completed;
+                            self.save(&run).await;
+                            return self.report(&run);
+                        }
+                        Some(Next::Goto {
+                            job: target,
+                            feedback,
+                        }) => {
+                            if let Err(reason) = self.reenter(&mut run, &target, feedback) {
+                                tracing::warn!(run = %run.id, %target, %reason, "orchestrator: loop bound reached");
+                                if let Some(j) = run.dag.get_mut(&target) {
+                                    j.state = JobState::DeadLettered;
+                                    j.last_error = Some(reason);
+                                }
+                            }
+                        }
                     }
                     self.save(&run).await;
                     if run.budget.exceeded(run.spent_tokens) {
@@ -210,6 +305,43 @@ impl Orchestrator {
     }
 
     // ── internals ──────────────────────────────────────────────────────
+
+    /// Send the graph back through `target`: it and everything downstream of it
+    /// return to `Pending` so the loop actually loops.
+    ///
+    /// Fails — leaving the run to dead-letter the job — once any of them has
+    /// been entered `max_visits` times. The cap is checked before the reset, so
+    /// a run that would exceed it stops instead of paying for one more lap.
+    fn reenter(&self, run: &mut Run, target: &str, feedback: Option<String>) -> Result<(), String> {
+        let affected = run.dag.downstream_of(target);
+        for id in &affected {
+            if let Some(j) = run.dag.get(id.as_str())
+                && j.visits >= self.max_visits
+            {
+                return Err(format!(
+                    "`{id}` has been entered {} times (max_visits {}); the loop is not converging",
+                    j.visits, self.max_visits
+                ));
+            }
+        }
+        for id in &affected {
+            if let Some(j) = run.dag.get_mut(id.as_str())
+                && j.state.is_terminal()
+            {
+                // Carry the last answer forward before clearing it: a job that
+                // cannot see what it already said will say it again.
+                j.prior_attempt = j.result.take().map(|r| r.text);
+                if id.as_str() == target {
+                    j.feedback = feedback.clone();
+                }
+                j.state = JobState::Pending;
+                j.visits += 1;
+                j.attempts = 0;
+                j.last_error = None;
+            }
+        }
+        Ok(())
+    }
 
     async fn launch_ready(&self, run: &mut Run, inflight: &mut FuturesUnordered<JobFut>) {
         loop {
