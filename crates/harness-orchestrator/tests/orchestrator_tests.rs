@@ -90,8 +90,8 @@ async fn diamond_dag_respects_dependencies_and_fans_out() {
     let d_text = report
         .jobs
         .iter()
-        .find(|(id, _, _)| id == "d")
-        .and_then(|(_, _, t)| t.clone())
+        .find(|j| j.id == "d")
+        .and_then(|j| j.result.clone())
         .unwrap();
     assert!(d_text.contains("deps=2"), "d should see 2 deps: {d_text}");
 }
@@ -120,7 +120,7 @@ async fn dead_letter_cancels_dependents() {
     let report = orch.run(Run::new("r3", "deadletter", dag)).await;
 
     assert_eq!(report.state, RunState::Failed);
-    let state_of = |id: &str| report.jobs.iter().find(|(j, _, _)| j == id).unwrap().1;
+    let state_of = |id: &str| report.jobs.iter().find(|j| j.id == id).unwrap().state;
     assert_eq!(state_of("a"), JobState::DeadLettered);
     assert_eq!(state_of("b"), JobState::Cancelled);
     // b never started.
@@ -201,7 +201,7 @@ async fn run_budget_stops_and_cancels_pending() {
     let report = orch.run(run).await;
 
     assert_eq!(report.state, RunState::Failed);
-    let state_of = |id: &str| report.jobs.iter().find(|(j, _, _)| j == id).unwrap().1;
+    let state_of = |id: &str| report.jobs.iter().find(|j| j.id == id).unwrap().state;
     assert_eq!(state_of("a"), JobState::Succeeded);
     assert_eq!(state_of("b"), JobState::Succeeded); // pushed spent to 200
     assert_eq!(state_of("c"), JobState::Cancelled); // never ran — budget gone
@@ -443,10 +443,7 @@ async fn a_dep_naming_a_job_that_does_not_exist_is_refused_up_front() {
         .await;
 
     assert_eq!(report.state, RunState::Failed);
-    assert!(
-        report.jobs.iter().any(|(_, _, _)| true) && report.jobs.iter().any(|(id, _, _)| id == "b"),
-        "{report:?}"
-    );
+    assert!(report.jobs.iter().any(|j| j.id == "b"), "{report:?}");
     // Nothing ran: the graph was rejected before spending anything.
     assert!(runner.started().is_empty(), "{:?}", runner.started());
 }
@@ -468,4 +465,31 @@ async fn a_route_naming_a_job_that_does_not_exist_is_refused_up_front() {
         "a route pointing at nothing must not pass as a successful run: {report:?}"
     );
     assert!(runner.started().is_empty(), "{:?}", runner.started());
+}
+
+/// A report that cannot say why a job died is not a report.
+///
+/// Measured on a real run: a `grep` job died on an invalid regex, and the
+/// rendered report said `DeadLettered` and nothing else — the reason was in the
+/// job's `last_error` the whole time and never left the graph.
+#[tokio::test]
+async fn a_failed_job_carries_its_reason_into_the_report() {
+    let runner = Arc::new(TestRunner::new().fail_first("boom", 99)); // never succeeds
+    let dag = Dag::from_jobs([job("boom", &[]), job("after", &["boom"])]);
+
+    let report = Orchestrator::new(runner)
+        .run(Run::new("r-err", "failure reporting", dag))
+        .await;
+
+    let boom = report.jobs.iter().find(|j| j.id == "boom").expect("job");
+    assert_eq!(boom.state, JobState::DeadLettered);
+    let err = boom.error.as_deref().unwrap_or("");
+    assert!(err.contains("boom"), "the reason must survive: {boom:?}");
+
+    // …and it has to be visible in what a person actually reads.
+    let rendered = report.render();
+    assert!(
+        rendered.contains("failed:"),
+        "the rendered report hides the failure:\n{rendered}"
+    );
 }

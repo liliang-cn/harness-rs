@@ -5,6 +5,23 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ## Unreleased
 
+### Fixed
+
+- **A subagent that ran out of iterations had its finished work thrown away.** `BudgetExhausted`
+  mapped to `SubagentStatus::Blocked`, which the orchestrator turns into a dead letter — so the
+  answer went into the job's *error* field and every dependent was cancelled. Found by running a
+  real audit through the graph: a job produced a complete, correct classification of nine call
+  sites on its last iteration and the run reported it as a failure with the report as the error
+  message. Work that exists is now `DoneWithConcerns` — reported as work, with the caveat that it
+  was cut short. An empty hand is still `Blocked`, and `Stuck` still is too: there the loop caught
+  the agent repeating itself, so the text is the thing it kept saying rather than an answer.
+
+- **`RunReport` could not say why a job failed.** Each entry was `(id, state, result_text)`, so a
+  dead-lettered job rendered as its state and an empty line while the reason sat in `last_error`,
+  inside the graph, unread. Entries are now `JobReport { id, state, result, error, attempts, visits
+  }` and `render()` prints the reason. `visits` is there for the same reason one level up: a loop
+  that hit its cap otherwise looks identical to a job that failed once.
+
 ### Added
 
 - **Conditional edges and bounded cycles in the orchestrator** — `Orchestrator::route(job, router)`

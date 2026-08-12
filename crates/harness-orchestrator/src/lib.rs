@@ -94,6 +94,6 @@ pub use job::{Backoff, Job, JobId, JobResult, JobState, RetryPolicy};
 pub use orchestrator::Orchestrator;
 pub use planner::{Planner, PlannerError, StaticPlanner};
 pub use route::{Next, Router};
-pub use run::{Run, RunBudget, RunId, RunReport, RunState};
+pub use run::{JobReport, Run, RunBudget, RunId, RunReport, RunState};
 pub use runner::{JobError, JobRunner, SubagentJobRunner, WorldFactory, job_prompt};
 pub use store::{FileRunStore, InMemoryRunStore, RunStore, StoreError};
