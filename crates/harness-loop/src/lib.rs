@@ -98,6 +98,17 @@ pub struct ToolResultPolicy {
     /// Only `ToolRisk::ReadOnly` qualifies (`Network` is a separate risk, and an
     /// external endpoint may answer differently), and any non-read-only call
     /// clears the record — after a write, re-reading is the correct move.
+    ///
+    /// **Off by default, on the evidence.** Measured on the completion
+    /// benchmark: ceilings alone solved 6/6 tasks for 160k effective tokens;
+    /// adding repeat-suppression cut that to 32k — and lost a task. An agent
+    /// working through a file larger than one page re-reads it because it cannot
+    /// hold it, gets told it already has the answer, and does not: the content
+    /// was paged away. Five times cheaper is not worth a task a framework could
+    /// otherwise do, so this is opt-in for callers who would rather have the
+    /// tokens. (Suppressing from the *third* identical call rather than the
+    /// second would likely keep most of the saving without the failure — it
+    /// needs measuring before it becomes the default.)
     pub dedupe_repeats: bool,
 }
 
@@ -105,7 +116,7 @@ impl Default for ToolResultPolicy {
     fn default() -> Self {
         Self {
             max_bytes: Some(24 * 1024),
-            dedupe_repeats: true,
+            dedupe_repeats: false,
         }
     }
 }
