@@ -3,6 +3,43 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Changed
+
+- **`ToolResultPolicy::dedupe_repeats` now defaults to off, on the benchmark's evidence.** The first
+  thing the new suite measured was the guards themselves, and repeat-suppression lost a task:
+  ceilings alone solved 6/6 for 160k effective tokens, and adding suppression cut that to 32k while
+  dropping to 5/6. An agent working through a file larger than one page re-reads it because it
+  cannot hold it, is told it already has the answer, and does not — the content was paged away.
+  Five times cheaper is not worth a task the framework could otherwise do. Still available opt-in.
+  (Suppressing from the *third* identical call rather than the second would likely keep most of the
+  saving without the failure; that needs measuring before it becomes a default.)
+
+### Added
+
+- **`bench-suite` measures the harness, not the model** — `pass^k`, a guards-off/guards-on
+  ablation, and cost normalised by reliability. Driven by
+  `BENCH_K=3 BENCH_LEVELS=H0,H2 cargo run -p eval-bench --bin bench-suite`.
+
+  `pass^k` counts a task only when **every** one of `k` trials resolved. It is not `pass@k`, which
+  asks whether *any* attempt worked and is an upper bound on capability; this is a floor on
+  reliability, and the two diverge hard — τ-bench reports a model at 81.6% `pass^1` falling to 56.1%
+  at `pass^4`. Making an agent succeed *repeatably* is the harness's job, so this is the number that
+  measures the harness. CI now gates on it rather than on a lucky first attempt.
+
+  The levels are an ablation ladder: `H0` runs the loop with its judgement switched off (no stuck
+  detection, no acceptance check, no ceiling on a tool result), `H2` runs the defaults. A harness's
+  contribution is otherwise inseparable from its model's — the same model has been measured at 46%
+  under one scaffold and 80% under another — so the difference between the two rows is the
+  scaffold, in the units anyone cares about. Each trial gets its own workspace; sharing one would
+  let the second attempt inherit the first's files and `pass^k` would measure nothing past k=1.
+
+  `cost_of_pass` is effective tokens per *correct* answer, weighting output at 4× and cached input
+  at 0.1× as GitHub's Effective Tokens does. Dividing by attempts instead flatters a configuration
+  that is cheap and usually wrong: that one pays again on the retry, and the retry is not in the
+  average.
+
 ## 0.0.42
 
 Most of this came out of running a real task through the framework rather than a mock: a four-job

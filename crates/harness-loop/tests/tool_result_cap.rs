@@ -221,6 +221,12 @@ async fn a_repeated_read_only_call_is_answered_with_a_pointer() {
             .script(MockResponse::text("done")),
     )
     .with_tool(Arc::new(Firehose))
+    // Opt in: suppression is off by default because it cost a task on the
+    // completion benchmark. This test is about what it does when asked for.
+    .with_tool_result_policy(ToolResultPolicy {
+        dedupe_repeats: true,
+        ..Default::default()
+    })
     .with_hook(seen.clone())
     .with_hook(Arc::new(RepeatWatcher))
     .run(task(), &mut world)
@@ -319,6 +325,10 @@ async fn a_write_between_reads_clears_the_record() {
     )
     .with_tool(Arc::new(Firehose))
     .with_tool(Arc::new(Mutator))
+    .with_tool_result_policy(ToolResultPolicy {
+        dedupe_repeats: true,
+        ..Default::default()
+    })
     .with_hook(seen.clone())
     .run(task(), &mut world)
     .await
