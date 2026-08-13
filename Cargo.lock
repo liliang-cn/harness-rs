@@ -1124,6 +1124,7 @@ name = "eval-bench"
 version = "0.0.42"
 dependencies = [
  "anyhow",
+ "async-trait",
  "harness-rs",
  "harness-rs-context",
  "harness-rs-core",
@@ -1132,6 +1133,8 @@ dependencies = [
  "harness-rs-tools-fs",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
