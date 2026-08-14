@@ -3,7 +3,37 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
-## Unreleased
+## 0.0.43
+
+### Added
+
+- **Oversized tool results spill to disk instead of being cut** (`ToolResultPolicy::spill`, default
+  on). Over the `max_bytes` ceiling, the full payload lands in `.harness/spill/<call_id>-<tool>`
+  inside the workspace jail and the context gets a 4 KiB preview plus the path — the model
+  retrieves exactly the slice it needs with the `read_file`/`grep` it already has. Truncation
+  destroyed information and the only recovery was re-running the call to be truncated again;
+  measured head-to-head (gemini-3.6-flash-high, k=2), spilling matched truncation's pass rate at
+  17% lower cost-per-pass and 14 fewer tool calls. A dominant-string heuristic (one field ≥ 80% of
+  the payload — a file body, a command's stdout) spills raw text rather than serialized JSON, so
+  line-oriented retrieval still works; structured payloads spill pretty-printed, one element per
+  line. IO failure falls back to the old truncation. Borrowed from DeepSeek Harness's `spill`
+  family, which is the same judgement.
+
+- **A per-call tool deadline** (`AgentLoop::with_tool_timeout`, default 120s). One hung call — a
+  network tool on a dead endpoint — otherwise takes the whole run down, and a run-level timeout
+  throws away every turn of finished work (measured: a run that had already done the job billed as
+  a 0-token timeout). The deadline converts the hang into an error *result* the model sees and can
+  route around.
+
+- **The bench ablation is now leave-one-out, with trigger coverage.** The H0/H1/H2 ladder could not
+  attribute a delta to a single guard — and after dedupe's default flipped off, H1 and H2 had
+  quietly become the same configuration. Each row is now `H2 − one guard` (`-stuck`, `-accept`,
+  `-cap`, `-compact`, `-spill`; dedupe measured the other way as `+dedupe`), each guard has a trap
+  task built to make it fire, and every run counts actual firings — a row whose guard never fired
+  is flagged as noise instead of posing as a measurement. First full run (gemini): stuck +2 tasks,
+  compactor +1 and halved the trap task's input, dedupe −12% cost at no pass loss on gemini (the
+  opposite of the qwen result — guard verdicts are model-relative), and the cap trap was exposed as
+  never firing (`read_file` self-pages under the ceiling; the needle task now carries that role).
 
 ### Changed
 
