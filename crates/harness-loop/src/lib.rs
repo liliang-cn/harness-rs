@@ -232,10 +232,7 @@ fn replace_at(v: &mut serde_json::Value, path: &str, with: serde_json::Value) {
             None => (rest, ""),
         };
         let (key, idx) = match seg.find('[') {
-            Some(b) => (
-                &seg[..b],
-                seg[b + 1..seg.len() - 1].parse::<usize>().ok(),
-            ),
+            Some(b) => (&seg[..b], seg[b + 1..seg.len() - 1].parse::<usize>().ok()),
             None => (seg, None),
         };
         if !key.is_empty() {
@@ -290,14 +287,18 @@ fn spill_oversized(
                 &field,
                 serde_json::Value::String(format!("[{} bytes spilled to {rel}]", text.len())),
             );
-            (rel, head_of(text, SPILL_PREVIEW_BYTES).to_string(), Some(meta))
+            (
+                rel,
+                head_of(text, SPILL_PREVIEW_BYTES).to_string(),
+                Some(meta),
+            )
         }
         // Structured payload (e.g. a long match list): spill pretty-printed,
         // one element per line, so line-oriented retrieval still works.
         None => {
             let rel = format!(".harness/spill/{id}-{}.json", action.tool);
-            let pretty = serde_json::to_string_pretty(content)
-                .unwrap_or_else(|_| serialized.to_string());
+            let pretty =
+                serde_json::to_string_pretty(content).unwrap_or_else(|_| serialized.to_string());
             std::fs::write(root.join(&rel), &pretty).ok()?;
             (rel, head_of(&pretty, SPILL_PREVIEW_BYTES).to_string(), None)
         }
@@ -1161,19 +1162,18 @@ impl<M: Model> AgentLoop<M> {
                     })
                     .collect();
                 if lead.len() > 1 {
-                    let futs =
-                        lead.iter().map(|c| {
-                            let mut w = world.clone();
-                            let action = Action {
-                                tool: c.name.clone(),
-                                call_id: c.id.clone(),
-                                args: c.args.clone(),
-                            };
-                            async move {
-                                let r = self.dispatch_bounded(&action, &mut w).await;
-                                (action.call_id, r)
-                            }
-                        });
+                    let futs = lead.iter().map(|c| {
+                        let mut w = world.clone();
+                        let action = Action {
+                            tool: c.name.clone(),
+                            call_id: c.id.clone(),
+                            args: c.args.clone(),
+                        };
+                        async move {
+                            let r = self.dispatch_bounded(&action, &mut w).await;
+                            (action.call_id, r)
+                        }
+                    });
                     for (id, r) in futures::future::join_all(futs).await {
                         prefetched.insert(id, r);
                     }
