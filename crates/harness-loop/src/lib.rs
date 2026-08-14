@@ -41,6 +41,7 @@ use harness_core::{
 use harness_hooks::HookBus;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Governs the loop's stuck-detector. When the model repeats the *same* tool
 /// call (name + args) round after round without making progress, the loop first
@@ -110,6 +111,25 @@ pub struct ToolResultPolicy {
     /// second would likely keep most of the saving without the failure — it
     /// needs measuring before it becomes the default.)
     pub dedupe_repeats: bool,
+    /// When a result exceeds `max_bytes`, save the *full* payload to a file
+    /// under `.harness/spill/` in the workspace and inline a bounded preview
+    /// plus the path, instead of cutting the tail off and throwing it away.
+    ///
+    /// Truncation destroys information: the model is told "narrow your
+    /// request", but the bytes it needed may be exactly the ones dropped, and
+    /// the only recovery is re-running the call to be truncated again.
+    /// Measured on the completion benchmark, that loop is visible as a single
+    /// task paying 184k input tokens. Spilling keeps the ceiling — the context
+    /// gets a preview, never the flood — while the whole result stays
+    /// retrievable through the file tools the agent already has (`read_file`
+    /// with offset/limit, `grep` on the spill path), because the spill lives
+    /// inside the workspace jail. Borrowed from DeepSeek Harness's `spill`
+    /// family (preview + retrieval locator), which is the same judgement.
+    ///
+    /// Costs nothing until it fires: the write happens only on the oversized
+    /// path, which the default ceiling makes rare. When the write fails (e.g.
+    /// read-only workspace) the guard falls back to plain truncation.
+    pub spill: bool,
 }
 
 impl Default for ToolResultPolicy {
@@ -117,6 +137,7 @@ impl Default for ToolResultPolicy {
         Self {
             max_bytes: Some(24 * 1024),
             dedupe_repeats: false,
+            spill: true,
         }
     }
 }
@@ -143,6 +164,174 @@ impl Default for CompactPolicy {
             target: 0.55,
         }
     }
+}
+
+/// Inline preview size for a spilled result. Deliberately smaller than the
+/// ceiling: the point of spilling is that the context gets a *glimpse* and a
+/// path, not four-fifths of the flood.
+const SPILL_PREVIEW_BYTES: usize = 4 * 1024;
+
+/// First `n` bytes of `s`, cut on a char boundary.
+fn head_of(s: &str, n: usize) -> &str {
+    let mut end = n.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// The string field that dominates an oversized result, if one does.
+///
+/// Most oversized results are one big string in a small envelope — a file
+/// body, a command's stdout — and the right spill for those is the *raw text*:
+/// multi-line, so `read_file`'s line paging and `grep`'s line matching work on
+/// it. Spilling the serialized JSON instead would fold the whole payload onto
+/// one escaped line that line-oriented tools can neither page nor match
+/// (`read_file` pages by line; a 68 KB single-line file is unreachable past
+/// the first 16 KB). Returns the dotted path and the string when one field is
+/// ≥ 80% of the serialized size.
+fn dominant_string(v: &serde_json::Value, total: usize) -> Option<(String, &str)> {
+    fn walk<'a>(v: &'a serde_json::Value, path: &str, best: &mut Option<(String, &'a str)>) {
+        match v {
+            serde_json::Value::String(s) => {
+                if best.as_ref().is_none_or(|(_, b)| s.len() > b.len()) {
+                    *best = Some((path.to_string(), s.as_str()));
+                }
+            }
+            serde_json::Value::Object(m) => {
+                for (k, x) in m {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    walk(x, &p, best);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    walk(x, &format!("{path}[{i}]"), best);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut best = None;
+    walk(v, "", &mut best);
+    best.filter(|(_, s)| s.len() * 5 >= total * 4)
+}
+
+/// Replace the value at a `dominant_string` dotted path with `with`.
+fn replace_at(v: &mut serde_json::Value, path: &str, with: serde_json::Value) {
+    let mut cur = v;
+    let mut rest = path;
+    loop {
+        // Next segment: `key`, `key[i]`, or a bare `[i]`.
+        let (seg, tail) = match rest.find('.') {
+            Some(dot) => (&rest[..dot], &rest[dot + 1..]),
+            None => (rest, ""),
+        };
+        let (key, idx) = match seg.find('[') {
+            Some(b) => (
+                &seg[..b],
+                seg[b + 1..seg.len() - 1].parse::<usize>().ok(),
+            ),
+            None => (seg, None),
+        };
+        if !key.is_empty() {
+            match cur.get_mut(key) {
+                Some(next) => cur = next,
+                None => return,
+            }
+        }
+        if let Some(i) = idx {
+            match cur.get_mut(i) {
+                Some(next) => cur = next,
+                None => return,
+            }
+        }
+        if tail.is_empty() {
+            *cur = with;
+            return;
+        }
+        rest = tail;
+    }
+}
+
+/// Persist an oversized result under `.harness/spill/` in the workspace and
+/// build the inline marker. `None` on any IO failure — the caller falls back
+/// to truncation, because a guard that can error a run to protect a context
+/// window has its priorities backwards.
+fn spill_oversized(
+    action: &Action,
+    content: &serde_json::Value,
+    serialized: &str,
+    root: &std::path::Path,
+) -> Option<serde_json::Value> {
+    let dir = root.join(".harness").join("spill");
+    std::fs::create_dir_all(&dir).ok()?;
+    let id: String = action
+        .call_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .take(48)
+        .collect();
+    let id = if id.is_empty() { "call".into() } else { id };
+
+    let (rel, preview, meta) = match dominant_string(content, serialized.len()) {
+        // One big string in a small envelope: spill the raw text, keep the
+        // envelope inline with the big field swapped for a pointer.
+        Some((field, text)) => {
+            let rel = format!(".harness/spill/{id}-{}.txt", action.tool);
+            std::fs::write(root.join(&rel), text).ok()?;
+            let mut meta = content.clone();
+            replace_at(
+                &mut meta,
+                &field,
+                serde_json::Value::String(format!("[{} bytes spilled to {rel}]", text.len())),
+            );
+            (rel, head_of(text, SPILL_PREVIEW_BYTES).to_string(), Some(meta))
+        }
+        // Structured payload (e.g. a long match list): spill pretty-printed,
+        // one element per line, so line-oriented retrieval still works.
+        None => {
+            let rel = format!(".harness/spill/{id}-{}.json", action.tool);
+            let pretty = serde_json::to_string_pretty(content)
+                .unwrap_or_else(|_| serialized.to_string());
+            std::fs::write(root.join(&rel), &pretty).ok()?;
+            (rel, head_of(&pretty, SPILL_PREVIEW_BYTES).to_string(), None)
+        }
+    };
+    tracing::warn!(
+        target: "harness.telemetry",
+        event = "tool.result.spilled",
+        "gen_ai.tool.name" = %action.tool,
+        bytes = serialized.len(),
+        path = %rel,
+    );
+    let mut marker = serde_json::json!({
+        "spilled": true,
+        "tool": action.tool,
+        "bytes_total": serialized.len(),
+        "path": rel,
+        "preview": preview,
+        "note": format!(
+            "This result was {} bytes — too large to inline, so the FULL content was \
+             saved to '{rel}' (workspace-relative). Nothing was lost. Retrieve exactly \
+             the part you need: grep(path=\"{rel}\", pattern=...) or \
+             read_file(path=\"{rel}\", offset=..., limit=...). Do not repeat the \
+             original call — it will spill again.",
+            serialized.len()
+        ),
+    });
+    // The envelope metadata (paths, flags) rides along when it is small; a
+    // pathological envelope that is itself oversized is dropped, not inlined.
+    if let Some(meta) = meta
+        && meta.to_string().len() <= SPILL_PREVIEW_BYTES
+    {
+        marker["meta"] = meta;
+    }
+    Some(marker)
 }
 
 /// A stable fingerprint of a round's tool calls (names + args, ignoring the
@@ -207,6 +396,16 @@ pub struct AgentLoop<M: Model> {
     pub sensors: Vec<Arc<dyn Sensor>>,
     pub hooks: HookBus,
     pub compactor: Arc<dyn Compactor>,
+    /// A deadline on each individual tool call. One hung call — a network tool
+    /// on a dead endpoint, a shell command waiting on stdin — otherwise takes
+    /// the whole run down with it, and the host's only recourse is a run-level
+    /// timeout that throws away every turn of finished work (measured on the
+    /// completion benchmark: a run that had already done the job was billed as
+    /// a 0-token timeout). A per-call deadline converts the hang into an error
+    /// *result* the model sees and can route around. `None` disables. The
+    /// default is generous — 120s covers a slow build — because a false
+    /// deadline on a legitimately long tool is worse than a late one.
+    pub tool_timeout: Option<Duration>,
     /// Default response format applied to every run unless overridden by
     /// `run_typed`. See [`ResponseFormat`].
     pub response_format: ResponseFormat,
@@ -269,6 +468,7 @@ impl<M: Model> AgentLoop<M> {
             sensors: Vec::new(),
             hooks: HookBus::new(),
             compactor: Arc::new(DefaultCompactor::new()),
+            tool_timeout: Some(Duration::from_secs(120)),
             response_format: ResponseFormat::Free,
             streaming: false,
             recall: None,
@@ -335,6 +535,11 @@ impl<M: Model> AgentLoop<M> {
 
     pub fn with_acceptance_retries(mut self, n: u32) -> Self {
         self.acceptance_retries = n;
+        self
+    }
+
+    pub fn with_tool_timeout(mut self, t: Option<Duration>) -> Self {
+        self.tool_timeout = t;
         self
     }
 
@@ -965,13 +1170,7 @@ impl<M: Model> AgentLoop<M> {
                                 args: c.args.clone(),
                             };
                             async move {
-                                let r = self.tools.dispatch(&action, &mut w).await.unwrap_or_else(
-                                    |e| ToolResult {
-                                        ok: false,
-                                        content: serde_json::json!({"error": e.to_string()}),
-                                        trace: None,
-                                    },
-                                );
+                                let r = self.dispatch_bounded(&action, &mut w).await;
                                 (action.call_id, r)
                             }
                         });
@@ -1024,14 +1223,7 @@ impl<M: Model> AgentLoop<M> {
                 let result = if let Some(r) = prefetched.remove(&action.call_id) {
                     r
                 } else {
-                    match self.tools.dispatch(&action, world).await {
-                        Ok(r) => r,
-                        Err(e) => ToolResult {
-                            ok: false,
-                            content: serde_json::json!({"error": e.to_string()}),
-                            trace: None,
-                        },
-                    }
+                    self.dispatch_bounded(&action, world).await
                 };
                 tools_called += 1;
 
@@ -1040,7 +1232,7 @@ impl<M: Model> AgentLoop<M> {
                 // an audit that logs a 200 KB blob the model never saw is not an
                 // audit of what happened.
                 let result = ToolResult {
-                    content: self.shape_result(&action, &result, &mut answered),
+                    content: self.shape_result(&action, &result, &mut answered, &world.repo.root),
                     ..result
                 };
                 self.hooks.fire(
@@ -1282,6 +1474,46 @@ impl<M: Model> AgentLoop<M> {
     }
 
     /// Best-effort append to the recall store. Never fails the turn.
+    /// One tool call, under the per-call deadline. A timeout becomes an error
+    /// *result* — the model sees it and routes around it — never a hung run.
+    /// Errors are folded the same way: the loop's contract is that a tool call
+    /// always produces a result turn.
+    async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult {
+        let fut = self.tools.dispatch(action, world);
+        let dispatched = match self.tool_timeout {
+            Some(deadline) => match tokio::time::timeout(deadline, fut).await {
+                Ok(r) => r,
+                Err(_) => {
+                    tracing::warn!(
+                        target: "harness.telemetry",
+                        event = "tool.deadline",
+                        "gen_ai.tool.name" = %action.tool,
+                        seconds = deadline.as_secs(),
+                    );
+                    return ToolResult {
+                        ok: false,
+                        content: serde_json::json!({
+                            "error": format!(
+                                "tool call exceeded its {}s deadline and was cancelled; \
+                                 the operation may be too broad — narrow it or try a \
+                                 different approach",
+                                deadline.as_secs()
+                            ),
+                            "timeout": true,
+                        }),
+                        trace: None,
+                    };
+                }
+            },
+            None => fut.await,
+        };
+        dispatched.unwrap_or_else(|e| ToolResult {
+            ok: false,
+            content: serde_json::json!({"error": e.to_string()}),
+            trace: None,
+        })
+    }
+
     /// What a tool result contributes to the context: repeat suppression first,
     /// then the size ceiling. A repeat that is also oversized collapses to the
     /// pointer rather than to a truncated copy of what the model already holds.
@@ -1290,9 +1522,10 @@ impl<M: Model> AgentLoop<M> {
         action: &Action,
         result: &ToolResult,
         answered: &mut std::collections::HashSet<String>,
+        root: &std::path::Path,
     ) -> serde_json::Value {
         if !(self.tool_results.dedupe_repeats && result.ok) {
-            return self.cap_result(&action.tool, &result.content);
+            return self.cap_result(action, &result.content, root);
         }
         match self.tools.risk(&action.tool) {
             Some(harness_core::ToolRisk::ReadOnly) => {
@@ -1312,31 +1545,43 @@ impl<M: Model> AgentLoop<M> {
                     })
                 } else {
                     answered.insert(fp);
-                    self.cap_result(&action.tool, &result.content)
+                    self.cap_result(action, &result.content, root)
                 }
             }
             // A write invalidates every earlier read.
             _ => {
                 answered.clear();
-                self.cap_result(&action.tool, &result.content)
+                self.cap_result(action, &result.content, root)
             }
         }
     }
 
     /// Enforce [`ToolResultPolicy`] on one result before it reaches the context.
     ///
-    /// Truncation is at the byte level on the serialized form, then handed back
-    /// as a marker object rather than mangled JSON — a half-parsed blob is worse
-    /// for the model than an honest "this was cut". The marker says how much was
-    /// dropped and what to do instead, so the next turn narrows the request
-    /// rather than repeating it.
-    fn cap_result(&self, tool: &str, content: &serde_json::Value) -> serde_json::Value {
+    /// Over the ceiling, the guard prefers to *spill*: full payload to a file
+    /// inside the workspace, bounded preview plus the path inline — nothing is
+    /// lost, and the model retrieves slices with the file tools it already has.
+    /// Only when spilling is off (or the write fails) does it fall back to
+    /// destructive truncation: a byte-level cut handed back as a marker object
+    /// rather than mangled JSON, saying how much was dropped and what to do
+    /// instead.
+    fn cap_result(
+        &self,
+        action: &Action,
+        content: &serde_json::Value,
+        root: &std::path::Path,
+    ) -> serde_json::Value {
         let Some(max) = self.tool_results.max_bytes else {
             return content.clone();
         };
         let serialized = content.to_string();
         if serialized.len() <= max {
             return content.clone();
+        }
+        if self.tool_results.spill
+            && let Some(marker) = spill_oversized(action, content, &serialized, root)
+        {
+            return marker;
         }
         // Cut on a char boundary so the kept head is valid UTF-8.
         let mut end = max;
@@ -1346,13 +1591,13 @@ impl<M: Model> AgentLoop<M> {
         tracing::warn!(
             target: "harness.telemetry",
             event = "tool.result.truncated",
-            "gen_ai.tool.name" = %tool,
+            "gen_ai.tool.name" = %action.tool,
             bytes = serialized.len(),
             max_bytes = max,
         );
         serde_json::json!({
             "truncated": true,
-            "tool": tool,
+            "tool": action.tool,
             "bytes_total": serialized.len(),
             "bytes_kept": end,
             "head": serialized[..end],

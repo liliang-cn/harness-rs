@@ -115,7 +115,12 @@ async fn run_with(policy: ToolResultPolicy) -> String {
 
 #[tokio::test]
 async fn an_oversized_result_is_capped_before_it_reaches_the_context() {
-    let recorded = run_with(ToolResultPolicy::default()).await;
+    // Spill off: the ceiling's destructive fallback.
+    let recorded = run_with(ToolResultPolicy {
+        spill: false,
+        ..Default::default()
+    })
+    .await;
 
     // The 200 KB body is gone; a bounded marker took its place.
     assert!(
@@ -127,6 +132,50 @@ async fn an_oversized_result_is_capped_before_it_reaches_the_context() {
     // The marker has to be actionable, or the next turn just asks again.
     assert!(recorded.contains("narrow it"), "{recorded:.400}");
     assert!(recorded.contains("bytes_total"), "{recorded:.400}");
+}
+
+#[tokio::test]
+async fn an_oversized_result_spills_to_disk_with_nothing_lost() {
+    // The default: over the ceiling, the full payload lands in a workspace
+    // file and the context gets a bounded preview plus the path.
+    let ws = std::env::temp_dir().join(format!("tool-spill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(&ws).unwrap();
+    let mut world = default_world(&ws);
+
+    let seen = Arc::new(SeenContext::default());
+    let outcome = AgentLoop::new(
+        MockModel::new()
+            .script(MockResponse::tool_call("firehose", json!({})))
+            .script(MockResponse::text("done")),
+    )
+    .with_tool(Arc::new(Firehose))
+    .with_hook(seen.clone())
+    .run(task(), &mut world)
+    .await
+    .unwrap();
+    assert!(matches!(outcome, Outcome::Done { .. }));
+    let recorded = seen.0.lock().unwrap().clone();
+
+    // Context: bounded, marked, actionable — and it names the spill path.
+    assert!(
+        recorded.len() < 64 * 1024,
+        "a 200 KB result reached the context: {} bytes",
+        recorded.len()
+    );
+    assert!(recorded.contains("spilled"), "{recorded:.400}");
+    assert!(recorded.contains(".harness/spill/"), "{recorded:.400}");
+
+    // Disk: the whole 200 KB body, raw — the dominant string was written as
+    // text, not as one escaped JSON line no line-oriented tool can page.
+    let spill_dir = ws.join(".harness").join("spill");
+    let entries: Vec<_> = std::fs::read_dir(&spill_dir).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "expected exactly one spill file");
+    let body = std::fs::read_to_string(entries[0].path()).unwrap();
+    assert_eq!(body.len(), 200_000, "spill lost bytes");
+    assert!(body.chars().all(|c| c == 'x'), "spill mangled the payload");
+
+    let _ = std::fs::remove_dir_all(&ws);
 }
 
 #[tokio::test]
