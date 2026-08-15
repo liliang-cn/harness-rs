@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "ReAct agent loop, subagent isolation, and session record/replay (JSONL) for the harness-rs framework."
+description = "ReAct agent loop for harness-rs with measured guards: stuck detection, acceptance checks, a tool-result ceiling that spills oversized payloads to disk instead of truncating, per-call tool deadlines, subagent isolation, and session record/replay (JSONL)."
 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]

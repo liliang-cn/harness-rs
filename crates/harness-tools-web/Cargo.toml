@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Web-search + URL-fetch tools for harness-rs agents: DuckDuckGo → Bing fallback, HTML → text, no API keys required."
+description = "Web-search + URL-fetch tools for harness-rs agents. GroundedWebSearch asks the model's own search engine first (Gemini grounding) and falls back to the DuckDuckGo-then-Bing scraper; HTML-to-text fetch. No API keys required for the scraper path."
 
 [dependencies]
 harness         = { workspace = true }

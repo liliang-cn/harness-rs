@@ -17,11 +17,11 @@ you get the whole public surface: the core traits/types (`harness-rs-core`), the
 
 ```toml
 [dependencies]
-harness-rs         = "0.0.21"
-harness-rs-loop    = "0.0.21"
-harness-rs-models  = "0.0.21"
-harness-rs-tools-fs = "0.0.21"
-harness-rs-context = "0.0.21"
+harness-rs         = "0.0.44"
+harness-rs-loop    = "0.0.44"
+harness-rs-models  = "0.0.44"
+harness-rs-tools-fs = "0.0.44"
+harness-rs-context = "0.0.44"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

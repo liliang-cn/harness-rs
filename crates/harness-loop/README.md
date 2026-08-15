@@ -14,7 +14,24 @@ Also home to **subagent isolation** and **session record/replay**.
 4. Runs `Sensor`s after each action — auto-fix patches are applied to the
    `World` directly; blocking signals are fed back to the model to retry.
 5. `Hook`s wrap each step (PreToolUse / PostToolUse / TaskCompleted).
-6. Stops when the model returns no tool calls, or `max_iters` is hit.
+6. When the model stops asking for tools, **acceptance checks** decide whether
+   the work is actually done (a run that narrates a plan and stops looks
+   exactly like one that did the job); a failed verdict goes back to the model
+   and the loop continues. Otherwise stops at `max_iters`.
+
+## Guards (each one measured, see the workspace README's ablation)
+
+- **Stuck detection** (`StuckPolicy`) — repeated identical tool-call rounds get
+  a "change your approach" nudge, then a clean `Outcome::Stuck`.
+- **Result ceiling with spill** (`ToolResultPolicy`) — a single tool result
+  larger than `max_bytes` (default 24 KiB) is saved *in full* to
+  `.harness/spill/` inside the workspace; the context gets a 4 KiB preview plus
+  the path, and the model retrieves slices with its own `read_file`/`grep`.
+  Nothing is lost. `spill: false` falls back to destructive truncation.
+- **Per-call tool deadline** (`with_tool_timeout`, default 120s) — a hung call
+  becomes an error result the model can route around, not a hung run.
+- **Acceptance** (`with_acceptance`) — cheap deterministic "is it done?" checks
+  (e.g. `FilesExist`) consulted before `Outcome::Done`.
 
 ## Usage
 

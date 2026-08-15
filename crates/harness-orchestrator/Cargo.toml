@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Single-machine async Run orchestrator for harness-rs: a concurrent DAG of sub-agent Jobs with dependency gating, per-job retry/backoff/dead-letter, dynamic replanning, a run-level token budget, and crash-resumable Run/Job state. Optional."
+description = "Single-machine async Run orchestrator for harness-rs: a concurrent DAG of sub-agent Jobs with dependency gating, per-job retry/backoff/dead-letter, dynamic replanning, conditional edges with bounded loops, a run-level token budget, and crash-resumable Run/Job state. Optional."
 
 [lib]
 name = "harness_orchestrator"

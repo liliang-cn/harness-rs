@@ -49,6 +49,20 @@ All adapters share the 4-field `LlmConfig`:
 
 `with_key(base_url, model, key)` is the shorthand that fills `name` for you.
 
+## Web search grounding
+
+`GeminiNative` enables **Google Search grounding by default**: every request
+carries the `googleSearch` tool (server-side invocation is switched on when
+function tools are also present), so the model can search the live web mid-loop.
+Turn it off with `.with_search_grounding(false)`.
+
+Through an OpenAI-compatible gateway that channel usually doesn't survive, so
+every adapter also exposes `Model::search_web(query)` — a side-channel request
+carrying only the provider's built-in search tool (`OpenAiCompat` auto-detects
+gemini model ids; other models return `None`). `harness-rs-tools-web`'s
+`GroundedWebSearch` wires this into the `web_search` tool with a scraper
+fallback.
+
 ## Also here
 
 - **`MockModel`** — deterministic canned responses for tests, no network.
