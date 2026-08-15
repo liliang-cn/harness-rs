@@ -169,6 +169,13 @@ impl Model for DynModel {
     fn info(&self) -> ModelInfo {
         self.0.info()
     }
+    // Forwarded explicitly: the trait's default returns `None`, so leaning on
+    // it here would silently strip grounding from every boxed model — a
+    // capability the inner model advertises via `supports_web_grounding` and
+    // then could never deliver.
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        self.0.search_web(query).await
+    }
 }
 
 #[cfg(test)]
