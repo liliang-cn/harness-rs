@@ -1998,12 +1998,14 @@ version = "0.0.43"
 dependencies = [
  "async-trait",
  "harness-rs",
+ "harness-rs-context",
  "harness-rs-core",
  "reqwest 0.12.28",
  "scraper",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "urlencoding",
 ]
 

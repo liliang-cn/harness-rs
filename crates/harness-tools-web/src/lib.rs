@@ -4,6 +4,15 @@
 //! - [`web_search`] — DuckDuckGo HTML → Bing fallback, returns ranked
 //!   `title / url / snippet` JSON. No API key required.
 //! - [`web_fetch`] — GET URL, strip HTML → readable text, with truncation.
+//! - [`GroundedWebSearch`] — same tool name, but asks the *model's own*
+//!   built-in search first (Gemini grounding via [`Model::search_web`]) and
+//!   only falls back to the scraper when the model has none. Register it
+//!   after the macro tools and it replaces the scraper by name:
+//!   ```ignore
+//!   let model: Arc<dyn Model> = Arc::new(OpenAiCompat::with_key(base, "gemini-3.6-flash", key));
+//!   AgentLoop::boxed(model.clone())
+//!       .with_tool(Arc::new(GroundedWebSearch::new(model)))
+//!   ```
 //!
 //! Both retry once on transient network failure and report engine + status
 //! honestly when they come up empty. Patterned after the original two-tool
@@ -73,6 +82,12 @@ async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
         .unwrap_or(8)
         .min(20) as usize;
 
+    scraper_search(query, limit).await
+}
+
+/// The scraper path: DuckDuckGo → Bing, one retry each. Shared by the plain
+/// [`web_search`] tool and [`GroundedWebSearch`]'s fallback.
+async fn scraper_search(query: &str, limit: usize) -> Result<ToolResult, ToolError> {
     let mut tried: Vec<String> = Vec::new();
     let mut errs: Vec<String> = Vec::new();
 
@@ -108,6 +123,107 @@ async fn web_search(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
         }),
         trace: None,
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GroundedWebSearch — the model's own search first, scraper as fallback
+// ─────────────────────────────────────────────────────────────────────
+
+/// `web_search`, but the model's built-in search engine answers first.
+///
+/// Providers with server-side grounding (Gemini's googleSearch) search better
+/// than an HTML scraper: fresher index, no bot-walls, and the provider
+/// synthesizes an answer with sources instead of returning links to fetch.
+/// When the session's model has that capability ([`Model::search_web`] returns
+/// `Some`), this tool uses it; when it doesn't — or the grounded call fails —
+/// it falls back to the DuckDuckGo/Bing scraper, so registering this tool is
+/// never a downgrade.
+///
+/// It deliberately shares the name `web_search`: registered via
+/// `AgentLoop::with_tool` *after* the inventory tools, it replaces the scraper
+/// by name and nothing model-facing changes. Wiring:
+///
+/// ```ignore
+/// let model: Arc<dyn Model> = Arc::new(OpenAiCompat::with_key(base, model_id, key));
+/// AgentLoop::boxed(model.clone())
+///     .with_tool(Arc::new(GroundedWebSearch::new(model)))
+/// ```
+pub struct GroundedWebSearch {
+    model: std::sync::Arc<dyn harness_core::Model>,
+}
+
+impl GroundedWebSearch {
+    pub fn new(model: std::sync::Arc<dyn harness_core::Model>) -> Self {
+        Self { model }
+    }
+}
+
+#[async_trait::async_trait]
+impl harness_core::Tool for GroundedWebSearch {
+    fn name(&self) -> &str {
+        "web_search"
+    }
+
+    fn schema(&self) -> &harness_core::ToolSchema {
+        static S: std::sync::OnceLock<harness_core::ToolSchema> = std::sync::OnceLock::new();
+        S.get_or_init(|| harness_core::ToolSchema {
+            name: "web_search".into(),
+            description: "Search the web. Uses the model provider's built-in search \
+                          (grounded, with sources) when available, otherwise ranked \
+                          title/url/snippet results from public engines. Use before \
+                          web_fetch to find candidate sources."
+                .into(),
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8}
+                },
+                "required": ["query"]
+            }),
+        })
+    }
+
+    fn risk(&self) -> harness_core::ToolRisk {
+        harness_core::ToolRisk::Network
+    }
+
+    async fn invoke(&self, args: Value, _w: &mut World) -> Result<ToolResult, ToolError> {
+        let query =
+            args.get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    name: "web_search".into(),
+                    reason: "query required".into(),
+                })?;
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8)
+            .min(20) as usize;
+
+        match self.model.search_web(query).await {
+            Some(Ok(answer)) if !answer.trim().is_empty() => Ok(ToolResult {
+                ok: true,
+                content: json!({
+                    "query":  query,
+                    "engine": "model-grounding",
+                    "model":  self.model.info().model,
+                    "answer": answer,
+                    "note":   "Answered by the model provider's built-in web search \
+                               (grounded). This is a synthesized answer, not a link list.",
+                }),
+                trace: None,
+            }),
+            // Grounding exists but failed or came back empty: the scraper is
+            // a worse engine than a grounded one, but a better one than none.
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "grounded search failed; falling back to scraper");
+                scraper_search(query, limit).await
+            }
+            Some(Ok(_)) | None => scraper_search(query, limit).await,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -441,6 +557,61 @@ fn clip_text(s: &str, max_chars: usize) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use harness_core::iter_macro_tools;
+
+    /// A model whose only talent is grounded search.
+    struct GroundedStub;
+    #[async_trait::async_trait]
+    impl harness_core::Model for GroundedStub {
+        async fn complete(
+            &self,
+            _ctx: &harness_core::Context,
+        ) -> Result<harness_core::ModelOutput, harness_core::ModelError> {
+            unreachable!("not used")
+        }
+        fn info(&self) -> harness_core::ModelInfo {
+            harness_core::ModelInfo {
+                handle: "stub".into(),
+                provider: "test".into(),
+                model: "stub-grounded".into(),
+                context_window: 8192,
+                input_cost_usd_per_million_tokens: None,
+                output_cost_usd_per_million_tokens: None,
+                supports_tool_use: false,
+                supports_streaming: false,
+                supports_web_grounding: true,
+            }
+        }
+        async fn search_web(
+            &self,
+            query: &str,
+        ) -> Option<Result<String, harness_core::ModelError>> {
+            Some(Ok(format!("grounded answer for {query}")))
+        }
+    }
+
+    #[tokio::test]
+    async fn grounded_search_prefers_the_models_own_engine() {
+        use harness_core::Tool;
+        let ws = std::env::temp_dir().join(format!("gws-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+        let mut world = harness_context::default_world(&ws);
+        let tool = super::GroundedWebSearch::new(std::sync::Arc::new(GroundedStub));
+        // Same registry name as the scraper — registering it replaces web_search.
+        assert_eq!(tool.name(), "web_search");
+        let r = tool
+            .invoke(serde_json::json!({"query": "rust harness"}), &mut world)
+            .await
+            .unwrap();
+        assert!(r.ok);
+        assert_eq!(r.content["engine"], "model-grounding");
+        assert!(
+            r.content["answer"]
+                .as_str()
+                .unwrap()
+                .contains("grounded answer for rust harness")
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 
     #[test]
     fn tools_register_via_inventory() {
