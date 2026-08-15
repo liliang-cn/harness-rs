@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.44
+
+### Added
+
+- **`GroundedWebSearch` — `web_search` backed by the model's own search engine.** Providers with
+  server-side grounding (Gemini's googleSearch) search better than an HTML scraper: fresher index,
+  no bot-walls, and a synthesized answer with sources instead of links to fetch. The native Gemini
+  provider has had grounding on by default all along, but through an OpenAI-compatible gateway that
+  channel doesn't exist and the `Model::search_web` side-channel had no caller — the capability was
+  wired up and then never used. This tool closes the loop: same registry name as the scraper
+  `web_search` (last insert wins, so one `with_tool` swaps it in and nothing model-facing changes),
+  asks `Model::search_web` first, falls back to DuckDuckGo/Bing when the model has no grounding or
+  the grounded call fails — registering it is never a downgrade. Verified live through an
+  OpenAI-compat gateway: gemini-3.6-flash answered with a post-cutoff fact (Rust 1.97.1,
+  2026-07-16), so it really searched.
+
+### Fixed
+
+- **`DynModel` now forwards `search_web`.** The trait's default returns `None`, so boxing a model
+  silently stripped the grounding capability it was advertising via `supports_web_grounding`.
+
 ## 0.0.43
 
 ### Added
