@@ -3,6 +3,23 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.45
+
+### Changed
+
+- **Docs-only release: README and crates.io metadata brought back in line with reality.** The
+  workspace README's benchmark section still described the v0.0.25-era suite (5 tasks, a
+  `pass@1 = 100%` table); it now describes what actually runs — 10 tasks, `pass^k` as the CI gate,
+  the leave-one-out guard ablation with trigger coverage — with the 2026-08-14 measured guard
+  attributions and their caveats stated (small k, cost columns are indicative, guard verdicts are
+  model-relative). Crate descriptions corrected where they had drifted: core/hooks say 29 lifecycle
+  events (was 27), loop names its guard family, models names the Gemini-native adapter and
+  default-on search grounding, tools-web names `GroundedWebSearch`, cortexdb names the gRPC
+  channel, orchestrator names conditional edges and bounded loops. The loop and models crate
+  READMEs gained Guards and Web-search-grounding sections; the facade README's install example
+  moves off 0.0.21. This release exists because crates.io renders the metadata that ships *inside*
+  the package — doc fixes on `main` are invisible until published.
+
 ## 0.0.44
 
 ### Added
