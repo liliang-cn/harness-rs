@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "CortexDB-backed Memory for harness-rs: implements the harness-core Memory trait over CortexDB's MCP server (memory_save / memory_search), giving any harness agent semantic recall + a shared knowledge brain. Optional."
+description = "CortexDB-backed Memory for harness-rs: implements the harness-core Memory trait over CortexDB's MCP server or its native gRPC protocol (memory_save / memory_search), giving any harness agent semantic recall + a shared knowledge brain. Optional."
 
 [lib]
 name = "harness_cortexdb"

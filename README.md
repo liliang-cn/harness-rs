@@ -30,9 +30,9 @@ Lopopolo/OpenAI, 2026). Full rationale in **[DESIGN.md](DESIGN.md)**.
 
 | Layer | What | Crate |
 |---|---|---|
-| **Models** | 3 protocol families (OpenAI-compat · Anthropic · Gemini), one `ApiKind::build(url, model, key)` | `harness-models` |
-| **Tools** | fs · shell (risk-gated) · web search/fetch | `harness-tools-*` |
-| **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix | `harness-loop` |
+| **Models** | 3 protocol families (OpenAI-compat · Anthropic · Gemini native), one `ApiKind::build(url, model, key)` · Gemini search grounding on by default | `harness-models` |
+| **Tools** | fs · shell (risk-gated) · web search/fetch (`GroundedWebSearch`: the model's own search first, scraper fallback) | `harness-tools-*` |
+| **Loop** | ReAct + tool dispatch + sensor feedback + auto-fix · guards: stuck detection, acceptance checks, result ceiling with disk **spill** (nothing lost), per-call tool deadlines | `harness-loop` |
 | **Loop engineering** | recurring loops: maturity levels L1/L2/L3, human gates, action executors, token budgets | `harness-loop-engine` |
 | **Orchestration** | async Run = concurrent Job DAG + retry/backoff + dynamic replanning + resumable state | `harness-orchestrator` |
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
@@ -173,7 +173,7 @@ offline OCR (rasterise with `pdftoppm`, recognise with `tesseract`; still zero
 tokens, still deterministic):
 
 ```toml
-harness-rs-tools-docs = { version = "0.0.25", features = ["ocr-tesseract"] }
+harness-rs-tools-docs = { version = "0.0.44", features = ["ocr-tesseract"] }
 ```
 
 ```rust
@@ -205,22 +205,40 @@ cost — record once, regression-test in CI forever.
 
 ## Benchmarks
 
-**Completion rate.** `bench-suite` runs a task set where each task carries a
-machine verifier (a shell assertion the harness runs *outside* the agent), so
-"resolved" is objective — not the model grading itself. `qwen3.7-plus` via
-Aliyun MaaS, 2026-07-09:
+**The suite measures the harness, not the model.** `bench-suite` runs 10 tasks,
+each with a machine verifier (a shell assertion the harness runs *outside* the
+agent), so "resolved" is objective — not the model grading itself. Three
+disciplines on top:
 
-| task | status | iters | tools | in tok | out tok |
-|---|---|--:|--:|--:|--:|
-| sum-file | resolved | 3 | 2 | 2793 | 214 |
-| rename-key | resolved | 3 | 2 | 2805 | 261 |
-| count-lines | resolved | 3 | 2 | 2730 | 156 |
-| fix-typo | resolved | 3 | 2 | 2782 | 219 |
-| create-readme | resolved | 2 | 1 | 1733 | 144 |
+- **`pass^k`** — every task run `k` times, *all* must resolve. A reliability
+  floor, not the `pass@k` capability ceiling. CI gates on it.
+- **Leave-one-out guard ablation** — each row is the shipped default minus
+  exactly one guard (`-stuck`, `-accept`, `-cap`, `-compact`, `-spill`,
+  `+dedupe`), so a delta is attributable to one thing.
+- **Trigger coverage** — every run counts how often each guard actually fired;
+  a row whose guard never fired is flagged as noise instead of posing as a
+  measurement. Four tasks exist purely to make guards fire.
 
-**pass@1 = 5/5 (100%)** on the Rust-native set. Reproduce with
-`HARNESS_API_KEY=… HARNESS_BASE_URL=… HARNESS_MODEL=… cargo run -p eval-bench --bin bench-suite`
-(exits non-zero on any failure, so CI can gate on it).
+Measured 2026-08-14, `gemini-3.6-flash-high` via an OpenAI-compat gateway, k=1
+(so treat cost columns as indicative; pass columns are the stable signal):
+
+| guard | fired | Δpass^k (on−off) | note |
+|---|--:|--:|---|
+| stuck detector | 1 | **+2** | without it, the retry-trap task burns 16 rounds and dies |
+| compactor | 3 | **+1** | halved the trap task's input (93k → 48.5k tokens) |
+| result ceiling | 1 | +1 | "no ceiling" is cheapest per pass — and loses a task |
+| spill (vs truncate) | 1 | 0 | same pass rate at **−17% cost/pass** (k=2: 26.4k vs 31.9k eff. tokens) |
+| dedupe | 5 | 0 | −12% cost on gemini; *lost a task* on qwen — guard verdicts are model-relative |
+| acceptance | 0 on gemini | — | fired ×3 on local qwen3.5: it rescues weaker models |
+
+Reproduce:
+
+```sh
+HARNESS_API_KEY=… HARNESS_BASE_URL=… HARNESS_MODEL=… \
+BENCH_K=3 BENCH_LEVELS=H2,-stuck,-accept,-cap,-compact,-spill,+dedupe,H0 \
+cargo run -p eval-bench --bin bench-suite     # exits non-zero unless H2 pass^k is clean
+# local/slow models: BENCH_TIMEOUT_SECS=300
+```
 
 **Cost.** Measured token cost on a fixed task set — `deepseek-v4-flash` via
 Aliyun MaaS, 2026-07-04. Every task finished (`Done`) with side effects verified
@@ -238,13 +256,30 @@ model re-emitting whole file bodies each turn — "don't burn tokens on what cod
 can do", measured rather than asserted. `cargo run -p eval-bench` emits the same
 per-task cost fields for cross-framework comparison.
 
+## Web search that uses the model's own engine
+
+Providers with server-side grounding (Gemini's googleSearch) search better than
+an HTML scraper: fresher index, no bot-walls, an answer with sources instead of
+links to fetch. `GroundedWebSearch` registers under the same `web_search` name,
+asks `Model::search_web` first, and falls back to the DuckDuckGo/Bing scraper
+when the model has no grounding — registering it is never a downgrade:
+
+```rust
+let model: Arc<dyn Model> = Arc::new(OpenAiCompat::with_key(base, "gemini-3.6-flash", key));
+AgentLoop::boxed(model.clone())
+    .with_tool(Arc::new(GroundedWebSearch::new(model)))
+```
+
+On the native Gemini provider grounding is on by default in the main channel
+(the model can search mid-loop); `.with_search_grounding(false)` turns it off.
+
 ## Status
 
-Latest: **v0.0.25** — verifier-driven completion-rate benchmark
-(`eval-bench --bin bench-suite`, objective `pass@1` via machine verifiers) and
-stuck detection (`StuckPolicy` / `Outcome::Stuck`: nudge on repeated identical
-tool calls, then terminate cleanly instead of burning the budget).
-Full history in **[CHANGELOG.md](CHANGELOG.md)**.
+Latest: **v0.0.44** — `web_search` prefers the model's own search engine
+(`GroundedWebSearch`, scraper fallback). **v0.0.43**: oversized tool results
+spill to a workspace file instead of being truncated (nothing lost, −17%
+cost/pass measured), per-call tool deadlines, and the leave-one-out guard
+ablation with trigger coverage. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## License
 

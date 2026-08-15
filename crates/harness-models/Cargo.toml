@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "LLM model adapters for harness-rs — OpenAiCompat (DeepSeek/Groq/Together/Ollama), AnthropicNative (Messages API), MockModel."
+description = "LLM adapters for harness-rs — three protocol families via ApiKind::build(base_url, model, key): OpenAI-compatible, Anthropic Messages, Gemini native (Google Search grounding on by default). Plus embeddings, image, speech adapters and MockModel."
 
 keywords     = ["agent", "ai", "llm", "harness"]
 categories   = ["asynchronous", "development-tools"]
