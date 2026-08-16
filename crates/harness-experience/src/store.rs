@@ -44,6 +44,11 @@ impl ExperienceStore {
     fn tags_for(&self, ep: &Episode) -> Vec<String> {
         let mut tags = vec![self.tag.clone()];
         tags.extend(ep.tools.iter().map(|t| format!("tool:{t}")));
+        // `skill:<name>` mirrors `tool:<name>`. The reviser's question is
+        // "which runs followed skill X, and how did they go?" — a lexical hit on
+        // the rendered `Skills used:` line answers it fuzzily, but a metadata-
+        // aware backend can answer it exactly, and only if the tag is there.
+        tags.extend(ep.skills.iter().map(|s| format!("skill:{s}")));
         tags.extend(ep.tags.iter().cloned());
         tags
     }

@@ -3,6 +3,99 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.46
+
+### Added
+
+- **`harness-rs-tools-recall` — `search_past_sessions`, the tool for "翻旧账".** Cross-session
+  transcript capture has existed since the `RecallStore` trait landed, but the only way to *read*
+  it was the `session_search` tool `with_recall` bundles in, and that tool's matching is whatever
+  the backend's index does. This crate exposes a store-agnostic tool over any
+  `Arc<dyn RecallStore>`: per-owner scoping so one tenant cannot search another's history, a
+  per-hit and total snippet budget so a 20-hit result cannot blow the context, and a miss that
+  returns `ok: true` with an explicit "this is the complete answer" note rather than an error the
+  model retries against. Ships an opt-in `RecallGuide` for hosts that want the top past-session
+  snippets injected rather than fetched. Also carries a bounded query-decomposition fallback for
+  Chinese: the SQLite backend's trigram index matches contiguous substrings only, so `上次说的咖啡`
+  finds nothing in a transcript reading `我们上次说的那家咖啡馆` — on a miss the query is retried in
+  non-overlapping 4- then 3-character chunks.
+- **`harness-rs-tools-browser` — an interactive browser, not a page dump.** A persistent Chrome
+  DevTools Protocol session that holds the page between calls, so an agent can `click`, `type`,
+  `select`, `scroll` and `wait_for` rather than only read. Every navigation and every landed URL
+  (after redirects and after clicks) goes through a pluggable `UrlPolicy`, defaulting to one that
+  rejects loopback, private, link-local, CGNAT and reserved addresses in v4 and v6 — including
+  decimal, octal and hex-encoded forms, v4-mapped and NAT64-embedded v6, and userinfo disguises.
+  After every action it returns an accessibility-style list of interactable elements with stable
+  handles, budgeted so a 300-element page cannot flood the context; elements the budget elides are
+  still reachable by visible text. Sessions are keyed by `World::session`, because a browser holds
+  cookies and sharing one across tenants shares their logins. CDP and the WebSocket are
+  hand-written — no `chromiumoxide`, no `tokio-tungstenite`, no new dependencies at all.
+- **`SkillDistiller` / `SkillReviser` (`harness-rs-experience`) — the proactive half of the
+  learning loop.** A model could already write a skill with `skill_manage`; nothing ever prompted
+  it to, and nothing revised one that turned out wrong. The distiller gates on arithmetic first
+  (succeeded, ≥4 tool calls, ≥2 distinct tools, no similar skill already on disk) and spends a
+  model call only when that passes, so a trivial turn costs nothing. Drafts are validated through
+  this workspace's own skill linter before they are offered — a draft that fails it is a bug, not a
+  warning. The reviser rewrites a skill that misfired while preserving its name and description,
+  capped at 2 revisions/day and 10 lifetime via a ledger in the skill's own frontmatter, so a flaky
+  model cannot grind a good skill into mush. Neither writes to disk unless asked: a multi-tenant
+  host needs to scope the write itself. `Episode` gains `skills` and `success` (both
+  `#[serde(default)]`; the text round-trip stays backwards compatible, with a test that
+  re-implements the old parser to prove it).
+- **`UserModel` (`harness-rs-context`) — a portrait that deepens instead of a bag of facts.**
+  Identity, communication preferences, standing constraints, domain expertise, goals, relationships
+  and open questions, each claim carrying provenance and confidence. Updates are incremental: the
+  model proposes observations, deterministic Rust decides how they merge. Conflicts resolve by
+  recency with confidence hysteresis — new evidence must beat the incumbent's *time-decayed*
+  confidence, and losing still erodes it, so a genuinely changed fact flips after a few rounds with
+  no special case. Rendering is budgeted (1200 chars by default) and evicts by tier then confidence,
+  because violating a standing rule is a visible failure and forgetting a colleague's name is not.
+  Scoped per user id in the API, not by convention.
+- **`SeatbeltSandbox::with_confine_reads` / `BubblewrapSandbox::with_confine_reads`.** Write
+  confinement stops a command damaging the host; it does nothing about one *reading* it, which on a
+  multi-tenant box is the exposure that matters — tenant A's approved command could `cat` tenant
+  B's workspace. Only with reads confined does `fs_policy()` report `FsPolicy::Confined`. Shared
+  temp directories stay writable but not readable (a shared `/tmp` is a cross-tenant side channel);
+  a read-confined sandbox gets its own `TMPDIR` inside its root instead. Verified by a test that
+  runs `sandbox-exec` for real against two sibling tenant directories, because a policy the kernel
+  does not enforce is not isolation.
+- **`AgentLoop::with_recall_ingest`** — capture turns into a `RecallStore` *without* registering
+  `session_search`. Ingest only ever happened when `self.recall` was set, so a host wanting a
+  different retrieval tool had no way to get the writes without also getting the built-in one, and
+  ended up offering the model two overlapping tools.
+- **`ExperienceRecorder::record_episode` now returns the recorded `Episode`** — the tool trace is
+  private and draining it is one-shot, so this was the only way for a caller to also hand the run
+  to `SkillDistiller`, whose gate counts exactly those tool calls.
+
+### Fixed
+
+- **`FileMemory` recalled nothing for natural Chinese queries.** `tokenise` split on
+  `!is_alphanumeric()` and han characters *are* alphanumeric, so a space-free sentence became one
+  token, and scoring is `haystack.contains(token)` — it could only ever match a byte-identical
+  string. Every recall a Chinese-speaking user made scored zero and returned nothing, silently: the
+  empty-token recency fallback did not fire either, because there *was* a token, it just could not
+  match. Han runs are now emitted as character bigrams; latin behaviour is unchanged. Found by
+  benchmarking, not by a bug report, which is the worrying part.
+
+### Changed
+
+- **`FileMemory::recall` is 1.5–4× faster and allocation-free in its scoring loop.** `MemoryGuide`
+  calls it on *every model iteration*; it re-read the file, re-parsed the JSONL, cloned every entry
+  and rebuilt a lowercased haystack per entry per call. The parse and the lowercased haystack are
+  now cached behind an `(len, mtime)` key and shared by `Arc`, and scoring borrows. Measured on an
+  M2 Pro at 50 000 entries: ASCII 31.3 → 21.1 ms, CJK substring 43.7 → 10.0 ms; at a realistic
+  1 000 entries, 0.65 → 0.44 ms. The residual is a linear scan, which is inherent to this backend's
+  keyword design — past roughly 10 000 entries the answer is `SqliteRecall`, not a faster scan.
+  Caching the parse alone bought only 20%; the allocations were the cost.
+- **`harness-tools-recall` no longer probes with 2-character CJK chunks.** The SQLite backend routes
+  to its trigram index at `count_cjk >= 3`, so a 2-character chunk always fell through to
+  `content LIKE '%…%'` — a full table scan, ~6.5 ms per 50 000 rows, and those chunks are the most
+  numerous. A 12-han-character query issued five such scans for 35 ms against 170 µs for a miss
+  that stopped at width 3. `MAX_CJK_PROBES` bounds the number of probes, which turns out to be
+  nearly uncorrelated with cost.
+- `harness-rs-experience` now depends on `harness-rs-skills` unconditionally rather than behind a
+  feature, so `cargo test -p` without `--all-features` exercises the distiller.
+
 ## 0.0.45
 
 ### Changed

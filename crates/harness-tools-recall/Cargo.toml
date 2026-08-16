@@ -1,38 +1,35 @@
 [package]
-name = "harness-rs-context"
+name = "harness-rs-tools-recall"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Default World runtime (Tokio process runner, system clock, in-memory KV) and Context helpers for harness-rs."
+description = "LLM-facing cross-session recall tool for harness-rs agents: `search_past_sessions` over any `Arc<dyn RecallStore>`, plus an opt-in `RecallGuide` that injects the top past-session snippets each turn."
 
-keywords     = ["agent", "ai", "llm", "harness"]
+keywords     = ["agent", "ai", "llm", "harness", "recall"]
 categories   = ["asynchronous", "development-tools"]
 readme       = "../../README.md"
+
 [lib]
-name = "harness_context"
+name = "harness_tools_recall"
 path = "src/lib.rs"
 
 [dependencies]
 harness-core = { workspace = true }
-harness-redact = { workspace = true }
-serde        = { workspace = true }
-serde_json   = { workspace = true }
-tokio        = { workspace = true }
 async-trait  = { workspace = true }
+serde_json   = { workspace = true }
 tracing      = { workspace = true }
-regex        = { workspace = true }
-thiserror    = { workspace = true }
 
 # Per-turn cost measurement. `harness = false` because the workspace has no
 # criterion dependency and `#[bench]` needs nightly — this is a plain
 # wall-clock binary. See docs/per-turn-cost.md.
 [[bench]]
-name = "user_model"
+name = "recall_guide"
 harness = false
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-harness-core = { workspace = true }
+tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }
+harness-context      = { workspace = true }
+harness-recall-sqlite = { workspace = true }

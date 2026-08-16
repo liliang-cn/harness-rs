@@ -66,4 +66,37 @@ impl ExperienceRecorder {
             tracing::warn!(error = %e, "experience record failed");
         }
     }
+
+    /// Record a pre-built episode, filling `tools` from the trace when the
+    /// caller left them empty (and draining it either way, so the next run
+    /// starts clean).
+    ///
+    /// Prefer this over [`record`](Self::record) when you also know whether the
+    /// run succeeded and which skills it followed — those are the two fields
+    /// [`crate::SkillDistiller`] and [`crate::SkillReviser`] gate on, and
+    /// `record` has no way to express them:
+    ///
+    /// ```ignore
+    /// recorder
+    ///     .record_episode(
+    ///         Episode::new(&task.description, outcome_text)
+    ///             .with_success(outcome.is_ok())
+    ///             .with_skills(skill_trace.drain()),
+    ///     )
+    ///     .await;
+    /// ```
+    /// Returns the episode as recorded — with `tools` filled in. The trace is
+    /// private and draining is one-shot, so a caller that also wants to hand
+    /// this run to [`crate::SkillDistiller`] (whose gate counts tool calls) has
+    /// no other way to see what it did. Ignoring the return value is fine.
+    pub async fn record_episode(&self, mut ep: Episode) -> Episode {
+        let traced = self.trace.drain();
+        if ep.tools.is_empty() {
+            ep.tools = traced;
+        }
+        if let Err(e) = self.store.record(&ep).await {
+            tracing::warn!(error = %e, "experience record failed");
+        }
+        ep
+    }
 }

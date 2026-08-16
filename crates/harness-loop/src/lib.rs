@@ -585,6 +585,22 @@ impl<M: Model> AgentLoop<M> {
         self
     }
 
+    /// Capture every turn into `store` **without** registering a search tool.
+    ///
+    /// Ingest and retrieval are separate concerns that [`with_recall`] happens
+    /// to bundle, and the bundling is a trap: capture only ever happens when
+    /// `self.recall` is set, so a host that wants a different search tool — one
+    /// scoped per tenant, or one that copes with a language the backend's index
+    /// does not — has no way to get the writes without also getting
+    /// `session_search`, and ends up offering the model two overlapping tools
+    /// to choose between.
+    ///
+    /// Use this, then register whichever retrieval tool suits the deployment.
+    pub fn with_recall_ingest(mut self, store: Arc<dyn harness_core::RecallStore>) -> Self {
+        self.recall = Some(store);
+        self
+    }
+
     /// After `with_recall`, also auto-inject top-k relevant past context at
     /// session start (off by default — tool-only is prompt-cache friendly).
     pub fn auto_inject(mut self) -> Self {

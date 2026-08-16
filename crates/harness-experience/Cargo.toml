@@ -13,12 +13,38 @@ name = "harness_experience"
 
 [dependencies]
 harness-core = { workspace = true }
+# The closed learning loop (distill / revise) authors SKILL.md files, so it
+# reuses the one crate that owns the agentskills.io spec rather than growing a
+# second, drifting copy of the frontmatter rules.
+harness-skills = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
+serde_yaml   = { workspace = true }
+thiserror    = { workspace = true }
 tokio        = { workspace = true }
 tracing      = { workspace = true }
 
+# Per-turn cost measurement. `harness = false` because the workspace has no
+# criterion dependency and `#[bench]` needs nightly — these are plain
+# wall-clock binaries. See docs/per-turn-cost.md.
+[[bench]]
+name = "experience_guide"
+harness = false
+
+[[bench]]
+name = "distill_gate"
+harness = false
+
+# Its own binary: the counting global allocator it installs would skew the
+# timings in `distill_gate`.
+[[bench]]
+name = "distill_gate_allocs"
+harness = false
+
 [dev-dependencies]
 harness-context = { workspace = true }
+# `MockModel` — the workspace's existing scriptable test double. Reused rather
+# than reinvented so distiller/reviser tests read like every other model test.
+harness-models  = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -49,6 +49,13 @@ otel = [
     "dep:tracing-subscriber",
 ]
 
+# Per-turn cost measurement. `harness = false` because the workspace has no
+# criterion dependency and `#[bench]` needs nightly — these are plain
+# wall-clock binaries. See docs/per-turn-cost.md.
+[[bench]]
+name = "memory_guide"
+harness = false
+
 [dev-dependencies]
 harness-skills       = { workspace = true }
 harness-tools-fs     = { workspace = true }

@@ -14,6 +14,11 @@
 //!   restricted — the per-command helper model Codex CLI uses, and the reason
 //!   the in-process `birdcage` crate was *not* used (its `spawn` leaks the
 //!   sandbox to the caller). Denies network by default. `Isolation::Process`.
+//!   Confining *writes* is the default posture and stops a command damaging the
+//!   host; it does **not** stop one reading it. On a multi-tenant host, where
+//!   the threat is one tenant reading another's workspace rather than breaking
+//!   the machine, ask for `with_confine_reads(true)` — then and only then does
+//!   `fs_policy()` report [`FsPolicy::Confined`].
 //! - [`ContainerSandbox`] — routes `runner.exec` through `docker exec` into a
 //!   container (`--network none` for real net isolation). The container/kernel
 //!   does the isolating; this crate is only the orchestration. `Isolation::Process`.
@@ -481,6 +486,7 @@ pub struct SeatbeltSandbox {
     pub root: PathBuf,
     pub allow_net: bool,
     pub confine_writes: bool,
+    pub confine_reads: bool,
 }
 
 impl SeatbeltSandbox {
@@ -489,6 +495,7 @@ impl SeatbeltSandbox {
             root: root.into(),
             allow_net: false,
             confine_writes: false,
+            confine_reads: false,
         }
     }
     pub fn with_network(mut self, allow: bool) -> Self {
@@ -499,10 +506,64 @@ impl SeatbeltSandbox {
         self.confine_writes = confine;
         self
     }
+    /// Also deny *reads* outside the root (plus the system paths a process
+    /// needs to start at all).
+    ///
+    /// Write confinement alone stops a command corrupting the host, but it
+    /// leaves every readable file on the box in reach — which on a multi-tenant
+    /// server means tenant A's shell can `cat` tenant B's workspace. Isolating
+    /// changes is not the same as isolating capability; if the threat is
+    /// exfiltration rather than damage, this is the switch that matters.
+    ///
+    /// Implies [`with_confine_writes`](Self::with_confine_writes): a filesystem
+    /// you may write but not read back is not a coherent policy, and every
+    /// caller that wants read confinement wants both.
+    pub fn with_confine_reads(mut self, confine: bool) -> Self {
+        self.confine_reads = confine;
+        if confine {
+            self.confine_writes = true;
+        }
+        self
+    }
 }
 
+/// System paths a process must be able to read before it can execute at all —
+/// the dynamic loader, the shared cache, the binaries themselves, and the CA
+/// bundle any networked tool will look for. Denying these does not harden the
+/// sandbox, it just makes every command fail with a linker error.
+///
+/// `/opt` covers Homebrew (`/opt/homebrew` on Apple silicon); `/nix` covers a
+/// Nix-installed toolchain. Both are absent on a stock machine, and a Seatbelt
+/// `subpath` allow for a path that does not exist is inert, so listing them
+/// costs nothing.
+/// Deliberately absent: `/private/tmp` and `/private/var/folders`. They stay
+/// *writable* (the OS and half the toolchain write scratch there unconditionally
+/// and cannot be talked out of it) but not *readable*, because a shared temp
+/// directory that every tenant can read is exactly the exfiltration path read
+/// confinement exists to close. A read-confined sandbox gets its own `TMPDIR`
+/// inside its root instead — see [`SeatbeltRunner`].
+const MACOS_READ_ALLOW: &[&str] = &[
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/System",
+    "/Library",
+    "/opt",
+    "/nix",
+    "/etc",
+    "/private/etc",
+    "/var/select",
+    "/dev",
+    "/private/var/db/dyld",
+];
+
 /// Build a Seatbelt profile (SBPL): `allow default`, then subtract capabilities.
-fn seatbelt_profile(root: &Path, allow_net: bool, confine_writes: bool) -> String {
+pub fn seatbelt_profile(
+    root: &Path,
+    allow_net: bool,
+    confine_writes: bool,
+    confine_reads: bool,
+) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
     if !allow_net {
         p.push_str("(deny network*)\n");
@@ -518,11 +579,40 @@ fn seatbelt_profile(root: &Path, allow_net: bool, confine_writes: bool) -> Strin
         );
         p.push_str("(allow file-write* (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\") (literal \"/dev/dtracehelper\"))\n");
     }
+    if confine_reads {
+        p.push_str("(deny file-read*)\n");
+        // Metadata stays readable everywhere: resolving `<root>/x` walks every
+        // parent directory, so denying stat on `/Users` makes the workspace
+        // itself unreachable — a denial that blocks nothing an attacker wants
+        // (the bytes) while breaking everything the tenant does.
+        p.push_str("(allow file-read-metadata)\n");
+        // `/` itself, and it is not optional: a `subpath` allow for `/usr`
+        // does not cover reading the root *directory entry*, and without it
+        // every process — even `/bin/echo` — dies with SIGABRT before `main`,
+        // silently (no stderr, exit 134). Allowing every top-level directory
+        // individually does not substitute for it. Found the hard way.
+        p.push_str("(allow file-read* (literal \"/\"))\n");
+        p.push_str(&format!(
+            "(allow file-read* (subpath \"{}\"))\n",
+            root.display()
+        ));
+        for path in MACOS_READ_ALLOW {
+            p.push_str(&format!("(allow file-read* (subpath \"{path}\"))\n"));
+        }
+    }
     p
 }
 
 struct SeatbeltRunner {
     profile: String,
+    /// Private scratch directory handed to the child as `TMPDIR`, set only when
+    /// reads are confined.
+    ///
+    /// The shared temp dirs stay writable but unreadable under read
+    /// confinement, so a command that writes a scratch file and reads it back —
+    /// which is most of them — would break. Pointing `TMPDIR` inside the
+    /// sandbox root fixes that without reopening the cross-tenant read.
+    private_tmp: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -538,6 +628,12 @@ impl harness_core::ProcessRunner for SeatbeltRunner {
         sb.extend(args.iter().map(|a| (*a).to_string()));
         let mut cmd = tokio::process::Command::new("sandbox-exec");
         cmd.args(&sb);
+        if let Some(t) = &self.private_tmp {
+            std::fs::create_dir_all(t)?;
+            // TMPDIR is what libc and every sane toolchain honour; TMP/TEMP are
+            // there for the ported ones that only look at those.
+            cmd.env("TMPDIR", t).env("TMP", t).env("TEMP", t);
+        }
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
@@ -553,10 +649,10 @@ impl harness_core::ProcessRunner for SeatbeltRunner {
 #[async_trait]
 impl Sandbox for SeatbeltSandbox {
     fn fs_policy(&self) -> FsPolicy {
-        if self.confine_writes {
-            FsPolicy::HostReadConfinedWrite
-        } else {
-            FsPolicy::Unrestricted
+        match (self.confine_reads, self.confine_writes) {
+            (true, _) => FsPolicy::Confined,
+            (false, true) => FsPolicy::HostReadConfinedWrite,
+            (false, false) => FsPolicy::Unrestricted,
         }
     }
     fn net_policy(&self) -> NetPolicy {
@@ -588,7 +684,13 @@ impl Sandbox for SeatbeltSandbox {
                 root: self.root.clone(),
             },
             runner: Arc::new(SeatbeltRunner {
-                profile: seatbelt_profile(&self.root, self.allow_net, self.confine_writes),
+                profile: seatbelt_profile(
+                    &self.root,
+                    self.allow_net,
+                    self.confine_writes,
+                    self.confine_reads,
+                ),
+                private_tmp: self.confine_reads.then(|| self.root.join(".tmp")),
             }),
             clock: Arc::new(harness_context::SystemClock),
             kv: Arc::new(harness_context::InMemoryKv::new()),
@@ -619,6 +721,7 @@ pub struct BubblewrapSandbox {
     pub root: PathBuf,
     pub allow_net: bool,
     pub confine_writes: bool,
+    pub confine_reads: bool,
 }
 
 impl BubblewrapSandbox {
@@ -627,6 +730,7 @@ impl BubblewrapSandbox {
             root: root.into(),
             allow_net: false,
             confine_writes: true,
+            confine_reads: false,
         }
     }
     pub fn with_network(mut self, allow: bool) -> Self {
@@ -637,15 +741,54 @@ impl BubblewrapSandbox {
         self.confine_writes = confine;
         self
     }
+    /// Also deny *reads* outside the root: bind in the system paths a process
+    /// needs and nothing else, instead of `--ro-bind / /`.
+    ///
+    /// See [`SeatbeltSandbox::with_confine_reads`] for why write confinement on
+    /// its own is not enough on a multi-tenant host. Implies write confinement.
+    pub fn with_confine_reads(mut self, confine: bool) -> Self {
+        self.confine_reads = confine;
+        if confine {
+            self.confine_writes = true;
+        }
+        self
+    }
 }
+
+/// The only host paths bound into a read-confined bubblewrap sandbox — enough
+/// for a dynamically-linked binary to load and resolve TLS, and no more.
+///
+/// Bound with `--ro-bind-try` rather than `--ro-bind`: `/lib64` is absent on
+/// aarch64, `/nix` on anything but NixOS, and `bwrap` treats a missing bind
+/// source as a fatal error. `-try` turns "not on this distro" into a no-op,
+/// which is what it is.
+const LINUX_READ_BIND: &[&str] = &[
+    "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/nix",
+];
 
 /// Build the `bwrap` args before the user's program. Pure → unit-testable, and
 /// verified live in a Linux container (`--unshare-net` blocks network;
 /// `--ro-bind / /` + `--bind <root>` confines writes to the workspace).
-pub fn bwrap_args(root: &Path, allow_net: bool, confine_writes: bool) -> Vec<String> {
+pub fn bwrap_args(
+    root: &Path,
+    allow_net: bool,
+    confine_writes: bool,
+    confine_reads: bool,
+) -> Vec<String> {
     let r = root.display().to_string();
     let mut a: Vec<String> = Vec::new();
-    if confine_writes {
+    if confine_reads {
+        // Nothing is visible by default; bind in the system tree read-only and
+        // the workspace read-write. The host's home directories — every other
+        // tenant — are simply not in the mount namespace.
+        for path in LINUX_READ_BIND {
+            a.extend(["--ro-bind-try".into(), (*path).into(), (*path).into()]);
+        }
+        a.extend(["--bind".into(), r.clone(), r]);
+        // A private /tmp, so scratch files are neither visible to nor from the
+        // host — a shared /tmp is a side channel between tenants.
+        a.extend(["--tmpfs".into(), "/tmp".into()]);
+    } else if confine_writes {
         a.extend(["--ro-bind".into(), "/".into(), "/".into()]);
         a.extend(["--bind".into(), r.clone(), r]);
     } else {
@@ -691,10 +834,10 @@ impl harness_core::ProcessRunner for BwrapRunner {
 #[async_trait]
 impl Sandbox for BubblewrapSandbox {
     fn fs_policy(&self) -> FsPolicy {
-        if self.confine_writes {
-            FsPolicy::HostReadConfinedWrite
-        } else {
-            FsPolicy::Unrestricted
+        match (self.confine_reads, self.confine_writes) {
+            (true, _) => FsPolicy::Confined,
+            (false, true) => FsPolicy::HostReadConfinedWrite,
+            (false, false) => FsPolicy::Unrestricted,
         }
     }
     fn net_policy(&self) -> NetPolicy {
@@ -720,7 +863,12 @@ impl Sandbox for BubblewrapSandbox {
             ));
         }
         let runner = Arc::new(BwrapRunner {
-            args: bwrap_args(&self.root, self.allow_net, self.confine_writes),
+            args: bwrap_args(
+                &self.root,
+                self.allow_net,
+                self.confine_writes,
+                self.confine_reads,
+            ),
         });
         let world = World {
             repo: RepoView {
@@ -818,20 +966,95 @@ mod tests {
 
     #[test]
     fn seatbelt_profile_denies_network_by_default() {
-        let p = seatbelt_profile(std::path::Path::new("/tmp/x"), false, false);
+        let p = seatbelt_profile(std::path::Path::new("/tmp/x"), false, false, false);
         assert!(p.contains("(deny network*)"));
-        let allowed = seatbelt_profile(std::path::Path::new("/tmp/x"), true, false);
+        let allowed = seatbelt_profile(std::path::Path::new("/tmp/x"), true, false, false);
         assert!(!allowed.contains("(deny network*)"));
     }
 
     #[test]
+    fn seatbelt_read_confinement_is_off_unless_asked() {
+        let p = seatbelt_profile(std::path::Path::new("/work"), false, true, false);
+        assert!(
+            !p.contains("(deny file-read*)"),
+            "write confinement must not silently imply read confinement"
+        );
+    }
+
+    #[test]
+    fn seatbelt_read_confinement_allows_root_and_system_paths() {
+        let p = seatbelt_profile(std::path::Path::new("/work/tenant-a"), false, true, true);
+        assert!(p.contains("(deny file-read*)"));
+        assert!(p.contains("(allow file-read* (subpath \"/work/tenant-a\"))"));
+        // Without these a dynamically-linked binary cannot even start.
+        for required in ["/usr", "/System", "/private/var/db/dyld"] {
+            assert!(
+                p.contains(&format!("(allow file-read* (subpath \"{required}\"))")),
+                "missing read allow for {required}"
+            );
+        }
+        // Path resolution walks parents of the root, so metadata must stay open.
+        assert!(p.contains("(allow file-read-metadata)"));
+        // Without the root directory entry itself nothing executes at all.
+        assert!(p.contains("(allow file-read* (literal \"/\"))"));
+        // The point of the whole exercise: another tenant's tree is not listed.
+        assert!(!p.contains("/work/tenant-b"));
+        // Shared scratch is writable but NOT readable — otherwise one tenant's
+        // temp file is every tenant's temp file.
+        assert!(p.contains(
+            "(allow file-write* (subpath \"/private/var/folders\") (subpath \"/private/tmp\"))"
+        ));
+        assert!(!p.contains("(allow file-read* (subpath \"/private/tmp\"))"));
+        assert!(!p.contains("(allow file-read* (subpath \"/private/var/folders\"))"));
+    }
+
+    #[test]
+    fn seatbelt_confine_reads_implies_confine_writes() {
+        let s = SeatbeltSandbox::new("/work").with_confine_reads(true);
+        assert!(s.confine_writes);
+        assert_eq!(s.fs_policy(), FsPolicy::Confined);
+        assert_eq!(
+            SeatbeltSandbox::new("/work")
+                .with_confine_writes(true)
+                .fs_policy(),
+            FsPolicy::HostReadConfinedWrite
+        );
+    }
+
+    #[test]
     fn bwrap_args_deny_net_and_confine_writes_by_default() {
-        let a = bwrap_args(std::path::Path::new("/work"), false, true);
+        let a = bwrap_args(std::path::Path::new("/work"), false, true, false);
         assert!(a.iter().any(|x| x == "--unshare-net"));
         assert!(a.windows(3).any(|w| w == ["--ro-bind", "/", "/"]));
         assert!(a.windows(3).any(|w| w == ["--bind", "/work", "/work"]));
-        let net = bwrap_args(std::path::Path::new("/work"), true, true);
+        let net = bwrap_args(std::path::Path::new("/work"), true, true, false);
         assert!(!net.iter().any(|x| x == "--unshare-net"));
+    }
+
+    #[test]
+    fn bwrap_read_confinement_binds_system_paths_only() {
+        let a = bwrap_args(std::path::Path::new("/work/tenant-a"), false, true, true);
+        // The whole-root read bind is exactly what read confinement removes.
+        assert!(
+            !a.windows(3).any(|w| w == ["--ro-bind", "/", "/"]),
+            "read-confined sandbox must not bind the whole filesystem"
+        );
+        assert!(a.windows(3).any(|w| w == ["--ro-bind-try", "/usr", "/usr"]));
+        assert!(
+            a.windows(3)
+                .any(|w| w == ["--bind", "/work/tenant-a", "/work/tenant-a"])
+        );
+        // /home is never bound, so no other tenant exists in the namespace.
+        assert!(!a.iter().any(|x| x == "/home"));
+        // Shared /tmp is a cross-tenant side channel; it gets its own tmpfs.
+        assert!(a.windows(2).any(|w| w == ["--tmpfs", "/tmp"]));
+    }
+
+    #[test]
+    fn bwrap_confine_reads_implies_confine_writes() {
+        let s = BubblewrapSandbox::new("/work").with_confine_reads(true);
+        assert!(s.confine_writes);
+        assert_eq!(s.fs_policy(), FsPolicy::Confined);
     }
 
     #[tokio::test]
@@ -845,6 +1068,72 @@ mod tests {
         if absent {
             assert!(BubblewrapSandbox::new(".").spawn().await.is_err());
         }
+    }
+
+    /// macOS: prove read confinement is enforced by the *kernel*, not just
+    /// present in the profile string.
+    ///
+    /// The scenario is the one that motivated the flag: two tenant directories
+    /// side by side, a sandbox rooted at one of them, and a command that tries
+    /// to read the other. Asserting on the SBPL text would pass even if the
+    /// profile were subtly malformed and Seatbelt ignored it, which is exactly
+    /// the failure this crate refuses to ship — a policy the kernel does not
+    /// enforce is not isolation.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn seatbelt_confined_reads_block_a_sibling_tenant() {
+        let base =
+            std::env::temp_dir().join(format!("harness-sandbox-reads-{}", std::process::id()));
+        let mine = base.join("tenant-a");
+        let theirs = base.join("tenant-b");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        let my_file = mine.join("ok.txt");
+        let their_secret = theirs.join("secret.txt");
+        std::fs::write(&my_file, "mine\n").unwrap();
+        std::fs::write(&their_secret, "SECRET\n").unwrap();
+
+        // Resolve through symlinks: on macOS the temp dir is /var/... which is a
+        // symlink to /private/var, and Seatbelt matches on the real path. A
+        // profile written with the unresolved path denies everything, including
+        // the workspace — which would make this test pass for the wrong reason.
+        let real_root = std::fs::canonicalize(&mine).unwrap();
+        let real_secret = std::fs::canonicalize(&their_secret).unwrap();
+
+        let h = SeatbeltSandbox::new(&real_root)
+            .with_confine_reads(true)
+            .spawn()
+            .await
+            .expect("seatbelt spawns");
+
+        // A binary still runs — /usr/bin and the dyld cache stayed readable.
+        let own = h
+            .world
+            .runner
+            .exec(
+                "/bin/cat",
+                &[real_root.join("ok.txt").to_str().unwrap()],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(own.status, 0, "own workspace must stay readable: {own:?}");
+        assert!(own.stdout.contains("mine"));
+
+        // The neighbour's file is not.
+        let stolen = h
+            .world
+            .runner
+            .exec("/bin/cat", &[real_secret.to_str().unwrap()], None)
+            .await
+            .unwrap();
+        assert_ne!(stolen.status, 0, "sibling tenant read must be denied");
+        assert!(
+            !stolen.stdout.contains("SECRET"),
+            "secret leaked out of the sandbox: {stolen:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// macOS: prove Seatbelt enforces net-deny at the kernel via the sandbox's

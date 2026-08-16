@@ -190,3 +190,54 @@ async fn denied_tool_calls_are_still_captured() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `with_recall_ingest` must capture exactly as `with_recall` does, while
+/// leaving retrieval to the host.
+///
+/// The pairing is the whole contract: if ingest silently stopped working the
+/// host would ship a search tool over an empty store and read it as "the user
+/// has no history", which looks like an answer rather than a bug.
+#[tokio::test]
+async fn with_recall_ingest_captures_without_registering_a_search_tool() {
+    let root = tmp_root();
+    let store: Arc<dyn RecallStore> = Arc::new(FileRecall::open(&root).unwrap());
+    let loop_ = AgentLoop::new(MockModel {
+        turn: AtomicU32::new(0),
+    })
+    .with_recall_ingest(store.clone())
+    .with_tool(Arc::new(Noop));
+
+    let offered: Vec<String> = loop_
+        .tools
+        .schemas()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    assert!(
+        !offered.iter().any(|n| n == "session_search"),
+        "ingest-only must not offer a search tool; got {offered:?}"
+    );
+    assert!(offered.iter().any(|n| n == "noop"), "got {offered:?}");
+
+    let mut world = default_world(".");
+    world
+        .profile
+        .extra
+        .insert("recall_owner".into(), serde_json::json!("u10"));
+    world
+        .profile
+        .extra
+        .insert("recall_session".into(), serde_json::json!("conv2"));
+
+    let task = Task {
+        description: "remember the beta protocol".into(),
+        source: None,
+        deadline: None,
+    };
+    let _ = loop_.run(task, &mut world).await.unwrap();
+
+    let hits = store.search("u10", "beta protocol", 5).await.unwrap();
+    assert_eq!(hits.len(), 1, "ingest must still capture the conversation");
+
+    let _ = std::fs::remove_dir_all(&root);
+}

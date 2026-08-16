@@ -9,12 +9,14 @@ pub mod memory_file;
 pub mod memory_guard;
 pub mod redacting_memory;
 pub mod runtime;
+pub mod user_model;
 
 pub use file_recall::*;
 pub use memory_file::*;
 pub use memory_guard::*;
 pub use redacting_memory::*;
 pub use runtime::*;
+pub use user_model::*;
 
 use harness_core::{Action, Block, Context, Task, ToolResult, Turn, TurnRole, World};
 
