@@ -1,0 +1,40 @@
+[package]
+name = "harness-rs-tools-browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Interactive headless-browser tool (browser) for harness-rs agents — a persistent Chrome DevTools Protocol session that can click, type, select, scroll and wait, returns an accessibility-style list of interactable elements after every action, and refuses to navigate anywhere a pluggable UrlPolicy rejects. Hand-written CDP over a hand-written WebSocket: no browser-automation dependency."
+
+keywords     = ["agent", "ai", "llm", "harness", "browser"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_tools_browser"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Opt-in for the tests that actually drive a browser. `cargo test -p
+# harness-rs-tools-browser --features real-browser` — or set HARNESS_BROWSER_TESTS=1,
+# which the same tests honour. Either way they skip cleanly when no Chrome is
+# installed, so CI never needs a browser image.
+real-browser = []
+
+[dependencies]
+harness-core = { workspace = true }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tracing      = { workspace = true }
+# `net` is not in the workspace tokio feature set: this is the only crate that
+# opens a raw TCP socket (the CDP WebSocket to 127.0.0.1). Cargo unions features,
+# so asking for it here does not change what any other crate gets.
+tokio        = { workspace = true, features = ["net", "io-util", "process", "time", "sync", "rt", "macros"] }
+
+[dev-dependencies]
+harness-context = { workspace = true }
+tokio           = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }

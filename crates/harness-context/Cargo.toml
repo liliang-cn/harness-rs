@@ -24,6 +24,14 @@ tokio        = { workspace = true }
 async-trait  = { workspace = true }
 tracing      = { workspace = true }
 regex        = { workspace = true }
+thiserror    = { workspace = true }
+
+# Per-turn cost measurement. `harness = false` because the workspace has no
+# criterion dependency and `#[bench]` needs nightly — this is a plain
+# wall-clock binary. See docs/per-turn-cost.md.
+[[bench]]
+name = "user_model"
+harness = false
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
