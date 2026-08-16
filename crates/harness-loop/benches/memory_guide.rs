@@ -100,7 +100,14 @@ fn ascii_entry(i: usize) -> MemoryEntry {
          from the provider event id; the deploy runbook for release {i} covers the rollback path"
     ))
     .with_source("bench")
-    .with_tags(["bench", if i.is_multiple_of(3) { "billing" } else { "misc" }])
+    .with_tags([
+        "bench",
+        if i.is_multiple_of(3) {
+            "billing"
+        } else {
+            "misc"
+        },
+    ])
 }
 
 fn cjk_entry(i: usize) -> MemoryEntry {

@@ -82,7 +82,10 @@ pub mod updater;
 pub use guide::UserModelGuide;
 pub use portrait::*;
 pub use store::{USER_MODEL_TAG, UserModelStore};
-pub use updater::{TriggerReason, UpdatePolicy, UpdateTracker, UpdateTrackers, UserModelUpdater};
+pub use updater::{
+    TriggerReason, UpdatePolicy, UpdateTracker, UpdateTrackerState, UpdateTrackers,
+    UserModelUpdater,
+};
 
 use harness_core::{Block, Context, MemoryError, ModelError, TurnRole};
 

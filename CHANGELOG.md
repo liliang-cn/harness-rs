@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.47
+
+### Added
+
+- **`UpdateTracker::state()` / `from_state()` + `UpdateTrackerState`** — the portrait trigger's
+  counters, in a form a host can persist between turns.
+
+  `UpdateTrackers` keeps them in process memory, which is correct for a long-lived server and
+  silently wrong everywhere else. A CLI, a serverless handler or a worker pool starts a fresh
+  process per turn, so `turns` resets to 1 on every message and an "every N turns" policy never
+  reaches N. Nothing errors; the portrait simply stays empty, and the feature reads as merely not
+  very good. Found by running a real twelve-turn conversation through `superleo-server chat`, one
+  process per turn, and watching a file that never appeared — after the in-memory version had
+  already shipped, with a doc comment warning about exactly this failure mode two lines above the
+  code that had it.
+
+  `from_state` deliberately does not restore `session_ended`: that flag describes the process that
+  set it, and carrying it into the next one would hand every restart a free update. Both properties
+  are pinned by tests, including one that asserts the naive per-turn tracker *never* fires — the
+  bug itself, written down so it cannot come back.
+
 ## 0.0.46
 
 ### Added

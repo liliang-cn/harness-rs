@@ -100,6 +100,18 @@ pub enum TriggerReason {
     SessionEnd,
 }
 
+/// [`UpdateTracker`]'s counters, serialisable so a host that does not stay
+/// resident can persist them between turns. See [`UpdateTracker::state`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateTrackerState {
+    #[serde(default)]
+    pub turns: u32,
+    #[serde(default)]
+    pub chars: usize,
+    #[serde(default)]
+    pub last_update_ms: i64,
+}
+
 /// Per-user counters feeding [`UpdatePolicy`]. One tracker per user id —
 /// there is no global "turns since update", because in a multi-tenant server
 /// that number would be meaningless.
@@ -133,6 +145,36 @@ impl UpdateTracker {
 
     pub fn user(&self) -> &UserId {
         &self.user
+    }
+
+    /// The counters, in a form a host can persist and hand back.
+    ///
+    /// A tracker held only in process memory is correct for a long-lived
+    /// server and silently wrong everywhere else: a CLI, a serverless handler
+    /// or a worker pool starts a fresh process per turn, so `turns` resets to
+    /// 1 on every message and an "every N turns" trigger never reaches N. The
+    /// failure mode is the bad kind — nothing errors, the portrait simply
+    /// never updates and the feature looks like it is merely not very good.
+    /// Hosts that are not one long-lived process must round-trip this.
+    pub fn state(&self) -> UpdateTrackerState {
+        UpdateTrackerState {
+            turns: self.turns,
+            chars: self.chars,
+            last_update_ms: self.last_update_ms,
+        }
+    }
+
+    /// Rebuild a tracker from persisted counters. `session_ended` is
+    /// deliberately not carried: it describes *this* process's session, and
+    /// resuming into a new one with it set would fire an immediate update.
+    pub fn from_state(user: UserId, st: UpdateTrackerState) -> Self {
+        Self {
+            user,
+            turns: st.turns,
+            chars: st.chars,
+            last_update_ms: st.last_update_ms,
+            session_ended: false,
+        }
     }
 
     /// Record one user turn. `user_text_chars` is the length of what the *user*
@@ -704,5 +746,76 @@ mod tests {
             .unwrap();
         assert!(delta.is_empty());
         assert_eq!(model.calls(), 0, "no evidence, no spend");
+    }
+
+    /// A host that starts a fresh process per turn must still reach the
+    /// trigger. This is the bug the in-memory tracker has by construction:
+    /// counters reset on every message, `turns` never passes 1, and an
+    /// every-12-turns policy fires never — silently.
+    #[test]
+    fn counters_survive_a_process_that_does_not() {
+        let user = UserId::new("u1");
+        let policy = UpdatePolicy {
+            every_n_turns: Some(3),
+            min_new_chars: None,
+            on_session_end: false,
+            min_interval_ms: 0,
+        };
+
+        // Naive host: a new tracker per turn. Never fires, however long you go.
+        for turn in 0..10 {
+            let mut t = UpdateTracker::new(user.clone());
+            t.record_turn(50);
+            assert!(
+                t.due(&policy, 1_000 * (turn + 1)).is_none(),
+                "a per-turn tracker must never reach the threshold — that is the bug"
+            );
+        }
+
+        // Same host, round-tripping the state the way a CLI or a serverless
+        // handler has to.
+        let mut saved = UpdateTrackerState::default();
+        let mut fired_on = None;
+        for turn in 0..10i64 {
+            let mut t = UpdateTracker::from_state(user.clone(), saved);
+            t.record_turn(50);
+            if fired_on.is_none()
+                && let Some(reason) = t.due(&policy, 1_000 * (turn + 1))
+            {
+                assert_eq!(reason, TriggerReason::TurnCount);
+                fired_on = Some(turn + 1);
+                t.mark_updated(1_000 * (turn + 1));
+            }
+            // Persisting is what a JSON file on disk would hold.
+            saved = t.state();
+            let round_tripped: UpdateTrackerState =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            assert_eq!(round_tripped, saved, "state must survive the file");
+            saved = round_tripped;
+        }
+        assert_eq!(fired_on, Some(3), "should have fired on the third turn");
+    }
+
+    /// Resuming must not carry `session_ended` into the next process, or every
+    /// restart hands the user a free update.
+    #[test]
+    fn a_resumed_tracker_does_not_inherit_a_finished_session() {
+        let user = UserId::new("u1");
+        let policy = UpdatePolicy {
+            every_n_turns: None,
+            min_new_chars: None,
+            on_session_end: true,
+            min_interval_ms: 0,
+        };
+        let mut t = UpdateTracker::new(user.clone());
+        t.record_turn(10);
+        t.note_session_end();
+        assert!(t.due(&policy, 10_000).is_some());
+
+        let resumed = UpdateTracker::from_state(user, t.state());
+        assert!(
+            resumed.due(&policy, 20_000).is_none(),
+            "session-end is about this process, not the persisted counters"
+        );
     }
 }
