@@ -4,7 +4,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// All 27 lifecycle events the framework emits (DESIGN.md §10).
+/// All 29 lifecycle events the framework emits (DESIGN.md §10).
 ///
 /// Lifetimes are intentionally borrowed: hooks must not own these references
 /// past the call.
@@ -16,6 +16,29 @@ pub enum Event<'a> {
         source: SessionSource,
     },
     SessionEnd,
+
+    /// One acceptance check answered.
+    ///
+    /// Emitted per check, pass or fail. Until this existed the verdict reached
+    /// the caller in the outcome and reached nobody else: an audit trail could
+    /// show every tool the agent called and not whether anything ever agreed
+    /// the work was done.
+    AcceptanceChecked {
+        name: &'a str,
+        passed: bool,
+        /// The check's own words on a failure; empty on a pass.
+        reason: &'a str,
+    },
+
+    /// A sealed acceptance contract changed while the run was in flight.
+    ///
+    /// Separate from a failed [`Event::AcceptanceChecked`] because they warrant
+    /// different responses: a failed check is work not finished, this is the
+    /// measuring instrument having been moved by the party being measured. It
+    /// is the one event in this enum a host may reasonably want to page on.
+    SealBreached {
+        detail: &'a str,
+    },
 
     // tool
     PreToolUse {
@@ -172,6 +195,8 @@ impl<'a> Event<'a> {
         match self {
             Event::SessionStart { .. } => "SessionStart",
             Event::SessionEnd => "SessionEnd",
+            Event::AcceptanceChecked { .. } => "AcceptanceChecked",
+            Event::SealBreached { .. } => "SealBreached",
             Event::PreToolUse { .. } => "PreToolUse",
             Event::PostToolUse { .. } => "PostToolUse",
             Event::PermissionRequest { .. } => "PermissionRequest",

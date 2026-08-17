@@ -261,6 +261,23 @@ impl Hook for AuditHook {
                     }),
                 );
             }
+            // Whether anything agreed the work was done. A trail that lists
+            // every tool the agent called and never says this answers "what
+            // did it touch" while leaving "was it right" to the reader.
+            Event::AcceptanceChecked {
+                name,
+                passed,
+                reason,
+            } => {
+                self.emit(
+                    "acceptance",
+                    json!({ "check": name, "passed": passed, "reason": self.scrub_str(reason) }),
+                );
+            }
+            // The one record here that is about the agent rather than the work.
+            Event::SealBreached { detail } => {
+                self.emit("seal_breach", json!({ "detail": detail }));
+            }
             Event::SessionEnd => {
                 self.emit("session_end", json!({}));
             }

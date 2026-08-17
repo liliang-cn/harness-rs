@@ -3,6 +3,79 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.48
+
+Three pieces of one idea: **goal** says what a run is for, **seal** says what may
+not move while it happens, **receipt** says what came of it. Prompted by the
+observation that a coding agent's loop today ends when the model stops asking
+for tools — which is the model's opinion that it finished, not evidence that it
+did.
+
+### Added
+
+- **`Acceptance::seals()` — the gate the agent cannot edit its way through.** A
+  check may now declare the files that *define* it. Those are digested before
+  the model's first turn and re-digested before any pass is accepted; a
+  difference fails the run whatever the checks said. This closes the reliably
+  observed failure where a model that cannot make a test pass widens the test
+  until it does and then reports success — the gate was consulted, and it
+  agreed, because by then it was a different gate.
+
+  A breach is deliberately **not** a retry. Every other acceptance failure is
+  handed back as an instruction because the model can act on it; handing back
+  "you edited the gate", to the party that edited it, with the file still
+  writable, is not a correction. `Outcome::Done` gained `seal_breach` and
+  `contract` so the caller can tell tampering from unfinished work.
+
+  Sealing is opt-in and empty by default: some runs are supposed to rewrite
+  their tests. What it enforces is stated precisely in the `seal` module docs —
+  it detects that a declared file's bytes changed, it does not prevent the
+  write, and it cannot see a file the check reads but did not declare.
+
+- **`Receipt` — what a run can show for itself.** One JSON object: what was
+  asked, which model answered, the sealed contract, the verdict, whether the
+  contract survived. Small enough to attach to a pull request, structured
+  enough to fail a build on. Three distinctions it holds deliberately:
+  `checked == false` is neither a pass nor a failure, a breached run cannot be
+  a pass however the checks voted, and a budget-exhausted run gets a receipt
+  too — otherwise "no receipt" and "a bad receipt" look alike to whatever reads
+  them. `digest` is documented as an integrity check, not a signature; chain it
+  through `harness_hooks::audit::HashChainSink` if the trail itself must be
+  tamper-evident.
+
+- **`Goal` / `GoalStore` — the run, written down and survivable.** A spec is a
+  bigger prompt: nothing about it touches the runtime, so when the process dies
+  the file is still there and the run is gone. A goal has an id, holds which
+  phase is in flight, and is on disk before the first turn. Single objective,
+  context as *paths* rather than pasted-in text, invariants stated apart from
+  the objective, and phases sized to bound review rather than the model — the
+  useful question is not how long it may run but how many commits you are
+  willing to read. A `Failed` phase is handed back rather than skipped, and the
+  brief says what went wrong last time.
+
+- **`Event::AcceptanceChecked` and `Event::SealBreached`.** Acceptance had never
+  emitted an event, so an audit trail could list every tool the agent called and
+  never say whether anything agreed the work was done — it answered "what did it
+  touch" and left "was it right" to the reader. `AuditHook` now records both
+  into the hash chain, with the failure reason scrubbed. They are separate
+  events because they warrant different responses: a failed check is work not
+  finished; a breach is the measuring instrument having been moved by the party
+  being measured, and is the one event here a host may reasonably page on.
+
+- **`AgentLoop::run_receipted` and `AgentLoop::run_goal`.** The loop already
+  knows the task and the model, so making a caller restate them to build a
+  receipt was friction and a way for a receipt to end up describing a different
+  run than the one that happened. `run_goal` advances a goal by one phase and
+  saves it on **both** paths — the failure branch is the one hand-written call
+  sites forget, which loses exactly the run you most wanted a record of.
+
+### Measured
+
+Sealing costs, per run, on an M2 Pro (paid twice: once at start, once before
+accepting a pass) — `cargo bench -p harness-rs-loop --bench seal_cost`:
+1 file × 1 KiB 22.5 µs · 5 × 4 KiB 162 µs · 20 × 8 KiB 900 µs · nothing sealed
+0 µs. A single 8 MiB file is 30 ms, which is the one usage worth avoiding.
+
 ## 0.0.47
 
 ### Added
