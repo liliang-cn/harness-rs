@@ -28,6 +28,10 @@ serde_json        = { workspace = true }
 tokio             = { workspace = true }
 schemars          = { workspace = true }
 futures           = { workspace = true }
+# Sealing the acceptance contract (src/seal.rs). Same version harness-hooks
+# pins for its audit hash chain; not a workspace entry because only these two
+# crates hash anything.
+sha2              = "0.10"
 
 # OTLP export (feature `otel`) — optional, single-crate blast radius. The library
 # instruments with plain `tracing`; these turn spans into OpenTelemetry only when
@@ -67,3 +71,7 @@ async-trait       = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
+
+[[bench]]
+name = "seal_cost"
+harness = false

@@ -9,14 +9,20 @@
 //! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
 
 pub mod acceptance;
+pub mod goal;
 pub mod learning;
 pub mod memory_layer;
 #[cfg(feature = "otel")]
 pub mod otel;
 pub mod profile_guide;
 pub mod recall_layer;
+pub mod receipt;
 pub mod registry;
+pub mod seal;
 pub use acceptance::{Acceptance, FilesExist, NonEmptyAnswer, Verdict};
+pub use goal::{Goal, GoalStore, Phase, PhaseStatus};
+pub use receipt::{Receipt, ReceiptBuilder};
+pub use seal::{SealBreach, SealSet};
 pub mod replay;
 pub mod subagent;
 pub mod telemetry;
@@ -360,6 +366,19 @@ pub enum Outcome {
         /// What the acceptance checks said. `None` means nothing was asked —
         /// so "the model stopped" is all this outcome claims.
         verified: Option<Verdict>,
+        /// The sealed contract as it stood before the model's first turn.
+        ///
+        /// Carried out of the run because a receipt has to say *what* was
+        /// measured, not only that the measurement held. Empty when nothing
+        /// was sealed.
+        contract: crate::seal::SealSet,
+        /// Set when a sealed acceptance contract changed during the run.
+        ///
+        /// Distinct from a plain failed `verified` because the two mean
+        /// different things to a caller: a failed check is work not finished,
+        /// this is the measuring instrument having been moved. A host may want
+        /// to fail a build on the first and page someone on the second.
+        seal_breach: Option<String>,
     },
     /// Policy budget exhausted before the model stopped requesting tools.
     /// Carries everything we know so the caller can recover partial work
@@ -636,6 +655,75 @@ impl<M: Model> AgentLoop<M> {
     pub async fn run(&self, task: Task, world: &mut World) -> Result<Outcome, HarnessError> {
         let max = harness_core::Policy::default().max_iters;
         self.run_with_max_iters(task, world, max).await
+    }
+
+    /// Run, and hand back the evidence alongside the result.
+    ///
+    /// The [`Receipt`] is built here rather than by the caller because the loop
+    /// already knows the two things a caller would otherwise have to restate —
+    /// the task and the model — and restating them is how a receipt ends up
+    /// describing a different run than the one that happened. `now_ms` stays a
+    /// parameter: this crate does not read the clock, so a receipt is
+    /// reproducible in a test.
+    pub async fn run_receipted(
+        &self,
+        task: Task,
+        world: &mut World,
+        now_ms: i64,
+    ) -> Result<(Outcome, Receipt), HarnessError> {
+        let description = task.description.clone();
+        let handle = self.model.info().handle;
+        let outcome = self.run(task, world).await?;
+        let receipt = ReceiptBuilder::new(description, handle, now_ms).build(&outcome);
+        Ok((outcome, receipt))
+    }
+
+    /// Advance a [`Goal`] by one phase, recording the result durably.
+    ///
+    /// Returns `None` when every phase is done — so a resume loop is
+    /// `while let Some(..) = loop_.run_goal(..).await?`.
+    ///
+    /// The phase is marked `Running` and **saved before the model starts**, so
+    /// a process that dies mid-run leaves a goal that says where it was rather
+    /// than one that looks untouched. It is saved again afterwards on both
+    /// paths. That second save on the failure path is the whole reason this
+    /// method exists: written out by hand at each call site it is four lines,
+    /// and the failure branch is the one that gets forgotten — which loses
+    /// exactly the run you most wanted a record of.
+    pub async fn run_goal(
+        &self,
+        goal: &mut Goal,
+        store: &GoalStore,
+        world: &mut World,
+        now_ms: i64,
+    ) -> Result<Option<(Outcome, Receipt)>, HarnessError> {
+        let Some(i) = goal.start_current(now_ms) else {
+            return Ok(None);
+        };
+        let _ = store.save(goal);
+
+        let task = Task {
+            description: goal.brief(),
+            source: None,
+            deadline: None,
+        };
+        let result = self.run_receipted(task, world, now_ms).await;
+
+        match &result {
+            Ok((_, receipt)) => {
+                if receipt.passed {
+                    goal.finish(i, receipt.summary(), now_ms);
+                } else {
+                    goal.fail(i, receipt.summary(), now_ms);
+                }
+            }
+            // A run that errored outright still happened, and the goal has to
+            // say so or a resume will retry it as though it were untouched.
+            Err(e) => goal.fail(i, format!("the run errored: {e}"), now_ms),
+        }
+        let _ = store.save(goal);
+
+        result.map(Some)
     }
 
     pub async fn run_with_max_iters(
@@ -944,6 +1032,22 @@ impl<M: Model> AgentLoop<M> {
         // How many times the model has stopped mid-work with nothing to show.
         let mut acceptance_retries_left = self.acceptance_retries;
 
+        // The contract as it stood before the model touched anything. Taken
+        // now, not at verdict time, because the whole point is to compare
+        // against a state the model has not had the chance to influence.
+        // Set once a sealed file is found to have moved; makes the failure
+        // terminal and carries the reason out to the caller.
+        let mut seal_breached: Option<String> = None;
+        let sealed_before: crate::seal::SealSet = {
+            let paths: Vec<std::path::PathBuf> =
+                self.acceptance.iter().flat_map(|a| a.seals()).collect();
+            if paths.is_empty() {
+                crate::seal::SealSet::default()
+            } else {
+                crate::seal::SealSet::capture(&world.repo.root, paths)
+            }
+        };
+
         for iter in 0..ctx.policy.max_iters {
             self.hooks.fire(&Event::Heartbeat { iter }, world);
 
@@ -1063,6 +1167,14 @@ impl<M: Model> AgentLoop<M> {
                     });
                     for check in &self.acceptance {
                         let v = check.check(&probe, world).await;
+                        self.hooks.fire(
+                            &Event::AcceptanceChecked {
+                                name: check.name(),
+                                passed: v.passed,
+                                reason: &v.reason,
+                            },
+                            world,
+                        );
                         if !v.passed {
                             tracing::info!(
                                 check = check.name(),
@@ -1079,7 +1191,39 @@ impl<M: Model> AgentLoop<M> {
                     verdict = verdict.or_else(|| Some(Verdict::passed()));
                 }
 
+                // A pass is only worth the contract it was measured against.
+                // Re-read the sealed files and refuse if any moved.
+                if !sealed_before.is_empty() && verdict.as_ref().is_some_and(|v| v.passed) {
+                    let paths: Vec<std::path::PathBuf> =
+                        self.acceptance.iter().flat_map(|a| a.seals()).collect();
+                    let now = crate::seal::SealSet::capture(&world.repo.root, paths);
+                    let breaches = sealed_before.breaches(&now);
+                    if !breaches.is_empty() {
+                        let what = breaches
+                            .iter()
+                            .map(|b| b.describe())
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        tracing::error!(
+                            breaches = %what,
+                            "acceptance contract changed during the run — refusing the pass"
+                        );
+                        self.hooks
+                            .fire(&Event::SealBreached { detail: &what }, world);
+                        // Deliberately NOT a retry. Every other acceptance
+                        // failure is handed back as an instruction because the
+                        // model can act on it; this one would be handing back
+                        // "you edited the gate", to the party that edited it,
+                        // with the file still writable. The run is over.
+                        seal_breached = Some(what);
+                        verdict = Some(Verdict::failed(
+                            "the acceptance contract was modified during this run",
+                        ));
+                    }
+                }
+
                 if let Some(v) = verdict.clone().filter(|v| !v.passed)
+                    && seal_breached.is_none()
                     && acceptance_retries_left > 0
                     && iter + 1 < ctx.policy.max_iters
                 {
@@ -1108,6 +1252,8 @@ impl<M: Model> AgentLoop<M> {
                     tools_called,
                     usage: total_usage,
                     verified: verdict,
+                    contract: sealed_before.clone(),
+                    seal_breach: seal_breached,
                 });
             }
 

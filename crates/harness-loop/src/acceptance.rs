@@ -52,6 +52,22 @@ pub trait Acceptance: Send + Sync + 'static {
     /// Consulted when the model has stopped asking for tools. `ctx` carries the
     /// task and the whole transcript; `world` is the filesystem and friends.
     async fn check(&self, ctx: &Context, world: &World) -> Verdict;
+
+    /// The files whose contents *define* this check.
+    ///
+    /// Declaring them seals them: the loop digests each one before the model's
+    /// first turn and again before accepting a pass, and a difference fails the
+    /// run regardless of the verdict. This exists because a gate the agent can
+    /// edit is not a gate — the standard failure is a model that cannot make a
+    /// test pass widening the test until it does.
+    ///
+    /// Relative paths resolve against `world.repo.root`. Empty by default: some
+    /// runs are *supposed* to rewrite their tests, and a check cannot know
+    /// which kind of run it is in. Seal what must not move. See [`crate::seal`]
+    /// for exactly what the seal does and does not enforce.
+    fn seals(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
 }
 
 /// The cheapest check there is: the turn produced *something*.
