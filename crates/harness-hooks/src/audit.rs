@@ -502,6 +502,7 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 5,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
             },
             ..Default::default()
         };

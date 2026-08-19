@@ -1126,6 +1126,7 @@ impl<M: Model> AgentLoop<M> {
             total_usage.input_tokens += out.usage.input_tokens;
             total_usage.output_tokens += out.usage.output_tokens;
             total_usage.cached_input_tokens += out.usage.cached_input_tokens;
+            total_usage.cache_write_input_tokens += out.usage.cache_write_input_tokens;
             if let Some(t) = &out.text {
                 last_text = Some(t.clone());
             }
@@ -1851,6 +1852,7 @@ impl<M: Model> AgentLoop<M> {
                 total_usage.input_tokens += out.usage.input_tokens;
                 total_usage.output_tokens += out.usage.output_tokens;
                 total_usage.cached_input_tokens += out.usage.cached_input_tokens;
+                total_usage.cache_write_input_tokens += out.usage.cache_write_input_tokens;
                 ctx.push_model_output(&out);
                 out.text
             }

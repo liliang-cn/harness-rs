@@ -499,6 +499,7 @@ impl Model for GeminiNative {
                 input_tokens: parsed.usage_metadata.prompt_token_count,
                 output_tokens: parsed.usage_metadata.candidates_token_count,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
             },
             stop_reason,
             reasoning: if sig_lines.is_empty() {
@@ -837,6 +838,7 @@ fn process_gemini_chunk<S>(state: &mut GeminiStreamState<S>, chunk: GeminiRespon
             input_tokens: chunk.usage_metadata.prompt_token_count,
             output_tokens: chunk.usage_metadata.candidates_token_count,
             cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
         })));
     }
 }

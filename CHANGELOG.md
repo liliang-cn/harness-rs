@@ -3,6 +3,30 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **Anthropic: a second cache breakpoint at the end of the conversation.** The
+  adapter has always marked the static prefix (system + tool schemas), but the
+  conversation itself was left unmarked — so every iteration of a loop
+  re-prefilled the entire history at full price, and after a few tool calls the
+  history dwarfs the prefix it sits behind. `mark_history_breakpoint` now marks
+  the last cache-capable block of the final message, making this turn's whole
+  request next turn's cache hit: Anthropic matches the longest
+  previously-cached prefix, so only the newly appended blocks are paid at write
+  price. Thinking blocks cannot carry `cache_control`; the mark walks back to
+  the nearest block that can.
+
+- **`Usage.cache_write_input_tokens`** — cache writes were logged but never
+  surfaced, so the breakpoint's effect was only half visible: reads showed up,
+  the premium that bought them did not. The field rides through the loop's
+  `total_usage` accumulation and telemetry (`gen_ai.usage.cache_write_input_tokens`
+  on `model.complete` and `run.end`), which is what lets a run answer "what did
+  caching actually save?" rather than "how often did it hit?". Zero on
+  providers that cache automatically without a write surcharge (OpenAI,
+  DeepSeek, Gemini).
+
 ## 0.0.48
 
 Three pieces of one idea: **goal** says what a run is for, **seal** says what may
