@@ -156,17 +156,12 @@ impl Orchestrator {
 
             if inflight.is_empty() {
                 // Nothing running and nothing runnable: replan or finish.
-                if self.planner.is_some() && replans_left > 0 {
+                if let Some(planner) = self.planner.as_ref().filter(|_| replans_left > 0) {
                     replans_left -= 1;
                     run.state = RunState::Planning;
                     self.save(&run).await;
                     let succeeded = run.dag.succeeded_results();
-                    let delta = self
-                        .planner
-                        .as_ref()
-                        .unwrap()
-                        .plan(&run.goal, &succeeded)
-                        .await;
+                    let delta = planner.plan(&run.goal, &succeeded).await;
                     match delta {
                         Ok(PlanDelta::Add(jobs)) if !jobs.is_empty() => {
                             for j in jobs {
