@@ -7,6 +7,15 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Added
 
+- **`DecisionWriter`** — the deterministic middle ground between
+  `MemoryWriter` (verbatim final answer — noisy) and `MemorySynthesizer` (LLM
+  distillation — costs a model call): persist only lines starting with a
+  capture marker (`DECISION:` by default), collected across every assistant
+  turn, deduped, written once on `TaskCompleted`. A run that states no
+  decision writes nothing. Ported from the agent-go run-memory experiment,
+  where marker capture was the only extraction that stayed noise-free on
+  technical transcripts while costing zero model calls.
+
 - **Anthropic: a second cache breakpoint at the end of the conversation.** The
   adapter has always marked the static prefix (system + tool schemas), but the
   conversation itself was left unmarked — so every iteration of a loop
