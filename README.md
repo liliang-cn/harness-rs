@@ -275,8 +275,11 @@ On the native Gemini provider grounding is on by default in the main channel
 
 ## Status
 
-Latest: **v0.0.44** — `web_search` prefers the model's own search engine
-(`GroundedWebSearch`, scraper fallback). **v0.0.43**: oversized tool results
+Latest: **v0.0.49** — the conversation is now part of the Anthropic prompt-cache
+prefix (second breakpoint on the final message; cache writes surfaced as
+`Usage.cache_write_input_tokens`), and `DecisionWriter` captures `DECISION:` lines
+into memory deterministically — zero model calls. **v0.0.44**: `web_search` prefers
+the model's own search engine (`GroundedWebSearch`, scraper fallback). **v0.0.43**: oversized tool results
 spill to a workspace file instead of being truncated (nothing lost, −17%
 cost/pass measured), per-call tool deadlines, and the leave-one-out guard
 ablation with trigger coverage. Full history in **[CHANGELOG.md](CHANGELOG.md)**.
