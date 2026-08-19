@@ -317,7 +317,7 @@ impl RecallStore for FileRecall {
                 }
             }
         }
-        metas.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms));
+        metas.sort_by_key(|m| std::cmp::Reverse(m.started_at_ms));
         metas.truncate(limit);
         Ok(metas)
     }
