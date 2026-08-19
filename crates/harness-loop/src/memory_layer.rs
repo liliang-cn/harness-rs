@@ -341,6 +341,107 @@ impl Hook for MemoryWriter {
     }
 }
 
+/// The deterministic middle ground between [`MemoryWriter`] (verbatim final
+/// answer — noisy) and [`MemorySynthesizer`] (LLM distillation — costs a
+/// model call): persist only the lines that start with a capture marker,
+/// `"DECISION:"` by default.
+///
+/// Zero model calls, zero cost, and predictable: a run that states no
+/// decision writes nothing at all, so the store accumulates only content an
+/// agent explicitly committed to. Pair it with a system prompt that asks for
+/// conclusions as `DECISION:` lines. Measured against an LLM-free
+/// co-occurrence extractor on technical run transcripts, marker capture was
+/// the only extraction that stayed noise-free.
+///
+/// Marker lines from *every* assistant turn of the run are collected (not
+/// just the final one — an agent may commit to something mid-run), deduped
+/// verbatim, and written as one entry tagged `decision` on `TaskCompleted`.
+pub struct DecisionWriter {
+    memory: Arc<dyn Memory>,
+    markers: Vec<String>,
+    lines: Mutex<Vec<String>>,
+    source: String,
+    tags: Vec<String>,
+}
+
+impl DecisionWriter {
+    pub fn new(memory: Arc<dyn Memory>) -> Self {
+        Self {
+            memory,
+            markers: vec!["DECISION:".into()],
+            lines: Mutex::new(Vec::new()),
+            source: "session".into(),
+            tags: vec!["decision".into()],
+        }
+    }
+
+    /// Replace the line prefixes that trigger capture.
+    pub fn with_markers(mut self, markers: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.markers = markers.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Tag every persisted entry with the given source name.
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = source.into();
+        self
+    }
+
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
+impl Hook for DecisionWriter {
+    fn name(&self) -> &str {
+        "decision-writer"
+    }
+    fn matches(&self, ev: &Event<'_>) -> bool {
+        matches!(ev, Event::PostModel { .. } | Event::TaskCompleted)
+    }
+    fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+        match ev {
+            Event::PostModel { out } => {
+                let Some(text) = &out.text else {
+                    return HookOutcome::Allow;
+                };
+                let Ok(mut lines) = self.lines.lock() else {
+                    return HookOutcome::Allow;
+                };
+                for line in text.lines() {
+                    let line = line.trim();
+                    if self.markers.iter().any(|m| line.starts_with(m.as_str()))
+                        && !lines.iter().any(|l| l == line)
+                    {
+                        lines.push(line.to_string());
+                    }
+                }
+            }
+            Event::TaskCompleted => {
+                let captured: Vec<String> = match self.lines.lock() {
+                    Ok(mut g) => std::mem::take(&mut *g),
+                    Err(_) => return HookOutcome::Allow,
+                };
+                if captured.is_empty() {
+                    return HookOutcome::Allow;
+                }
+                let entry = MemoryEntry::new(captured.join("\n"))
+                    .with_source(self.source.clone())
+                    .with_tags(self.tags.clone());
+                let mem = self.memory.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = mem.write(entry).await {
+                        tracing::warn!(error = %e, "decision write failed");
+                    }
+                });
+            }
+            _ => {}
+        }
+        HookOutcome::Allow
+    }
+}
+
 /// Smarter alternative to [`MemoryWriter`] — distil the session's assistant
 /// turns into 1..=`max_facts` atomic durable facts using a cheap
 /// "synthesizer" model, instead of persisting the verbatim final answer.
@@ -683,6 +784,61 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].content, "final answer X");
         assert_eq!(stored[0].source.as_deref(), Some("test-app"));
+    }
+
+    #[tokio::test]
+    async fn decision_writer_captures_marker_lines_only() {
+        let mem = Arc::new(VecMemory::default());
+        let w = DecisionWriter::new(mem.clone()).with_source("ops");
+        let mut world = harness_context::default_world(std::env::temp_dir().join(format!(
+            "harness-dw-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        )));
+
+        let turn1 = ModelOutput {
+            text: Some("Investigating the queue.\nDECISION: raise db_pool_size to 25.".into()),
+            ..Default::default()
+        };
+        let turn2 = ModelOutput {
+            text: Some("DECISION: raise db_pool_size to 25.\nAll done, closing out.".into()),
+            ..Default::default()
+        };
+        let _ = w.fire(&Event::PostModel { out: &turn1 }, &mut world);
+        let _ = w.fire(&Event::PostModel { out: &turn2 }, &mut world);
+        let _ = w.fire(&Event::TaskCompleted, &mut world);
+
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let stored = mem.store.lock().unwrap().clone();
+        assert_eq!(stored.len(), 1);
+        // Dedup: the repeated line is stored once; prose is not stored.
+        assert_eq!(stored[0].content, "DECISION: raise db_pool_size to 25.");
+        assert!(stored[0].tags.contains(&"decision".to_string()));
+    }
+
+    #[tokio::test]
+    async fn decision_writer_writes_nothing_without_markers() {
+        let mem = Arc::new(VecMemory::default());
+        let w = DecisionWriter::new(mem.clone());
+        let mut world = harness_context::default_world(std::env::temp_dir().join(format!(
+            "harness-dw-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        )));
+
+        let out = ModelOutput {
+            text: Some("Here are three fun facts about otters.".into()),
+            ..Default::default()
+        };
+        let _ = w.fire(&Event::PostModel { out: &out }, &mut world);
+        let _ = w.fire(&Event::TaskCompleted, &mut world);
+
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        assert!(mem.store.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
