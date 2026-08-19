@@ -241,7 +241,7 @@ mod tests {
                 })
                 .filter(|(hits, _)| *hits > 0)
                 .collect();
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_by_key(|s| std::cmp::Reverse(s.0));
             Ok(scored.into_iter().take(k).map(|(_, e)| e.clone()).collect())
         }
         async fn write(&self, entry: MemoryEntry) -> Result<(), MemoryError> {
