@@ -236,7 +236,7 @@ async fn list_notes(args: Value, _w: &mut World) -> Result<ToolResult, ToolError
         })
         .filter(|n| since.is_none_or(|s| n.saved_at >= s))
         .collect();
-    hits.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    hits.sort_by_key(|n| std::cmp::Reverse(n.saved_at));
     hits.truncate(limit);
 
     Ok(ToolResult {
