@@ -59,6 +59,11 @@ pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cached_input_tokens: u32,
+    /// Tokens written into a provider prompt cache on this call — billed at a
+    /// premium (Anthropic: 1.25x) to make later reads cheap. Zero on providers
+    /// that cache automatically without a write surcharge.
+    #[serde(default)]
+    pub cache_write_input_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

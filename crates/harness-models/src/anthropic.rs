@@ -107,15 +107,17 @@ struct SystemBlock {
 }
 
 /// `{"type": "ephemeral"}` — Anthropic's ~5-minute prompt cache.
-#[derive(Debug, Serialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct CacheControl {
     #[serde(rename = "type")]
-    kind: &'static str,
+    kind: String,
 }
 
 impl CacheControl {
     fn ephemeral() -> Self {
-        Self { kind: "ephemeral" }
+        Self {
+            kind: "ephemeral".into(),
+        }
     }
 }
 
@@ -130,15 +132,21 @@ struct AnthropicMessage {
 enum AnthropicBlock {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
     ToolUse {
         id: String,
         name: String,
         input: JsonValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
     ToolResult {
         tool_use_id: String,
         content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
     /// Extended thinking block. Required to be echoed back verbatim to the API
     /// (with signature) on subsequent calls during a thinking conversation.
@@ -148,12 +156,12 @@ enum AnthropicBlock {
         signature: Option<String>,
     },
     /// Redacted thinking — content opaque, must still be passed through.
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
     /// Inline image (vision). `{"type":"image","source":{"type":"base64",...}}`.
     Image {
         source: AnthropicImageSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
 }
 
@@ -206,7 +214,9 @@ struct AnthropicUsage {
 #[async_trait]
 impl Model for AnthropicNative {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
-        let (system, messages) = build_messages(ctx);
+        let (system, mut messages) = build_messages(ctx);
+        // Second breakpoint: end of the conversation. See mark_history_breakpoint.
+        mark_history_breakpoint(&mut messages);
         // Anthropic has no native `response_format` field as of Dec 2025, and
         // their `tool_choice` forced-tool trick conflicts with real
         // tool-using loops (forcing one tool blocks the model from calling
@@ -288,8 +298,10 @@ impl Model for AnthropicNative {
         let mut reasoning = String::new();
         for b in parsed.content {
             match b {
-                AnthropicBlock::Text { text: t } => text.push_str(&t),
-                AnthropicBlock::ToolUse { id, name, input } => {
+                AnthropicBlock::Text { text: t, .. } => text.push_str(&t),
+                AnthropicBlock::ToolUse {
+                    id, name, input, ..
+                } => {
                     tool_calls.push(ToolCall {
                         id,
                         name,
@@ -326,9 +338,6 @@ impl Model for AnthropicNative {
             }
         }
 
-        // `Usage` has no field for cache *writes* — the first turn's payment for
-        // the cheap ones after it. Without this the breakpoint's effect is only
-        // half visible: reads show up, the cost that bought them does not.
         if parsed.usage.cache_creation_input_tokens > 0 || parsed.usage.cache_read_input_tokens > 0
         {
             tracing::debug!(
@@ -360,6 +369,7 @@ impl Model for AnthropicNative {
                 input_tokens: parsed.usage.input_tokens,
                 output_tokens: parsed.usage.output_tokens,
                 cached_input_tokens: parsed.usage.cache_read_input_tokens,
+                cache_write_input_tokens: parsed.usage.cache_creation_input_tokens,
             },
             stop_reason,
             reasoning: if reasoning.is_empty() {
@@ -462,7 +472,10 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
             match b {
                 Block::Text(s) => {
                     if !s.is_empty() {
-                        blocks.push(AnthropicBlock::Text { text: s.clone() });
+                        blocks.push(AnthropicBlock::Text {
+                            text: s.clone(),
+                            cache_control: None,
+                        });
                     }
                 }
                 Block::ToolCall {
@@ -474,6 +487,7 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                         id: call_id.clone(),
                         name: name.clone(),
                         input: args.clone(),
+                        cache_control: None,
                     });
                 }
                 Block::ToolResult { call_id, content } => {
@@ -484,6 +498,7 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                     blocks.push(AnthropicBlock::ToolResult {
                         tool_use_id: call_id.clone(),
                         content: s,
+                        cache_control: None,
                     });
                 }
                 Block::Image { media_type, base64 } => {
@@ -493,6 +508,7 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                             media_type: media_type.clone(),
                             data: base64.clone(),
                         },
+                        cache_control: None,
                     });
                 }
                 Block::FileRef { path, excerpt, .. } => {
@@ -500,11 +516,15 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                     if let Some(e) = excerpt {
                         s.push_str(e);
                     }
-                    blocks.push(AnthropicBlock::Text { text: s });
+                    blocks.push(AnthropicBlock::Text {
+                        text: s,
+                        cache_control: None,
+                    });
                 }
                 Block::Skill { name, body } => {
                     blocks.push(AnthropicBlock::Text {
                         text: format!("[skill:{name}]\n{body}"),
+                        cache_control: None,
                     });
                 }
                 Block::Feedback(signals) => {
@@ -515,6 +535,7 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
                                 s.origin,
                                 s.agent_hint.as_deref().unwrap_or(&s.message)
                             ),
+                            cache_control: None,
                         });
                     }
                 }
@@ -578,11 +599,42 @@ fn build_messages(ctx: &Context) -> (Option<String>, Vec<AnthropicMessage>) {
             role: "user".into(),
             content: vec![AnthropicBlock::Text {
                 text: ctx.task.description.clone(),
+                cache_control: None,
             }],
         });
     }
 
     (system, out)
+}
+
+/// Mark the last cache-capable block of the conversation as the end of the
+/// cacheable prefix — the second breakpoint, after the system/tools one.
+///
+/// An agent loop appends to its history and resends it whole; without this
+/// breakpoint every iteration re-reads the entire conversation at full price,
+/// and after a few tool calls the history dwarfs the static prefix. Marking
+/// the final block makes this turn's request next turn's cache hit: Anthropic
+/// matches the longest previously-cached prefix, so only the newly appended
+/// blocks are paid at write price.
+///
+/// Thinking blocks cannot carry `cache_control`, so walk backwards to the
+/// nearest block that can.
+fn mark_history_breakpoint(messages: &mut [AnthropicMessage]) {
+    for msg in messages.iter_mut().rev() {
+        for block in msg.content.iter_mut().rev() {
+            let slot = match block {
+                AnthropicBlock::Text { cache_control, .. }
+                | AnthropicBlock::ToolUse { cache_control, .. }
+                | AnthropicBlock::ToolResult { cache_control, .. }
+                | AnthropicBlock::Image { cache_control, .. } => cache_control,
+                AnthropicBlock::Thinking { .. } | AnthropicBlock::RedactedThinking { .. } => {
+                    continue;
+                }
+            };
+            *slot = Some(CacheControl::ephemeral());
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -591,7 +643,7 @@ mod tests {
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
 
-    fn empty_ctx() -> Context {
+    pub(super) fn empty_ctx() -> Context {
         Context {
             system: vec![Block::Text("be helpful".into())],
             guides: vec![Block::Text("be terse".into())],
@@ -615,7 +667,7 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].role, "user");
         match &msgs[0].content[0] {
-            AnthropicBlock::Text { text } => assert_eq!(text, "do the thing"),
+            AnthropicBlock::Text { text, .. } => assert_eq!(text, "do the thing"),
             other => panic!("unexpected block: {other:?}"),
         }
     }
@@ -687,10 +739,9 @@ mod tests {
             "thinking block missing in echo: {:#?}",
             assistant.content
         );
-        let has_text = assistant
-            .content
-            .iter()
-            .any(|b| matches!(b, AnthropicBlock::Text { text } if text.contains("therefore Y")));
+        let has_text = assistant.content.iter().any(
+            |b| matches!(b, AnthropicBlock::Text { text, .. } if text.contains("therefore Y")),
+        );
         assert!(has_text);
     }
 
@@ -717,7 +768,9 @@ mod tests {
 
 #[cfg(test)]
 mod cache_tests {
+    use super::tests::empty_ctx;
     use super::*;
+    use harness_core::{Block, Turn, TurnRole};
 
     fn tool(name: &str) -> AnthropicTool {
         AnthropicTool {
@@ -782,5 +835,100 @@ mod cache_tests {
     fn empty_system_produces_no_block() {
         assert!(system_blocks(None, true).is_empty());
         assert!(system_blocks(Some("   ".into()), true).is_empty());
+    }
+
+    /// Count blocks carrying a breakpoint across all messages.
+    fn marked_blocks(msgs: &[AnthropicMessage]) -> usize {
+        let v = serde_json::to_value(msgs).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["content"].as_array().unwrap())
+            .filter(|b| b.get("cache_control").is_some())
+            .count()
+    }
+
+    /// The history breakpoint lands on the final block of the final message —
+    /// exactly one mark, so this turn's whole request becomes next turn's
+    /// cached prefix.
+    #[test]
+    fn the_last_history_block_carries_the_breakpoint() {
+        let mut ctx = empty_ctx();
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("read it".into())],
+        });
+        ctx.history.push(Turn {
+            role: TurnRole::Assistant,
+            blocks: vec![Block::ToolCall {
+                call_id: "c1".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({"path": "x"}),
+            }],
+        });
+        ctx.history.push(Turn {
+            role: TurnRole::Tool,
+            blocks: vec![Block::ToolResult {
+                call_id: "c1".into(),
+                content: serde_json::json!("hello"),
+            }],
+        });
+        let (_system, mut msgs) = build_messages(&ctx);
+        mark_history_breakpoint(&mut msgs);
+
+        assert_eq!(marked_blocks(&msgs), 1, "exactly one history breakpoint");
+        let v = serde_json::to_value(&msgs).unwrap();
+        let last = v.as_array().unwrap().last().unwrap()["content"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(last["cache_control"]["type"], "ephemeral", "{v}");
+    }
+
+    /// Thinking blocks cannot carry `cache_control`; when the conversation ends
+    /// in one, the mark walks back to the nearest block that can.
+    #[test]
+    fn history_breakpoint_skips_a_thinking_tail() {
+        let mut msgs = vec![AnthropicMessage {
+            role: "assistant".into(),
+            content: vec![
+                AnthropicBlock::Text {
+                    text: "so far".into(),
+                    cache_control: None,
+                },
+                AnthropicBlock::Thinking {
+                    thinking: "hmm".into(),
+                    signature: None,
+                },
+            ],
+        }];
+        mark_history_breakpoint(&mut msgs);
+
+        let v = serde_json::to_value(&msgs).unwrap();
+        assert!(
+            v[0]["content"][1].get("cache_control").is_none(),
+            "thinking must stay unmarked: {v}"
+        );
+        assert_eq!(
+            v[0]["content"][0]["cache_control"]["type"], "ephemeral",
+            "{v}"
+        );
+    }
+
+    /// A conversation with nothing markable (all thinking) must not panic and
+    /// must not mark anything.
+    #[test]
+    fn history_breakpoint_handles_unmarkable_history() {
+        let mut msgs = vec![AnthropicMessage {
+            role: "assistant".into(),
+            content: vec![AnthropicBlock::RedactedThinking { data: "x".into() }],
+        }];
+        mark_history_breakpoint(&mut msgs);
+        assert_eq!(marked_blocks(&msgs), 0);
+
+        let mut empty: Vec<AnthropicMessage> = vec![];
+        mark_history_breakpoint(&mut empty);
     }
 }

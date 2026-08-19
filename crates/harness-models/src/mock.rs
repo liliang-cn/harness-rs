@@ -202,6 +202,7 @@ impl Model for MockModel {
                 input_tokens: resp.input_tokens,
                 output_tokens: resp.output_tokens,
                 cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
             },
             reasoning: resp.reasoning.clone(),
             images: resp.images.clone(),

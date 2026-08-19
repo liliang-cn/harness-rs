@@ -662,6 +662,7 @@ impl Model for OpenAiCompat {
                 input_tokens: parsed.usage.prompt_tokens,
                 output_tokens: parsed.usage.completion_tokens,
                 cached_input_tokens: parsed.usage.cached(),
+                cache_write_input_tokens: 0,
             },
             stop_reason,
             reasoning,
@@ -857,6 +858,7 @@ fn decode_delta(
             input_tokens: field("prompt_tokens"),
             output_tokens: field("completion_tokens"),
             cached_input_tokens: cached,
+            cache_write_input_tokens: 0,
         };
         if usage.input_tokens > 0 || usage.output_tokens > 0 {
             return vec![ModelDelta::Usage(usage)];
@@ -942,6 +944,7 @@ fn decode_delta(
                 .and_then(|x| x.as_u64())
                 .unwrap_or(0) as u32,
             cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
         };
         return vec![ModelDelta::Usage(usage)];
     }

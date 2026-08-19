@@ -80,6 +80,7 @@ struct RunTotals {
     input_tokens: u64,
     output_tokens: u64,
     cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
     model_calls: u64,
     tool_calls: u64,
     tool_failures: u64,
@@ -205,6 +206,7 @@ impl Hook for TelemetryHook {
                     t.input_tokens += out.usage.input_tokens as u64;
                     t.output_tokens += out.usage.output_tokens as u64;
                     t.cached_input_tokens += out.usage.cached_input_tokens as u64;
+                    t.cache_write_input_tokens += out.usage.cache_write_input_tokens as u64;
                 }
                 let stop = format!("{:?}", out.stop_reason);
                 tracing::info!(
@@ -215,11 +217,13 @@ impl Hook for TelemetryHook {
                     "gen_ai.usage.input_tokens" = out.usage.input_tokens,
                     "gen_ai.usage.output_tokens" = out.usage.output_tokens,
                     "gen_ai.usage.cached_input_tokens" = out.usage.cached_input_tokens,
+                    "gen_ai.usage.cache_write_input_tokens" = out.usage.cache_write_input_tokens,
                     "gen_ai.response.finish_reasons" = %stop,
                     // pre-convention aliases:
                     input_tokens = out.usage.input_tokens,
                     output_tokens = out.usage.output_tokens,
                     cached_input_tokens = out.usage.cached_input_tokens,
+                    cache_write_input_tokens = out.usage.cache_write_input_tokens,
                     tool_calls = out.tool_calls.len(),
                     stop = %stop,
                     duration_ms = waited,
@@ -318,6 +322,7 @@ impl Hook for TelemetryHook {
                         "gen_ai.usage.input_tokens" = t.input_tokens,
                         "gen_ai.usage.output_tokens" = t.output_tokens,
                         "gen_ai.usage.cached_input_tokens" = t.cached_input_tokens,
+                        "gen_ai.usage.cache_write_input_tokens" = t.cache_write_input_tokens,
                         total_tokens = t.input_tokens + t.output_tokens,
                         model_calls = t.model_calls,
                         tool_calls = t.tool_calls,

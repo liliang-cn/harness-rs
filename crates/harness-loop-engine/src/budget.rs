@@ -147,6 +147,7 @@ mod tests {
             input_tokens: input,
             output_tokens: output,
             cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
         }
     }
 
