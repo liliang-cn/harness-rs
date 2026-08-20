@@ -1912,6 +1912,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-rs-tools-datetime"
+version = "0.0.49"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "harness-rs-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "harness-rs-tools-docs"
 version = "0.0.49"
 dependencies = [
