@@ -458,6 +458,17 @@ pub struct AgentLoop<M: Model> {
     /// System instruction injected into every run's `Context.system` (unless the
     /// built context already carries its own). Set via [`with_system`](Self::with_system).
     pub system: Vec<Block>,
+    /// Named auxiliary models for side tasks — compaction, memory synthesis,
+    /// judging, subagents — so the main conversation stays on one model (and
+    /// keeps its provider prompt-cache prefix intact) while cheap or specialist
+    /// work goes elsewhere. Populated via [`with_model_role`](Self::with_model_role),
+    /// read via [`model_for`](Self::model_for). An unregistered role means
+    /// "use the main model" — components fall back rather than fail.
+    pub model_roles: std::collections::HashMap<String, Arc<dyn Model>>,
+    /// True once the host installed its own compactor via
+    /// [`with_compactor`](Self::with_compactor). Guards the `"compactor"`
+    /// model-role convenience from overwriting an explicit choice.
+    pub compactor_custom: bool,
 }
 
 impl AgentLoop<harness_core::DynModel> {
@@ -502,7 +513,45 @@ impl<M: Model> AgentLoop<M> {
             acceptance: vec![Arc::new(acceptance::NonEmptyAnswer)],
             acceptance_retries: 1,
             system: Vec::new(),
+            model_roles: std::collections::HashMap::new(),
+            compactor_custom: false,
         }
+    }
+
+    /// Register an auxiliary model under a role name — the loop's seam for
+    /// "side tasks don't have to run on the main model".
+    ///
+    /// The main conversation stays pinned to one model, which keeps its
+    /// provider prompt-cache prefix byte-stable; compaction summaries, memory
+    /// synthesis, judging, and subagents can go to a cheaper or specialist
+    /// model instead. Components read roles via [`model_for`](Self::model_for)
+    /// and fall back to the main model when a role is unregistered.
+    ///
+    /// One role is wired automatically: registering `"compactor"` upgrades the
+    /// default structural compactor to a [`ModelBackedCompactor`] on that
+    /// model — unless the host already installed its own via
+    /// [`with_compactor`](Self::with_compactor), which always wins regardless
+    /// of call order.
+    ///
+    /// ```ignore
+    /// let agent = AgentLoop::boxed(main)
+    ///     .with_model_role("compactor", cheap.clone())
+    ///     .with_model_role("judge", strong);
+    /// ```
+    pub fn with_model_role(mut self, role: impl Into<String>, model: Arc<dyn Model>) -> Self {
+        let role = role.into();
+        if role == "compactor" && !self.compactor_custom {
+            self.compactor = Arc::new(harness_compactor::ModelBackedCompactor::new(model.clone()));
+        }
+        self.model_roles.insert(role, model);
+        self
+    }
+
+    /// Look up an auxiliary model by role. `None` means "no model registered
+    /// for this role — use the main model"; callers fall back rather than fail,
+    /// so wiring stays optional everywhere.
+    pub fn model_for(&self, role: &str) -> Option<Arc<dyn Model>> {
+        self.model_roles.get(role).cloned()
     }
 
     /// Set a system instruction applied to every run (into `Context.system`) —
@@ -565,6 +614,9 @@ impl<M: Model> AgentLoop<M> {
 
     pub fn with_compactor(mut self, c: Arc<dyn Compactor>) -> Self {
         self.compactor = c;
+        // An explicit compactor always wins over the "compactor" model-role
+        // convenience, in either call order.
+        self.compactor_custom = true;
         self
     }
 

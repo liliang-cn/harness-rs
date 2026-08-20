@@ -7,6 +7,18 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Added
 
+- **Named model roles** — `AgentLoop::with_model_role(name, model)` /
+  `model_for(name)`: register auxiliary models for side tasks (compaction,
+  memory synthesis, judging, subagents) so the main conversation stays pinned
+  to one model and keeps its provider prompt-cache prefix byte-stable while
+  cheap or specialist work goes elsewhere. Unregistered roles mean "use the
+  main model" — components fall back rather than fail. Registering
+  `"compactor"` auto-upgrades the default structural compactor to a
+  `ModelBackedCompactor` on that model; an explicit `with_compactor` always
+  wins regardless of call order. Formalizes what `MemorySynthesizer`,
+  `LearningConfig.review_model` and superleo's compact-model env were each
+  doing ad hoc.
+
 - **`harness-rs-tools-datetime`** — a deterministic (zero-LLM, zero-network)
   natural-language date/time resolver. Library layer `resolve(text, now)` is a
   pure function — `now` always comes from the caller, the result's timezone is
