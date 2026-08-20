@@ -1,0 +1,27 @@
+[package]
+name = "harness-rs-tools-datetime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Deterministic natural-language date/time resolver (`resolve_datetime`) for harness-rs agents: Chinese + English relative dates, clock times and recurrences. Zero LLM, zero network — answers `unsupported` instead of guessing."
+
+keywords     = ["agent", "ai", "llm", "harness", "datetime"]
+categories   = ["asynchronous", "development-tools", "date-and-time"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_tools_datetime"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core = { workspace = true }
+async-trait  = { workspace = true }
+chrono       = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

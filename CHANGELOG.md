@@ -3,6 +3,25 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Added
+
+- **`harness-rs-tools-datetime`** — a deterministic (zero-LLM, zero-network)
+  natural-language date/time resolver. Library layer `resolve(text, now)` is a
+  pure function — `now` always comes from the caller, the result's timezone is
+  the offset `now` carries; tool layer registers as `resolve_datetime` (the
+  name superleo's evals already use). Rules cover Chinese + English relative
+  days (明天/大后天/3天后/in 2 weeks), weekdays (下周三/next Friday), calendar
+  dates (6月20号), clock times (下午3点半/8:20/at 3pm), relative durations
+  (半小时后/in 30 minutes), recurrences (每天/每周一三五/每月15号/每年3月8日/
+  工作日/every Monday) and a documented convention table (下班前→18:00,
+  睡前→22:00). Anything else — bare ambiguous hours (三点), interval
+  recurrence (每隔20分钟), time ranges, 周末/节假日 policies — returns
+  "unsupported" instead of a guess, so the caller can decide whether an LLM
+  fallback is worth it. Test corpus partly ported from SmartAlarm's Chinese
+  voice-alarm parser eval.
+
 ## 0.0.49
 
 ### Added
