@@ -275,7 +275,11 @@ On the native Gemini provider grounding is on by default in the main channel
 
 ## Status
 
-Latest: **v0.0.49** — the conversation is now part of the Anthropic prompt-cache
+Latest: **v0.0.50** — named model roles (`with_model_role`: route compaction,
+synthesis, judging and subagents to a cheaper model while the main conversation
+keeps its prompt-cache prefix) and `harness-rs-tools-datetime`, a deterministic
+Chinese/English natural-language date resolver (105 table-driven cases; refuses
+to guess). **v0.0.49** — the conversation is now part of the Anthropic prompt-cache
 prefix (second breakpoint on the final message; cache writes surfaced as
 `Usage.cache_write_input_tokens`), and `DecisionWriter` captures `DECISION:` lines
 into memory deterministically — zero model calls. **v0.0.44**: `web_search` prefers
