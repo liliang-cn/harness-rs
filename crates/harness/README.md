@@ -78,4 +78,4 @@ Full design rationale: **DESIGN.md** in the [workspace repo](https://github.com/
 
 ## License
 
-MIT OR Apache-2.0.
+MIT.

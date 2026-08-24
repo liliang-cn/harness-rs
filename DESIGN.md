@@ -882,7 +882,7 @@ harness trace ./session.jsonl            # 回放
 
 - crate 命名前缀: `harness-*`
 - 顶层 facade crate (re-export): `harness`
-- 许可: 暂定 Apache-2.0 OR MIT (Rust 社区默认)
+- 许可: MIT
 - MSRV: stable 最新 - 2（约 18 个月窗口）
 
 ---
