@@ -104,4 +104,4 @@ left to the deployment — the traits (`Authenticator`, `SessionStore`,
 
 ## License
 
-MIT OR Apache-2.0
+MIT

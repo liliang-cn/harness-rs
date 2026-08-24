@@ -49,4 +49,4 @@ live system is not acceptable.
 
 ## License
 
-MIT OR Apache-2.0
+MIT
