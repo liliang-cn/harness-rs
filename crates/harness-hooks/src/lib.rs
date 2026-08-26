@@ -5,6 +5,7 @@
 //! Long async work belongs in a sensor or tool, not a hook.
 
 pub mod audit;
+pub mod broadcast;
 pub use audit::{
     ACTOR_KEY, AuditHook, AuditRecord, AuditSink, ChainVerification, ChainedRecord, HashChainSink,
     JsonlAuditSink, REQUEST_KEY, SESSION_KEY, new_request_id, verify_chain,
