@@ -3,6 +3,26 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.51
+
+### Added
+
+- **`BroadcastHook` (`harness-rs-hooks::broadcast`) — the run's lifecycle as a live,
+  multi-subscriber feed.** `AuditHook` answers "what happened", durably; this answers "what is
+  happening", now, to anyone listening — a web UI, a monitor, an audit mirror, each with its own
+  `subscribe()`. Fifteen event kinds are projected to owned, serializable `BroadcastEvent`s
+  (`seq` + clock ms + session/actor + JSON payload): every model return (`PostModel` with
+  text/reasoning/tool_calls/usage/stop_reason), streaming `ModelTokenDelta`s, `Pre/PostToolUse`,
+  compaction, budget warnings, subagent lifecycle, errors, heartbeats. Three constraints live in
+  the type: the borrowed `Event<'a>` cannot leave the loop, so projection is owned; `send` is
+  non-blocking and a slow subscriber lags *alone* (`Lagged(n)`, countable `seq` gaps) while the
+  loop loses nothing; that lag semantics makes it a best-effort live feed — compliance stays on
+  `AuditHook`. Payloads are bounded: tool results broadcast as shaped by the ceiling/spill guard,
+  images omitted. `without_deltas()` drops per-token noise for turn-level consumers.
+
+- **Spec: plugin protocol v0** — tools and hooks from an external process (`docs/`), and the
+  README rewritten from 293 lines to 50 (MIT only).
+
 ## 0.0.50
 
 ### Added
