@@ -42,8 +42,8 @@
 //! should call [`JobTable::kill_all_owned`].
 
 use async_trait::async_trait;
-use harness_core::{Hook, HookOutcome, Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use harness_core::Event;
+use harness_core::{Hook, HookOutcome, Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -129,7 +129,11 @@ impl Job {
     }
 
     fn state(&self) -> &'static str {
-        if self.exit.is_some() { "exited" } else { "running" }
+        if self.exit.is_some() {
+            "exited"
+        } else {
+            "running"
+        }
     }
 }
 
@@ -186,7 +190,9 @@ impl JobTable {
         // Pump both streams into the one log file, interleaved by chunk.
         let mut pumps = Vec::new();
         if let Some(out) = child.stdout.take() {
-            let f = log.try_clone().map_err(|e| ToolError::Exec(e.to_string()))?;
+            let f = log
+                .try_clone()
+                .map_err(|e| ToolError::Exec(e.to_string()))?;
             pumps.push(tokio::spawn(pump(out, f)));
         }
         if let Some(err) = child.stderr.take() {
@@ -345,7 +351,9 @@ impl JobTable {
     /// Conversation closed: every `session`-scoped job of that conversation
     /// dies. (Run-scoped ones are already gone.)
     pub fn reap_session(&self, session_id: &str) {
-        self.reap_where(|j| j.scope == JobScope::Session && j.session.as_deref() == Some(session_id));
+        self.reap_where(|j| {
+            j.scope == JobScope::Session && j.session.as_deref() == Some(session_id)
+        });
     }
 
     /// Host is shutting down: everything non-detached dies.
@@ -365,9 +373,7 @@ impl JobTable {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                table.reap_where(|j| {
-                    j.scope == JobScope::Session && j.last_touch.elapsed() > ttl
-                });
+                table.reap_where(|j| j.scope == JobScope::Session && j.last_touch.elapsed() > ttl);
                 table
                     .jobs
                     .lock()
@@ -423,7 +429,11 @@ async fn terminate(child: Option<tokio::process::Child>, pid: u32) -> i32 {
         Err(_) => {
             signal_group(pid, Sig::Kill);
             let _ = child.start_kill(); // non-unix fallback; no-op if already dead
-            child.wait().await.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1)
+            child
+                .wait()
+                .await
+                .map(|s| s.code().unwrap_or(-1))
+                .unwrap_or(-1)
         }
     }
 }
@@ -536,9 +546,11 @@ impl Tool for ShellSpawn {
         ToolRisk::Destructive
     }
     async fn invoke(&self, args: Value, world: &mut World) -> Result<ToolResult, ToolError> {
-        let req: SpawnRequest = serde_json::from_value(args).map_err(|e| {
-            ToolError::InvalidArgs { name: "shell_spawn".into(), reason: e.to_string() }
-        })?;
+        let req: SpawnRequest =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
+                name: "shell_spawn".into(),
+                reason: e.to_string(),
+            })?;
         Ok(spawn_to_result(self.table.spawn(&req, world).await?))
     }
 }
@@ -602,7 +614,11 @@ impl Tool for ShellJobStatus {
     async fn invoke(&self, args: Value, world: &mut World) -> Result<ToolResult, ToolError> {
         match args.get("id").and_then(Value::as_u64) {
             Some(id) => match self.table.status(id, world) {
-                Some(v) => Ok(ToolResult { ok: true, content: v, trace: None }),
+                Some(v) => Ok(ToolResult {
+                    ok: true,
+                    content: v,
+                    trace: None,
+                }),
                 None => Ok(ToolResult {
                     ok: false,
                     content: json!({ "error": format!("no job {id}") }),
@@ -656,11 +672,19 @@ impl Tool for ShellJobKill {
         ToolRisk::Idempotent
     }
     async fn invoke(&self, args: Value, world: &mut World) -> Result<ToolResult, ToolError> {
-        let id = args.get("id").and_then(Value::as_u64).ok_or_else(|| {
-            ToolError::InvalidArgs { name: "shell_job_kill".into(), reason: "id required".into() }
-        })?;
+        let id = args
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| ToolError::InvalidArgs {
+                name: "shell_job_kill".into(),
+                reason: "id required".into(),
+            })?;
         match self.table.kill(id, world).await {
-            Some(v) => Ok(ToolResult { ok: true, content: v, trace: None }),
+            Some(v) => Ok(ToolResult {
+                ok: true,
+                content: v,
+                trace: None,
+            }),
             None => Ok(ToolResult {
                 ok: false,
                 content: json!({ "error": format!("no job {id}") }),

@@ -2,7 +2,7 @@
 //! process groups are asserted.
 
 use harness_core::{Event, Hook, SessionRef, Tool, World};
-use harness_tools_shell::background::{JobScope, JobTable, Spawned, SpawnRequest};
+use harness_tools_shell::background::{JobScope, JobTable, SpawnRequest, Spawned};
 use harness_tools_shell::{JobReaperHook, ShellJobKill, ShellJobStatus, ShellSpawn};
 use serde_json::json;
 use std::sync::Arc;
@@ -55,7 +55,11 @@ async fn quick_command_returns_like_exec_and_leaves_no_job() {
 async fn long_command_becomes_a_job_with_cursor_based_output() {
     let table = Arc::new(JobTable::new());
     let mut w = world();
-    let (id, pid) = match table.spawn(&sh("echo first; sleep 30"), &mut w).await.unwrap() {
+    let (id, pid) = match table
+        .spawn(&sh("echo first; sleep 30"), &mut w)
+        .await
+        .unwrap()
+    {
         Spawned::Running { id, pid, preview } => {
             // Early output is visible at spawn time…
             assert!(preview.contains("first"), "preview: {preview:?}");
@@ -84,30 +88,37 @@ async fn kill_takes_down_grandchildren_via_the_process_group() {
     // only the direct child would leave the sleep running.
     let table = Arc::new(JobTable::new());
     let mut w = world();
-    let Spawned::Running { id, pid, .. } =
-        table.spawn(&sh("sleep 30 & echo up; wait"), &mut w).await.unwrap()
+    let Spawned::Running { id, pid, .. } = table
+        .spawn(&sh("sleep 30 & echo up; wait"), &mut w)
+        .await
+        .unwrap()
     else {
         panic!("job should be running")
     };
     assert!(group_alive(pid));
     table.kill(id, &w).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!group_alive(pid), "the forked sleep must die with the group");
+    assert!(
+        !group_alive(pid),
+        "the forked sleep must die with the group"
+    );
 }
 
 #[tokio::test]
 async fn reaper_kills_run_scope_and_spares_session_scope() {
     let table = Arc::new(JobTable::new());
     let mut w = world();
-    let Spawned::Running { pid: run_pid, .. } =
-        table.spawn(&sh("sleep 30"), &mut w).await.unwrap()
+    let Spawned::Running { pid: run_pid, .. } = table.spawn(&sh("sleep 30"), &mut w).await.unwrap()
     else {
         panic!()
     };
     let mut session_req = sh("sleep 30");
     session_req.scope = JobScope::Session;
-    let Spawned::Running { id: session_id, pid: session_pid, .. } =
-        table.spawn(&session_req, &mut w).await.unwrap()
+    let Spawned::Running {
+        id: session_id,
+        pid: session_pid,
+        ..
+    } = table.spawn(&session_req, &mut w).await.unwrap()
     else {
         panic!()
     };
@@ -154,8 +165,14 @@ async fn jobs_are_invisible_across_actors() {
         actor: "bob".into(),
         request: "r2".into(),
     });
-    assert!(table.status(id, &bob).is_none(), "bob must not see alice's job");
-    assert!(table.kill(id, &bob).await.is_none(), "bob must not kill alice's job");
+    assert!(
+        table.status(id, &bob).is_none(),
+        "bob must not see alice's job"
+    );
+    assert!(
+        table.kill(id, &bob).await.is_none(),
+        "bob must not kill alice's job"
+    );
     assert!(table.list(&bob).is_empty());
 
     assert!(table.status(id, &alice).is_some());
@@ -171,7 +188,10 @@ async fn the_three_tools_round_trip() {
     let mut w = world();
 
     let r = spawn
-        .invoke(json!({"program": "sh", "args": ["-c", "echo up; sleep 30"]}), &mut w)
+        .invoke(
+            json!({"program": "sh", "args": ["-c", "echo up; sleep 30"]}),
+            &mut w,
+        )
         .await
         .unwrap();
     assert!(r.ok);
