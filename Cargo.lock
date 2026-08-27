@@ -1986,7 +1986,9 @@ name = "harness-rs-tools-shell"
 version = "0.0.51"
 dependencies = [
  "async-trait",
+ "harness-rs-context",
  "harness-rs-core",
+ "libc",
  "once_cell",
  "serde",
  "serde_json",
