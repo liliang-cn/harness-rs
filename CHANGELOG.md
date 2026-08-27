@@ -3,6 +3,28 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.52
+
+### Added
+
+- **Background jobs (`harness-rs-tools-shell::background`) — commands that outlive a tool
+  call.** `shell_exec` is spawn→wait→collect, which is the wrong shape for `go run main.go`: the
+  call blocks until the per-call deadline errors it out while the process lives on as an orphan.
+  Three tools over a host-shared `JobTable` fix that: `shell_spawn` returns a `job_id`
+  immediately (a ~2s grace window returns fast commands exec-style, no job created; output pumps
+  to `.harness/jobs/job-<id>.log` and the model sees only bounded slices), `shell_job_status`
+  reports running/exited plus *new* output since the last look (cursor-based), `shell_job_kill`
+  stops it. Lifecycle is tiered and enforced: **run**-scoped jobs (default) die when the run ends
+  (`JobReaperHook` on `SessionEnd`, which fires on Done/Stuck/BudgetExhausted alike, with
+  `kill_on_drop` backstopping error paths); **session**-scoped jobs survive turns and die on
+  `reap_session` or the idle-TTL sweeper (`spawn_ttl_sweeper`); **detached** jobs are let go on
+  purpose. Every job runs in its own process group and every kill is a group kill
+  (SIGTERM → SIGKILL) — killing only the direct child would leave `go run`'s forked binary
+  listening on the port. Jobs are stamped with the spawning actor from `World::session` and
+  invisible across actors; `*_for(actor)` variants serve HTTP surfaces that have no `World`.
+  Hosts with approval flows call `JobTable::spawn` directly and shape with `spawn_to_result`;
+  shutdown paths call `kill_all_owned`.
+
 ## 0.0.51
 
 ### Added

@@ -5,6 +5,13 @@
 //! - `ShellExec` — full subprocess. `Destructive` risk; surface explicitly.
 //!
 //! Both run via `world.runner` so they're trivially mockable in tests.
+//!
+//! For commands that do not exit — dev servers, watchers — see [`background`]:
+//! `shell_spawn` / `shell_job_status` / `shell_job_kill` over a shared
+//! [`background::JobTable`], with scoped, automatic cleanup.
+
+pub mod background;
+pub use background::{JobReaperHook, JobTable, ShellJobKill, ShellJobStatus, ShellSpawn};
 
 use async_trait::async_trait;
 use harness_core::{Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
