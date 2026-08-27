@@ -37,6 +37,20 @@ fn group_alive(pid: u32) -> bool {
     unsafe { libc::kill(-(pid as i32), 0) == 0 }
 }
 
+/// A killed group can linger briefly as zombies (a grandchild reparented to
+/// init counts as "existing" until init reaps it — reliably seen on Linux CI),
+/// so death is asserted by polling, never by a single immediate probe.
+#[cfg(unix)]
+async fn assert_group_dies(pid: u32, what: &str) {
+    for _ in 0..40 {
+        if !group_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what}: group {pid} still alive 2s after kill");
+}
+
 #[tokio::test]
 async fn quick_command_returns_like_exec_and_leaves_no_job() {
     let table = Arc::new(JobTable::new());
@@ -76,7 +90,7 @@ async fn long_command_becomes_a_job_with_cursor_based_output() {
     let killed = table.kill(id, &w).await.unwrap();
     assert_eq!(killed["state"], "killed");
     #[cfg(unix)]
-    assert!(!group_alive(pid), "group {pid} must be gone after kill");
+    assert_group_dies(pid, "after kill").await;
     // The entry survives as `exited` so a final look at the log still works.
     assert_eq!(table.status(id, &w).unwrap()["state"], "exited");
 }
@@ -97,11 +111,7 @@ async fn kill_takes_down_grandchildren_via_the_process_group() {
     };
     assert!(group_alive(pid));
     table.kill(id, &w).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        !group_alive(pid),
-        "the forked sleep must die with the group"
-    );
+    assert_group_dies(pid, "the forked sleep must die with the group").await;
 }
 
 #[tokio::test]
@@ -133,15 +143,14 @@ async fn reaper_kills_run_scope_and_spares_session_scope() {
     assert_eq!(jobs[0]["id"], session_id);
     #[cfg(unix)]
     {
-        assert!(!group_alive(run_pid), "run-scoped job must be reaped");
+        assert_group_dies(run_pid, "run-scoped job must be reaped").await;
         assert!(group_alive(session_pid), "session-scoped job must survive");
     }
 
     // Host shutdown ends the survivor too.
     table.kill_all_owned();
-    tokio::time::sleep(Duration::from_millis(500)).await;
     #[cfg(unix)]
-    assert!(!group_alive(session_pid));
+    assert_group_dies(session_pid, "kill_all_owned").await;
     let _ = (run_pid, session_pid);
 }
 
