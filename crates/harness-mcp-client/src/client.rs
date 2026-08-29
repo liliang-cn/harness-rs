@@ -52,13 +52,36 @@ impl McpClient {
             for a in &owned {
                 cmd.arg(a);
             }
+            // Giving up on the handshake must also end the server. Dropping the
+            // transport closes our end of the pipes, which a *well-behaved*
+            // stdio server treats as "shut down" — but the servers that time
+            // out here are precisely the ones not behaving, and one orphan is
+            // left behind on every attempt against a hung binary.
+            cmd.kill_on_drop(true);
+            // …and its own group, because an MCP server is very often launched
+            // through a wrapper (`npx`, `uv run`, a shell script). Killing the
+            // process we spawned would leave the one doing the work running.
+            #[cfg(unix)]
+            cmd.process_group(0);
         }))?;
+        // Kept for the timeout path below: once the transport is moved into
+        // `serve` there is no way back to the child.
+        let child_pid = transport.id();
         // The SDK's serve() waits on its own (long) schedule, so the bound is
         // ours to impose: a server that has not shaken hands by now is not
         // going to, and every second past that is a reply nobody is getting.
         let served = match timeout(t.init, ().serve(transport)).await {
             Ok(r) => r,
             Err(_) => {
+                // The dropped future takes `kill_on_drop` with it, but that
+                // signals only the direct child; the group is what actually
+                // stops a wrapper's work.
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
+                }
                 let why = diagnose_stdio(program, &owned, t).await;
                 return Err(anyhow::anyhow!(
                     "mcp init for `{program}` timed out after {:?}{why}",
@@ -204,7 +227,11 @@ async fn diagnose_stdio(program: &str, args: &[String], t: StdioTimeouts) -> Str
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // Its own process group, so the kill below can reach a wrapper's children.
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => return format!(" (running `{program}` again to find out why also failed: {e})"),
@@ -234,7 +261,19 @@ async fn diagnose_stdio(program: &str, args: &[String], t: StdioTimeouts) -> Str
     let status = match timeout(t.diagnose_exit, child.wait()).await {
         Ok(Ok(status)) => Some(status),
         _ => {
+            // A hanging server is usually a wrapper — `sh -c`, a launcher
+            // script, a package runner — and killing only the process we
+            // spawned leaves whatever it forked still running. Diagnosing a
+            // hang must not itself leak the hung process, so the whole group
+            // goes, and the child is reaped rather than left a zombie.
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
             let _ = child.start_kill();
+            let _ = child.wait().await;
             None
         }
     };
