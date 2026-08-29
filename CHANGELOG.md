@@ -3,6 +3,26 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.53
+
+### Added
+
+- **`ChatService::with_model_role` and `ChatService::with_hook` — the two things a *served*
+  conversation could not reach.** Both already existed on `AgentLoop`, and `ChatService` builds its
+  loop per request inside `build_agent`, so a serving host had no way in: registering a compactor
+  model or attaching `BroadcastHook` was possible for a one-shot agent and impossible for the
+  long-running chat that most wants them.
+
+  Roles are what keep a conversation's provider cache prefix byte-stable — every side call on the
+  main model moves it — and a served chat is exactly where a prefix is worth keeping. Hooks are how
+  `BroadcastHook` reaches a served turn at all: the streaming endpoint's own forward hook carries
+  assistant text and nothing else, so tool calls, compaction, budget warnings and errors had nowhere
+  to go.
+
+  Both are applied in `build_agent` alongside the audit and replay hooks the service already
+  installs. A hook registered here is shared across concurrent requests, so it must be cheap and
+  non-blocking.
+
 ## 0.0.52
 
 ### Added
