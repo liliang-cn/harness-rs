@@ -136,14 +136,37 @@ fn safe_split(history: &[Turn], want: usize) -> Option<usize> {
     if want == 0 || want >= history.len() {
         return None;
     }
-    if let Some(i) = (0..=want)
+    // Walk outward from the wanted point: back first, since keeping slightly
+    // more history costs nothing, then forward.
+    (0..=want)
         .rev()
-        .find(|&i| history[i].role == TurnRole::User)
+        .chain(want + 1..history.len())
         .filter(|&i| i > 0)
-    {
-        return Some(i);
+        .find(|&i| starts_an_exchange(&history[i]))
+}
+
+/// Whether the kept history may *begin* at this turn.
+///
+/// The providers' rule is that a turn requesting a tool must follow a user
+/// turn or a tool result. After a cut the first kept turn follows only the
+/// summary, so it may not be a tool request — and it may not be a tool
+/// *result* either, since the request that earned it was just dropped.
+/// Anything else is a fresh start: a user turn, or an assistant turn that only
+/// speaks.
+///
+/// Requiring a user turn here (as this first did) is too strict to be useful:
+/// an agent run has exactly one, at index 0, and index 0 cuts nothing — so
+/// every stage declined and compaction silently stopped compacting. That is
+/// the failure this predicate exists to avoid on both sides.
+fn starts_an_exchange(turn: &Turn) -> bool {
+    match turn.role {
+        TurnRole::User => true,
+        TurnRole::Assistant => !turn
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::ToolCall { .. })),
+        _ => false,
     }
-    (want + 1..history.len()).find(|&i| history[i].role == TurnRole::User)
 }
 
 impl ModelBackedCompactor {
@@ -597,20 +620,79 @@ mod tests {
     }
 
     #[test]
-    fn a_split_with_no_user_turn_to_land_on_is_declined() {
-        // Better to skip a compaction stage than to hand the provider a
-        // conversation it will refuse for the rest of the run.
+    fn a_split_with_nowhere_legal_to_land_is_declined() {
+        // Nothing here can begin a kept history: a tool result whose request
+        // was dropped, and a turn that requests a tool. Better to skip the
+        // stage than hand the provider a conversation it will refuse.
         let history = vec![
             Turn {
                 role: TurnRole::Assistant,
-                blocks: vec![Block::Text("a".into())],
+                blocks: vec![Block::ToolCall {
+                    call_id: "c0".into(),
+                    name: "t".into(),
+                    args: serde_json::json!({}),
+                }],
+            },
+            Turn {
+                role: TurnRole::Tool,
+                blocks: vec![Block::ToolResult {
+                    call_id: "c0".into(),
+                    content: serde_json::json!({}),
+                }],
             },
             Turn {
                 role: TurnRole::Assistant,
-                blocks: vec![Block::Text("b".into())],
+                blocks: vec![Block::ToolCall {
+                    call_id: "c1".into(),
+                    name: "t".into(),
+                    args: serde_json::json!({}),
+                }],
             },
         ];
-        assert_eq!(safe_split(&history, 1), None);
+        assert_eq!(safe_split(&history, 2), None);
+    }
+
+    /// An agent run has exactly ONE user turn — the task — and it sits at
+    /// index 0, where a cut would drop nothing. Requiring a user turn to land
+    /// on therefore made every stage decline, and compaction silently stopped
+    /// compacting on exactly the long runs it exists for. An assistant turn
+    /// that only speaks is a legal place to begin.
+    #[test]
+    fn a_run_with_one_user_turn_can_still_be_compacted() {
+        let mut ctx = mk_ctx(0);
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("the task".into())],
+        });
+        for i in 0..8 {
+            ctx.history.push(Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::ToolCall {
+                    call_id: format!("c{i}"),
+                    name: "read_file".into(),
+                    args: serde_json::json!({}),
+                }],
+            });
+            ctx.history.push(Turn {
+                role: TurnRole::Tool,
+                blocks: vec![Block::ToolResult {
+                    call_id: format!("c{i}"),
+                    content: serde_json::json!({ "ok": true }),
+                }],
+            });
+            ctx.history.push(Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::Text(format!("step {i} done"))],
+            });
+        }
+        let before = ctx.history.len();
+        microcompact_old(&mut ctx);
+        assert!(
+            ctx.history.len() < before,
+            "compaction did nothing: {before} turns in, {} out",
+            ctx.history.len()
+        );
+        assert_history_is_legal(&ctx.history, "single-user-turn run");
     }
 
     fn mk_ctx(turns: usize) -> Context {

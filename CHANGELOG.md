@@ -3,6 +3,22 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.57
+
+### Fixed
+
+- **Compaction stopped compacting.** 0.0.55 taught every stage to cut only where a cut is legal, and
+  defined legal as "immediately before a user turn". An agent run has exactly one user turn — the
+  task — and it sits at index 0, where a cut drops nothing. So on the runs that need compaction most,
+  four of the five stages found nowhere to land and declined, and the context could no longer be
+  reduced: `turns_before=67 turns_after=67`, stage after stage, while the budget kept growing.
+
+  The real rule is narrower than "a user turn" and wider than what was implemented: the kept history
+  may not *begin* with a turn that requests a tool (it would no longer follow a user turn or a tool
+  result) nor with a tool result (its request was just dropped). Anything else opens an exchange —
+  including an assistant turn that only speaks, which agent histories are full of. Both failures are
+  invisible except on a long run, and each was found by one.
+
 ## 0.0.56
 
 ### Fixed
