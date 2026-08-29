@@ -207,8 +207,10 @@ mod tests {
         // cheaper. The failure this guards is the registration silently doing nothing — which is what
         // it did before `ChatService` passed roles down, since the loop is built per request inside
         // the service.
-        let main: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("从主模型来的")));
-        let side: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("从副模型来的")));
+        let main: Arc<dyn Model> =
+            Arc::new(MockModel::new().script(MockResponse::text("从主模型来的")));
+        let side: Arc<dyn Model> =
+            Arc::new(MockModel::new().script(MockResponse::text("从副模型来的")));
         let svc = ChatService::new(
             main,
             Arc::new(OpenAuth::new("tester")),
