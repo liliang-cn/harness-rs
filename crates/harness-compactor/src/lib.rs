@@ -114,6 +114,38 @@ pub struct ModelBackedCompactor {
     pub summary_max_tokens: u32,
 }
 
+/// Move a proposed split to a point where cutting the history is *legal*.
+///
+/// Every compaction stage keeps `history[split..]` and replaces the prefix with
+/// a summary turn. Choosing that index by counting turns alone will eventually
+/// cut between an assistant turn that requested a tool and the turn carrying
+/// that tool's result — and the providers enforce the pairing. Gemini answers
+/// such a history with a hard 400 ("function call turn comes immediately after
+/// a user turn or after a function response turn"), which is permanent: the
+/// retry sends the same broken history and dies the same way, so the run is
+/// over. It only shows up once the context actually fills, which is to say
+/// only on the long runs that can least afford to lose their work.
+///
+/// A cut is safe directly before a `User` turn: that is where an exchange
+/// begins, so nothing behind it is owed an answer. Prefer the nearest such
+/// point at or before `want` (keeping slightly more history is harmless);
+/// failing that, take the nearest one after it. With no user turn anywhere,
+/// report `None` and let the caller skip this stage rather than corrupt the
+/// conversation.
+fn safe_split(history: &[Turn], want: usize) -> Option<usize> {
+    if want == 0 || want >= history.len() {
+        return None;
+    }
+    if let Some(i) = (0..=want)
+        .rev()
+        .find(|&i| history[i].role == TurnRole::User)
+        .filter(|&i| i > 0)
+    {
+        return Some(i);
+    }
+    (want + 1..history.len()).find(|&i| history[i].role == TurnRole::User)
+}
+
 impl ModelBackedCompactor {
     pub fn new(model: Arc<dyn Model>) -> Self {
         Self {
@@ -164,7 +196,9 @@ impl ModelBackedCompactor {
         if ctx.history.len() <= self.keep_recent {
             return Ok(());
         }
-        let split = ctx.history.len() - self.keep_recent;
+        let Some(split) = safe_split(&ctx.history, ctx.history.len() - self.keep_recent) else {
+            return Ok(());
+        };
         let mut dump = String::new();
         for turn in ctx.history.iter().take(split) {
             dump.push_str(&format_turn_for_summary(turn));
@@ -363,7 +397,9 @@ fn microcompact_old(ctx: &mut Context) {
         return;
     }
     let keep_recent = 6;
-    let split = ctx.history.len() - keep_recent;
+    let Some(split) = safe_split(&ctx.history, ctx.history.len() - keep_recent) else {
+        return;
+    };
 
     // Build a textual summary of `0..split`.
     let mut summary = String::from("[microcompact-summary]\n");
@@ -446,7 +482,9 @@ fn auto_compact(ctx: &mut Context) {
     if ctx.history.len() <= keep_recent {
         return;
     }
-    let split = ctx.history.len() - keep_recent;
+    let Some(split) = safe_split(&ctx.history, ctx.history.len() - keep_recent) else {
+        return;
+    };
     let mut combined =
         String::from("[auto-compact-summary]\nCondensed history of earlier turns:\n");
     let mut counts = std::collections::BTreeMap::new();
@@ -482,6 +520,98 @@ mod tests {
     use super::*;
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
+
+    /// A history shaped like a real agent run: user asks, assistant calls a
+    /// tool, the tool answers, repeat. Compaction must never cut between a
+    /// call and its result.
+    fn tool_using_history(exchanges: usize) -> Context {
+        let mut ctx = mk_ctx(0);
+        for i in 0..exchanges {
+            ctx.history.push(Turn {
+                role: TurnRole::User,
+                blocks: vec![Block::Text(format!("do step {i}"))],
+            });
+            ctx.history.push(Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::ToolCall {
+                    call_id: format!("c{i}"),
+                    name: "write_file".into(),
+                    args: serde_json::json!({ "path": format!("{i}.txt") }),
+                }],
+            });
+            ctx.history.push(Turn {
+                role: TurnRole::Tool,
+                blocks: vec![Block::ToolResult {
+                    call_id: format!("c{i}"),
+                    content: serde_json::json!({ "ok": true }),
+                }],
+            });
+        }
+        ctx
+    }
+
+    /// Every `Tool` turn must still be preceded by the assistant turn that
+    /// asked for it, and the kept history must not *open* with a tool call —
+    /// providers reject both, and Gemini rejects the second with a permanent
+    /// 400 that ends the run.
+    fn assert_history_is_legal(history: &[Turn], what: &str) {
+        let opens_with_call = history
+            .iter()
+            .find(|t| t.role != TurnRole::System)
+            .is_some_and(|t| t.blocks.iter().any(|b| matches!(b, Block::ToolCall { .. })));
+        assert!(
+            !opens_with_call,
+            "{what}: history opens with a tool call, which no longer follows a user or tool turn"
+        );
+        for (i, turn) in history.iter().enumerate() {
+            if turn.role == TurnRole::Tool {
+                let prev_is_call = i > 0
+                    && history[i - 1]
+                        .blocks
+                        .iter()
+                        .any(|b| matches!(b, Block::ToolCall { .. }));
+                assert!(
+                    prev_is_call,
+                    "{what}: tool result at {i} lost the call that made it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_never_splits_a_tool_call_from_its_result() {
+        // Every stage that rewrites history, at every length: with 3 turns per
+        // exchange and a fixed `keep_recent`, a blind split lands mid-pair on
+        // two lengths out of three.
+        for exchanges in 4..14 {
+            for (name, stage) in [
+                ("microcompact_old", microcompact_old as fn(&mut Context)),
+                ("context_collapse", context_collapse as fn(&mut Context)),
+                ("auto_compact", auto_compact as fn(&mut Context)),
+            ] {
+                let mut ctx = tool_using_history(exchanges);
+                stage(&mut ctx);
+                assert_history_is_legal(&ctx.history, &format!("{name} @ {exchanges} exchanges"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_with_no_user_turn_to_land_on_is_declined() {
+        // Better to skip a compaction stage than to hand the provider a
+        // conversation it will refuse for the rest of the run.
+        let history = vec![
+            Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::Text("a".into())],
+            },
+            Turn {
+                role: TurnRole::Assistant,
+                blocks: vec![Block::Text("b".into())],
+            },
+        ];
+        assert_eq!(safe_split(&history, 1), None);
+    }
 
     fn mk_ctx(turns: usize) -> Context {
         let mut ctx = Context {

@@ -459,6 +459,9 @@ pub struct AgentLoop<M: Model> {
     pub learning: Option<LearningConfig>,
     /// Loop-detection policy. Enabled by default — see [`StuckPolicy`].
     pub stuck: StuckPolicy,
+    /// Ceiling on context tokens, overriding the model's own window. `None`
+    /// (default) sizes the budget to `ModelInfo::context_window`.
+    pub max_input_tokens: Option<u32>,
     /// Context-compaction hysteresis. See [`CompactPolicy`].
     pub compaction: CompactPolicy,
     /// Ceiling on a single tool result. See [`ToolResultPolicy`].
@@ -522,6 +525,7 @@ impl<M: Model> AgentLoop<M> {
             recall_auto_inject: false,
             learning: None,
             stuck: StuckPolicy::default(),
+            max_input_tokens: None,
             compaction: CompactPolicy::default(),
             // On by default, because the failure it catches is invisible: a
             // turn that produced nothing is reported as a turn that finished.
@@ -577,6 +581,17 @@ impl<M: Model> AgentLoop<M> {
     /// instead of refusing or hallucinating.
     pub fn with_system(mut self, text: impl Into<String>) -> Self {
         self.system = vec![Block::Text(text.into())];
+        self
+    }
+
+    /// Cap context tokens below the model's own window.
+    ///
+    /// Compaction fires at a fraction of this, so it is also the only way to
+    /// exercise the compaction path without first paying for a hundred
+    /// thousand tokens of real conversation — which is how "does a long run
+    /// survive being compacted" stayed untested.
+    pub fn with_max_input_tokens(mut self, n: u32) -> Self {
+        self.max_input_tokens = Some(n);
         self
     }
 
@@ -995,7 +1010,10 @@ impl<M: Model> AgentLoop<M> {
         // Only when the caller left the default in place; an explicit policy is
         // a decision and stays untouched. The output allowance is reserved,
         // because the window is shared between the prompt and the reply.
-        if ctx.policy.max_input_tokens == harness_core::Policy::default().max_input_tokens {
+        if let Some(n) = self.max_input_tokens {
+            // An explicit cap wins over both the default and the model window.
+            ctx.policy.max_input_tokens = n.max(1);
+        } else if ctx.policy.max_input_tokens == harness_core::Policy::default().max_input_tokens {
             let window = self.model.info().context_window;
             if window > 0 {
                 // Reserve room for the reply, but never let the reservation eat
@@ -1157,8 +1175,23 @@ impl<M: Model> AgentLoop<M> {
                     }
                     self.hooks.fire(&Event::PreCompact { stage }, world);
                     let before = budget.used;
+                    let turns_before = ctx.history.len();
                     self.compactor.compact(stage, &mut ctx).await?;
                     budget = self.compactor.budget(&ctx);
+                    // Compaction used to leave no trace anywhere: not in the
+                    // log, not in the transcript. That is a bad property for
+                    // the one mechanism that rewrites the conversation, and it
+                    // is how a compaction bug that killed long runs stayed
+                    // invisible — the only symptom was a provider error with
+                    // no hint of what had touched the history.
+                    tracing::info!(
+                        stage = ?stage,
+                        tokens_before = before,
+                        tokens_after = budget.used,
+                        turns_before,
+                        turns_after = ctx.history.len(),
+                        "compacted context"
+                    );
                     self.hooks.fire(
                         &Event::PostCompact {
                             stage,

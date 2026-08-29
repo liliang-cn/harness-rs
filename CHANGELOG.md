@@ -3,6 +3,41 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.55
+
+### Fixed
+
+- **Compaction could cut a tool call away from its result, and the run never recovered.** Every
+  compaction stage keeps `history[split..]` and replaces the prefix with a summary, and `split` was
+  chosen by counting turns — `history.len() - keep_recent`, in three places, with nothing checking
+  what it landed on. A real agent history runs *user → assistant tool call → tool result*, three
+  turns per exchange, so a blind index lands mid-pair most of the time. The result is a history whose
+  first kept turn is a tool call with no user turn or tool response in front of it, which providers
+  reject: Gemini answers `400 INVALID_ARGUMENT — "function call turn comes immediately after a user
+  turn or after a function response turn"`. That is permanent, not transient — the retry sends the
+  same broken history — so the task dies and its work is lost.
+
+  This only bites once the context actually fills, which is to say only on the long unattended runs
+  that can least afford it. Measured: with the context capped to 6k, a 40-round task died at round 10
+  with 10 of 40 files written; with the fix, the same task completed all 40 rounds, and a passphrase
+  planted in the first prompt was still correct in the last file.
+
+  Splits now land only where a cut is legal — immediately before a `User` turn, where an exchange
+  begins and nothing is owed an answer. When no such point exists, the stage declines to run rather
+  than hand the provider a conversation it will refuse for the rest of the run.
+
+- **Compaction left no trace.** The one mechanism that rewrites the conversation logged nothing, so
+  the failure above surfaced only as a provider error with no hint of what had touched the history.
+  Each stage now logs its stage, tokens and turn count, before and after.
+
+### Added
+
+- **`AgentLoop::with_max_input_tokens`** — cap context below the model's own window. Compaction fires
+  at a fraction of this, so it is also the only way to exercise the compaction path without first
+  paying for a hundred thousand tokens of real conversation. That is not a footnote: "does a long run
+  survive being compacted" had never once been tested, which is exactly why the bug above was still
+  there.
+
 ## 0.0.54
 
 ### Fixed
