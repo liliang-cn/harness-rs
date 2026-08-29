@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn transient_retries_then_succeeds() {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
@@ -162,7 +162,9 @@ mod tests {
         assert_eq!(count.load(Ordering::SeqCst), 3);
     }
 
-    #[tokio::test]
+    // Paused clock: the backoff schedule is the thing under test, and sitting
+    // through 1s+2s+4s of it proves nothing that auto-advancing does not.
+    #[tokio::test(start_paused = true)]
     async fn transient_gives_up_after_3_retries() {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
@@ -189,7 +191,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn typed_retry_preserves_the_error_variant() {
         // The whole point: after exhausting retries the caller still gets
         // `Limited`, not a string it has to re-parse.

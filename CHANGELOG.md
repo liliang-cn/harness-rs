@@ -3,6 +3,33 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.54
+
+### Fixed
+
+- **The stuck detector no longer aborts a run that is making progress.** It judged repetition on the
+  *request* alone, so an identical call was "spinning" no matter what came back — and waiting is
+  made of identical calls: polling a build, a queue, a background job. Six rounds of
+  `shell_job_status(id)` on a running build ended the run. A round now counts as a repeat only when
+  the request **and its result** are both unchanged, which is checked after dispatch (before it,
+  this round's results do not exist yet). A poll whose result never moves still aborts — burning
+  model calls on something that is not moving is what the guard is for.
+
+### Added
+
+- **`Task::deadline` is enforced.** The field existed since the beginning and *nothing read it*:
+  runs were bounded only by `max_iters`, which says nothing about elapsed time — one iteration is a
+  100ms read or a 20-minute build. Reaching the deadline now exits through the same forced-synthesis
+  path as a spent step budget, so a run that runs out of time still reports what it accomplished
+  instead of being dropped mid-flight. `Outcome::BudgetExhausted` gains `deadline_reached` to say
+  which budget ran out, and its `iters` is now the real count rather than always `max_iters`.
+
+- **`shell_job_status` can wait inside one call** (`wait_ms`, capped at 60s to stay under the
+  per-call tool deadline): it returns as soon as there is new output or the job exits. A model
+  watching a ten-minute build spends one step instead of hundreds. Status also reports
+  `running_for_ms` — how long the job has been alive, which is what tells a model whether to keep
+  waiting, and which correctly makes two polls of a live job *different* observations.
+
 ## 0.0.53
 
 ### Added

@@ -62,6 +62,12 @@ const SPAWN_PREVIEW_BYTES: usize = 4096;
 const STATUS_SLICE_BYTES: usize = 8192;
 /// SIGTERM → SIGKILL escalation delay.
 const TERM_GRACE_MS: u64 = 3000;
+/// Ceiling on `shell_job_status`'s in-call wait. Kept well under the loop's
+/// default 120s per-call tool deadline, which would otherwise turn a
+/// legitimate wait into a tool error.
+const MAX_WAIT_MS: u64 = 60_000;
+/// How often an in-call wait re-reads the job.
+const WAIT_TICK: Duration = Duration::from_millis(250);
 
 /// Which cleanup tier a job belongs to. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -111,6 +117,9 @@ struct Job {
     log_path: PathBuf,
     read_offset: u64,
     started_ms: i64,
+    /// Monotonic twin of `started_ms`, for "how long has this been running"
+    /// without trusting a wall clock that can jump.
+    started_at: Instant,
     last_touch: Instant,
     exit: Option<i32>,
 }
@@ -231,6 +240,7 @@ impl JobTable {
                     log_path,
                     read_offset: preview.len() as u64,
                     started_ms: world.clock.now_ms(),
+                    started_at: Instant::now(),
                     last_touch: Instant::now(),
                     exit: None,
                 };
@@ -264,6 +274,11 @@ impl JobTable {
                 json!({
                     "id": id, "program": job.program, "state": job.state(),
                     "exit_status": job.exit, "pid": job.pid,
+                    // How long it has been alive. The model needs this to
+                    // decide whether to keep waiting, and a build that has
+                    // been silent for eight minutes reads very differently
+                    // from one that started two seconds ago.
+                    "running_for_ms": job.started_at.elapsed().as_millis() as u64,
                 }),
             )
         };
@@ -588,14 +603,50 @@ impl ShellJobStatus {
             schema: ToolSchema {
                 name: "shell_job_status".into(),
                 description: "Check a background job started by shell_spawn: running or exited, \
-                              plus everything it printed since you last checked. Without an id, \
-                              lists all your jobs."
+                              how long it has been going, and everything it printed since you \
+                              last checked. Without an id, lists all your jobs. Pass wait_ms to \
+                              WAIT inside this one call until there is new output or the job \
+                              exits — always prefer that over calling this repeatedly in a \
+                              tight loop, which burns your step budget on nothing."
                     .into(),
                 input: json!({
                     "type": "object",
-                    "properties": { "id": {"type": "integer"} }
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "wait_ms": {
+                            "type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS,
+                            "description": "Block up to this long for new output or exit."
+                        }
+                    }
                 }),
             },
+        }
+    }
+}
+
+impl ShellJobStatus {
+    /// One status read, or — with a `wait` budget — the first read that shows
+    /// something new: output, or the job exiting. Polls internally at a fixed
+    /// tick so a model waiting ten minutes on a build spends one step, not
+    /// hundreds. Accumulates output across the internal polls, since each read
+    /// advances the job's cursor and dropping it would lose those lines.
+    async fn wait_for_change(&self, id: u64, wait_ms: u64, world: &World) -> Option<Value> {
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let mut acc = String::new();
+        loop {
+            let mut v = self.table.status_for(id, world_actor(world))?;
+            if let Some(s) = v["new_output"].as_str() {
+                acc.push_str(s);
+            }
+            let exited = v["state"] == "exited";
+            if exited || !acc.is_empty() || Instant::now() >= deadline {
+                v["new_output"] = json!(acc);
+                if !exited && wait_ms > 0 && v["new_output"] == json!("") {
+                    v["waited_ms"] = json!(wait_ms);
+                }
+                return Some(v);
+            }
+            tokio::time::sleep(WAIT_TICK).await;
         }
     }
 }
@@ -612,8 +663,13 @@ impl Tool for ShellJobStatus {
         ToolRisk::ReadOnly
     }
     async fn invoke(&self, args: Value, world: &mut World) -> Result<ToolResult, ToolError> {
+        let wait = args
+            .get("wait_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(MAX_WAIT_MS);
         match args.get("id").and_then(Value::as_u64) {
-            Some(id) => match self.table.status(id, world) {
+            Some(id) => match self.wait_for_change(id, wait, world).await {
                 Some(v) => Ok(ToolResult {
                     ok: true,
                     content: v,

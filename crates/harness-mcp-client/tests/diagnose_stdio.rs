@@ -52,8 +52,20 @@ impl Drop for ScriptPath {
 /// The stand-in runs as `/bin/sh <script>` — see [`server_that`] for why it is read rather than
 /// executed. `$$` inside the script is still the spawned child, so a case that kills itself kills
 /// the process the client is talking to.
+/// Tight bounds: these tests assert on *diagnosis wording*, not on patience.
+/// With the shipping defaults (10s + 5s + 2s) the hang case alone sat for
+/// nearly forty seconds and was, single-handedly, the critical path of the
+/// whole workspace test run.
+fn snappy() -> harness_mcp_client::StdioTimeouts {
+    harness_mcp_client::StdioTimeouts {
+        init: std::time::Duration::from_millis(400),
+        diagnose_answer: std::time::Duration::from_millis(300),
+        diagnose_exit: std::time::Duration::from_millis(200),
+    }
+}
+
 async fn connect_error(script: &str) -> String {
-    match McpClient::connect_stdio("/bin/sh", &[script]).await {
+    match McpClient::connect_stdio_with("/bin/sh", &[script], snappy()).await {
         Ok(_) => panic!("`{script}` is not a working MCP server, yet connecting to it succeeded"),
         Err(e) => e.to_string(),
     }
