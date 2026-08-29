@@ -88,6 +88,8 @@ pub struct ChatService {
     instruction: Option<String>,
     data_dir: PathBuf,
     max_iters: u32,
+    model_roles: Vec<(String, Arc<dyn Model>)>,
+    hooks: Vec<Arc<dyn Hook>>,
 }
 
 impl ChatService {
@@ -114,6 +116,8 @@ impl ChatService {
             instruction: None,
             data_dir: data_dir.into(),
             max_iters: harness_core::Policy::default().max_iters,
+            model_roles: Vec::new(),
+            hooks: Vec::new(),
         }
     }
 
@@ -130,6 +134,37 @@ impl ChatService {
     /// Register a tool the agent may call (policy search, SQL, MCP bridge, …).
     pub fn with_tool(mut self, tool: Arc<dyn Tool>) -> Self {
         self.tools.push(tool);
+        self
+    }
+
+    /// Send a named side task to a different model — see
+    /// [`AgentLoop::with_model_role`](harness_loop::AgentLoop::with_model_role).
+    ///
+    /// Registering `"compactor"` upgrades the loop's structural compactor to a model-backed one, and
+    /// anything else is looked up by the component that wants it (`MemorySynthesizer`, a judge, a
+    /// subagent). An unregistered role means "use the main model", so a component asking for one it
+    /// was never given falls back rather than failing.
+    ///
+    /// Served conversations are where this matters most and where it was unreachable: the loop is
+    /// built per request inside [`build_agent`](Self::build_agent), so a serving host had no way to
+    /// pin the conversation to one model — and every side call on the main model moves the provider's
+    /// cache prefix, which is the thing a long chat most wants left alone.
+    pub fn with_model_role(mut self, role: impl Into<String>, model: Arc<dyn Model>) -> Self {
+        self.model_roles.push((role.into(), model));
+        self
+    }
+
+    /// Observe every turn this service runs — a live feed, a metrics sink, an audit mirror.
+    ///
+    /// Added to each per-request loop alongside the audit and replay hooks the service installs
+    /// itself. This is how [`BroadcastHook`](harness_hooks::BroadcastHook) reaches a served
+    /// conversation: the streaming endpoint already forwards assistant text, but tool calls,
+    /// compaction, budget warnings and errors had nowhere to go.
+    ///
+    /// The hook is shared across concurrent requests, so it must be cheap and non-blocking; anything
+    /// that can be slow belongs behind a channel.
+    pub fn with_hook(mut self, hook: Arc<dyn Hook>) -> Self {
+        self.hooks.push(hook);
         self
     }
 
@@ -201,6 +236,12 @@ impl ChatService {
         }
         for tool in &self.tools {
             agent = agent.with_tool(tool.clone());
+        }
+        for (role, model) in &self.model_roles {
+            agent = agent.with_model_role(role.clone(), model.clone());
+        }
+        for hook in &self.hooks {
+            agent = agent.with_hook(hook.clone());
         }
         if let Some(sink) = &self.audit {
             let mut hook = AuditHook::new(sink.clone());

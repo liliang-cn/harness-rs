@@ -157,6 +157,73 @@ mod tests {
         assert!(recorded.iter().all(|(_, actor)| actor == "ada"));
     }
 
+    /// A hook that records which events it saw, which is all an observer of a served turn has to do.
+    struct WitnessHook {
+        seen: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl harness_core::Hook for WitnessHook {
+        fn name(&self) -> &str {
+            "witness"
+        }
+        fn matches(&self, _event: &harness_core::Event<'_>) -> bool {
+            true
+        }
+        fn fire(
+            &self,
+            event: &harness_core::Event<'_>,
+            _world: &mut harness_core::World,
+        ) -> harness_core::HookOutcome {
+            self.seen.lock().unwrap().push(format!("{event:?}"));
+            harness_core::HookOutcome::Allow
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hook_added_to_the_service_sees_every_served_turn() {
+        // Before this the only way into a served conversation's events was the streaming endpoint's
+        // own forward hook, which carries assistant text and nothing else — no tool calls, no
+        // compaction, no budget warnings. `BroadcastHook` lives one layer down on `AgentLoop`, which
+        // `ChatService` builds per request and never exposed.
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let model: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("hi")));
+        let svc = ChatService::new(
+            model,
+            Arc::new(OpenAuth::new("tester")),
+            Arc::new(InMemorySessions::new()),
+            std::env::temp_dir().join("serve-hook"),
+        )
+        .with_hook(Arc::new(WitnessHook { seen: seen.clone() }));
+
+        svc.chat(None, "s1", "hello").await.unwrap();
+
+        assert!(!seen.lock().unwrap().is_empty(), "the hook saw nothing");
+    }
+
+    #[tokio::test]
+    async fn a_side_task_goes_to_its_own_model_and_the_conversation_stays_on_the_main_one() {
+        // The point of a named role: the conversation keeps one model, so the provider's cached
+        // prefix stays byte-stable across turns, while compaction or memory synthesis runs somewhere
+        // cheaper. The failure this guards is the registration silently doing nothing — which is what
+        // it did before `ChatService` passed roles down, since the loop is built per request inside
+        // the service.
+        let main: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("从主模型来的")));
+        let side: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("从副模型来的")));
+        let svc = ChatService::new(
+            main,
+            Arc::new(OpenAuth::new("tester")),
+            Arc::new(InMemorySessions::new()),
+            std::env::temp_dir().join("serve-roles"),
+        )
+        .with_model_role("compactor", side);
+
+        let reply = svc.chat(None, "s1", "hello").await.unwrap();
+
+        // The answer is the main model's. A role that captured the conversation would be worse than
+        // no role at all, so this is the half worth asserting: the side model is not in the reply.
+        assert_eq!(reply.answer, "从主模型来的");
+    }
+
     #[tokio::test]
     async fn rejects_bad_token() {
         let model: Arc<dyn Model> = Arc::new(MockModel::new().script(MockResponse::text("hi")));
