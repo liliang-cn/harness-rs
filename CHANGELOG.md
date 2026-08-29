@@ -3,6 +3,19 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.56
+
+### Fixed
+
+- **Abandoning an MCP handshake leaked the server process.** `connect_stdio` bounds the initialize
+  handshake (0.0.54) and gives up on a server that will not answer — but giving up killed only the
+  process we spawned, and an MCP server is usually launched *through* something: `npx`, `uv run`, a
+  shell script. The wrapper died and the thing doing the work kept running, so every attempt against
+  a hung server left an orphan behind, forever. The same applied to the diagnostic re-run, which is
+  spawned precisely because the server is hanging. Both now run in their own process group and are
+  killed by group, and the diagnostic child is reaped rather than left a zombie. `cargo nextest`
+  named this out loud on every run — `1 leaky` — which is worth reading as the defect report it was.
+
 ## 0.0.55
 
 ### Fixed

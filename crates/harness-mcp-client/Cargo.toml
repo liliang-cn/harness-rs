@@ -56,3 +56,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 harness-loop = { workspace = true }
 harness-models = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
