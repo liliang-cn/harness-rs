@@ -29,4 +29,4 @@ tokio-util   = { version = "0.7", features = ["io"] }
 bytes        = "1"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

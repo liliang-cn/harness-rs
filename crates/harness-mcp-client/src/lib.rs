@@ -3,7 +3,7 @@
 mod client;
 mod proxy;
 
-pub use client::McpClient;
+pub use client::{McpClient, StdioTimeouts};
 pub use proxy::McpProxyTool;
 
 /// Re-export of the `reqwest` version this crate links, so callers building a

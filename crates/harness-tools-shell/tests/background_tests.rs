@@ -188,6 +188,77 @@ async fn jobs_are_invisible_across_actors() {
     table.kill(id, &alice).await.unwrap();
 }
 
+/// Waiting inside one call is what makes a long wait affordable: a model
+/// watching a ten-minute build should spend one step, not hundreds. The call
+/// must come back as soon as there is something to say — not sit out the full
+/// budget — and must report how long the job has been alive.
+#[tokio::test]
+async fn wait_ms_returns_as_soon_as_the_job_says_something() {
+    let table = Arc::new(JobTable::new());
+    let status = ShellJobStatus::new(table.clone());
+    let mut w = world();
+
+    // Silent past the 2s spawn grace, so this is a live job with nothing to
+    // report yet; it speaks a second later.
+    let r = spawn_of(&table, "sleep 3; echo late; sleep 30", &mut w).await;
+    let id = r.0;
+    assert!(r.1.is_empty(), "nothing printed during the grace window");
+
+    let t0 = std::time::Instant::now();
+    let out = status
+        .invoke(json!({"id": id, "wait_ms": 10_000}), &mut w)
+        .await
+        .unwrap();
+    let waited = t0.elapsed();
+
+    assert!(
+        out.content["new_output"].as_str().unwrap().contains("late"),
+        "should return the line the job printed: {:?}",
+        out.content
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "must return when the job speaks, not sit out the whole budget (waited {waited:?})"
+    );
+    assert!(
+        out.content["running_for_ms"].as_u64().unwrap() > 0,
+        "status must say how long it has been running: {:?}",
+        out.content
+    );
+
+    table.kill(id, &w).await.unwrap();
+}
+
+/// Two consecutive polls of a live job must not look identical to the loop's
+/// stuck detector — the elapsed clock is real information and is what tells
+/// the model whether to keep waiting.
+#[tokio::test]
+async fn consecutive_polls_of_a_live_job_differ() {
+    let table = Arc::new(JobTable::new());
+    let status = ShellJobStatus::new(table.clone());
+    let mut w = world();
+    let (id, _) = spawn_of(&table, "sleep 30", &mut w).await;
+
+    let a = status.invoke(json!({"id": id}), &mut w).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let b = status.invoke(json!({"id": id}), &mut w).await.unwrap();
+
+    assert_ne!(
+        a.content, b.content,
+        "a live job's status must carry something that moves"
+    );
+    table.kill(id, &w).await.unwrap();
+}
+
+/// Spawn helper: returns `(job_id, early_output)` and panics if the command
+/// finished inside the grace window.
+async fn spawn_of(table: &Arc<JobTable>, script: &str, w: &mut World) -> (u64, String) {
+    match table.spawn(&sh(script), w).await.unwrap() {
+        Spawned::Running { id, preview, .. } => (id, preview),
+        Spawned::Exited { .. } => panic!("`{script}` was supposed to outlive the grace window"),
+    }
+}
+
 #[tokio::test]
 async fn the_three_tools_round_trip() {
     let table = Arc::new(JobTable::new());

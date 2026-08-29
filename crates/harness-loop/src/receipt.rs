@@ -301,6 +301,7 @@ mod tests {
             last_text: Some("partway".into()),
             tools_called: 12,
             usage: Usage::default(),
+            deadline_reached: false,
         };
         let r = ReceiptBuilder::new("t", "m", 1).build(&o);
         assert!(!r.passed);

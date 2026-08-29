@@ -352,6 +352,17 @@ fn tool_call_fingerprint(calls: &[ToolCall]) -> String {
         .join("|")
 }
 
+/// Cheap identity for one tool result, for the stuck detector's "did anything
+/// change" test. Not a checksum anyone depends on — only equality between two
+/// consecutive rounds of the same process matters.
+fn result_digest(tool: &str, content: &serde_json::Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    tool.hash(&mut h);
+    content.to_string().hash(&mut h);
+    h.finish()
+}
+
 /// Where a run finished. Each variant is `#[non_exhaustive]` so new *fields*
 /// don't break downstream matches — always include `..` when destructuring.
 #[derive(Debug, Clone)]
@@ -390,6 +401,11 @@ pub enum Outcome {
         last_text: Option<String>,
         tools_called: u32,
         usage: harness_core::Usage,
+        /// True when `Task::deadline` stopped the run rather than `max_iters`.
+        /// Both end the same way — a forced final answer — but "ran out of
+        /// time" and "ran out of steps" call for different responses from the
+        /// caller, and an unattended long run only ever hits the first.
+        deadline_reached: bool,
     },
     /// The agent got stuck: it repeated the *same* tool call for
     /// `StuckPolicy::abort_after` consecutive rounds without progress, so the
@@ -1100,7 +1116,31 @@ impl<M: Model> AgentLoop<M> {
             }
         };
 
+        // How far the loop actually got. Equal to `max_iters` on a normal
+        // budget exhaustion, less when the wall clock stopped it first.
+        let mut iters_done = ctx.policy.max_iters;
+        let mut deadline_reached = false;
+
         for iter in 0..ctx.policy.max_iters {
+            // ── wall-clock budget ───────────────────────────────────────
+            // `max_iters` bounds *steps*, which says nothing about elapsed
+            // time: one iteration can be a 100ms read or a 20-minute build.
+            // An unattended run is bounded in hours, not rounds, so a task
+            // may carry a deadline — and reaching it goes through the same
+            // forced-synthesis exit as a spent step budget, so the caller
+            // gets the conclusion of the work rather than a dropped future.
+            if let Some(at) = ctx.task.deadline
+                && world.clock.now_ms() >= at
+            {
+                tracing::warn!(
+                    iter,
+                    deadline = at,
+                    "task deadline reached — forcing a final answer"
+                );
+                iters_done = iter;
+                deadline_reached = true;
+                break;
+            }
             self.hooks.fire(&Event::Heartbeat { iter }, world);
 
             // Compaction with hysteresis: only once over the high-water mark,
@@ -1310,56 +1350,8 @@ impl<M: Model> AgentLoop<M> {
                 });
             }
 
-            // ── stuck detection ─────────────────────────────────────────
-            // The model asked for tools again. If it's the *same* request as
-            // last round, it's spinning: nudge it to change tack, then abort
-            // cleanly rather than burn the rest of the budget on the loop.
-            if self.stuck.enabled {
-                let fp = tool_call_fingerprint(&out.tool_calls);
-                if last_fingerprint.as_ref() == Some(&fp) {
-                    repeat_count += 1;
-                } else {
-                    repeat_count = 1;
-                    last_fingerprint = Some(fp);
-                }
-
-                if repeat_count >= self.stuck.abort_after {
-                    let reason =
-                        format!("repeated the same tool call {repeat_count}× without progress");
-                    tracing::warn!(repeated = repeat_count, "stuck: aborting run");
-                    self.hooks.fire(&Event::SessionEnd, world);
-                    return Ok(Outcome::Stuck {
-                        reason,
-                        repeated: repeat_count,
-                        iters: iter + 1,
-                        last_text,
-                        tools_called,
-                        usage: total_usage,
-                    });
-                }
-
-                if repeat_count == self.stuck.nudge_after {
-                    tracing::warn!(
-                        repeated = repeat_count,
-                        "stuck: nudging model to change approach"
-                    );
-                    ctx.push_feedback(vec![harness_core::Signal {
-                        severity: harness_core::Severity::Warn,
-                        origin: "stuck-detector".into(),
-                        message: format!(
-                            "You have issued the same tool call {repeat_count} rounds in a row \
-                             without making progress."
-                        ),
-                        agent_hint: Some(
-                            "Stop repeating it. Inspect the actual tool result/error, try a \
-                             different approach, or give your final answer with no tool call."
-                                .into(),
-                        ),
-                        auto_fix: None,
-                        location: None,
-                    }]);
-                }
-            }
+            // Stuck detection runs *after* dispatch — see the block below the
+            // tool loop, which needs this round's results to judge progress.
 
             // Parallel-safe prefetch: dispatch the *leading run* of read-only
             // tool calls concurrently (a mutating tool is a serial barrier).
@@ -1367,6 +1359,12 @@ impl<M: Model> AgentLoop<M> {
             // hooks, sensors, and history stay ordered — only the dispatch IO
             // overlaps. Reads before any write are safe; anything at/after the
             // first mutating call runs on the normal path.
+            // Digest of what each tool handed back this round, for the stuck
+            // check below. Digests rather than the payloads: results are
+            // already capped, but a per-round copy of every one of them is
+            // still a cost the detector does not need to pay.
+            let mut round_results: Vec<u64> = Vec::new();
+
             let mut prefetched: HashMap<String, ToolResult> = HashMap::new();
             {
                 let lead: Vec<&_> = out
@@ -1457,6 +1455,8 @@ impl<M: Model> AgentLoop<M> {
                     },
                     world,
                 );
+
+                round_results.push(result_digest(&action.tool, &result.content));
 
                 ctx.history.push(Turn {
                     role: TurnRole::Tool,
@@ -1551,6 +1551,78 @@ impl<M: Model> AgentLoop<M> {
                     }
                 }
             }
+
+            // ── stuck detection ─────────────────────────────────────────
+            // A round repeats when the request AND what came back were both
+            // identical. The same call whose *result moved* is the model
+            // watching something progress — polling a build, a background
+            // job, a queue — not spinning, which is why this runs after
+            // dispatch: before it, this round's results do not exist yet and
+            // the check could only compare the request. Judging on the
+            // request alone aborted runs that were making progress, and a
+            // long unattended task is mostly made of such waits.
+            //
+            // A poll whose result never changes still counts, and still
+            // aborts: burning model calls on a thing that is not moving is
+            // exactly what this guard is for. What bounds a *legitimate*
+            // long wait is `max_iters`, not this.
+            if self.stuck.enabled {
+                let fp = format!(
+                    "{}#{}",
+                    tool_call_fingerprint(&out.tool_calls),
+                    round_results
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                if last_fingerprint.as_ref() == Some(&fp) {
+                    repeat_count += 1;
+                } else {
+                    repeat_count = 1;
+                    last_fingerprint = Some(fp);
+                }
+
+                if repeat_count >= self.stuck.abort_after {
+                    let reason = format!(
+                        "repeated the same tool call {repeat_count}× with an unchanging result"
+                    );
+                    tracing::warn!(repeated = repeat_count, "stuck: aborting run");
+                    self.hooks.fire(&Event::SessionEnd, world);
+                    return Ok(Outcome::Stuck {
+                        reason,
+                        repeated: repeat_count,
+                        iters: iter + 1,
+                        last_text,
+                        tools_called,
+                        usage: total_usage,
+                    });
+                }
+
+                if repeat_count == self.stuck.nudge_after {
+                    tracing::warn!(
+                        repeated = repeat_count,
+                        "stuck: nudging model to change approach"
+                    );
+                    ctx.push_feedback(vec![harness_core::Signal {
+                        severity: harness_core::Severity::Warn,
+                        origin: "stuck-detector".into(),
+                        message: format!(
+                            "You have issued the same tool call {repeat_count} rounds in a row \
+                             and the result has not changed."
+                        ),
+                        agent_hint: Some(
+                            "Stop repeating it. Inspect the actual tool result/error, try a \
+                             different approach, or give your final answer with no tool call. \
+                             If you are waiting on something, wait inside one call rather than \
+                             polling in a tight loop."
+                                .into(),
+                        ),
+                        auto_fix: None,
+                        location: None,
+                    }]);
+                }
+            }
         }
         // ── Budget exhausted ─────────────────────────────────────────
         // Force a final synthesis pass with tools DISABLED. Otherwise the
@@ -1571,10 +1643,11 @@ impl<M: Model> AgentLoop<M> {
         self.hooks.fire(&Event::SessionEnd, world);
         self.run_learning_review(&ctx, world, tools_called).await;
         Ok(Outcome::BudgetExhausted {
-            iters: ctx.policy.max_iters,
+            iters: iters_done,
             last_text,
             tools_called,
             usage: total_usage,
+            deadline_reached,
         })
     }
 
@@ -1875,8 +1948,8 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         total_usage: &mut harness_core::Usage,
     ) -> Option<String> {
-        const SYNTHESIS_PROMPT: &str = "[system: iteration budget exhausted] \
-            You have run out of tool-calling iterations. Write your final answer \
+        const SYNTHESIS_PROMPT: &str = "[system: budget exhausted] \
+            You have run out of budget for tool calls. Write your final answer \
             NOW using only the tool results already in this conversation. Do not \
             request more tools. Mark facts you could not verify as UNKNOWN. \
             Include source URLs for every claim that is not UNKNOWN.";

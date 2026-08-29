@@ -37,16 +37,39 @@ impl McpClient {
     /// could not open, a config it rejected — is nowhere in it. When that happens this asks the
     /// program itself what went wrong; see [`diagnose_stdio`].
     pub async fn connect_stdio(program: &str, args: &[&str]) -> anyhow::Result<Self> {
+        Self::connect_stdio_with(program, args, StdioTimeouts::default()).await
+    }
+
+    /// [`connect_stdio`](Self::connect_stdio) with explicit bounds on how long
+    /// the server gets to answer. See [`StdioTimeouts`].
+    pub async fn connect_stdio_with(
+        program: &str,
+        args: &[&str],
+        t: StdioTimeouts,
+    ) -> anyhow::Result<Self> {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let transport = TokioChildProcess::new(Command::new(program).configure(|cmd| {
             for a in &owned {
                 cmd.arg(a);
             }
         }))?;
-        let service = match ().serve(transport).await {
+        // The SDK's serve() waits on its own (long) schedule, so the bound is
+        // ours to impose: a server that has not shaken hands by now is not
+        // going to, and every second past that is a reply nobody is getting.
+        let served = match timeout(t.init, ().serve(transport)).await {
+            Ok(r) => r,
+            Err(_) => {
+                let why = diagnose_stdio(program, &owned, t).await;
+                return Err(anyhow::anyhow!(
+                    "mcp init for `{program}` timed out after {:?}{why}",
+                    t.init
+                ));
+            }
+        };
+        let service = match served {
             Ok(service) => service,
             Err(e) => {
-                let why = diagnose_stdio(program, &owned).await;
+                let why = diagnose_stdio(program, &owned, t).await;
                 return Err(anyhow::anyhow!("mcp init for `{program}` failed: {e}{why}"));
             }
         };
@@ -136,9 +159,32 @@ impl McpClient {
     }
 }
 
-/// How long to wait for the re-run to answer, and then to exit.
-const DIAGNOSE_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
-const DIAGNOSE_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a stdio MCP server gets, at each stage of being connected to.
+///
+/// These are bounds on someone else's process, so they are the caller's
+/// business: a chat turn wants to fail fast and say so, a diagnostic tool can
+/// afford to be patient, and a test should not have to sit through either.
+#[derive(Debug, Clone, Copy)]
+pub struct StdioTimeouts {
+    /// The initialize handshake. Without a bound here the underlying SDK's own
+    /// (~30s) applies, which is a very long time to hold up a reply for a
+    /// server that is never going to answer.
+    pub init: Duration,
+    /// A re-run server's first line, while diagnosing a failed start.
+    pub diagnose_answer: Duration,
+    /// …and for that re-run to exit, if it is going to.
+    pub diagnose_exit: Duration,
+}
+
+impl Default for StdioTimeouts {
+    fn default() -> Self {
+        Self {
+            init: Duration::from_secs(10),
+            diagnose_answer: Duration::from_secs(5),
+            diagnose_exit: Duration::from_secs(2),
+        }
+    }
+}
 /// How much of the server's complaint to quote. Enough for a sentence with a path in it.
 const STDERR_TAIL_BYTES: usize = 600;
 
@@ -152,7 +198,7 @@ const STDERR_TAIL_BYTES: usize = 600;
 ///
 /// Returns a sentence to append to the connect error, empty when nothing could be established. Costs
 /// one extra spawn, on a path that has already failed.
-async fn diagnose_stdio(program: &str, args: &[String]) -> String {
+async fn diagnose_stdio(program: &str, args: &[String], t: StdioTimeouts) -> String {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -178,14 +224,14 @@ async fn diagnose_stdio(program: &str, args: &[String]) -> String {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
             matches!(
-                timeout(DIAGNOSE_ANSWER_TIMEOUT, reader.read_line(&mut line)).await,
+                timeout(t.diagnose_answer, reader.read_line(&mut line)).await,
                 Ok(Ok(read)) if read > 0
             )
         }
         None => false,
     };
 
-    let status = match timeout(DIAGNOSE_EXIT_TIMEOUT, child.wait()).await {
+    let status = match timeout(t.diagnose_exit, child.wait()).await {
         Ok(Ok(status)) => Some(status),
         _ => {
             let _ = child.start_kill();
@@ -195,7 +241,7 @@ async fn diagnose_stdio(program: &str, args: &[String]) -> String {
     let complaint = match child.stderr.take() {
         Some(mut stderr) => {
             let mut text = String::new();
-            let _ = timeout(DIAGNOSE_EXIT_TIMEOUT, stderr.read_to_string(&mut text)).await;
+            let _ = timeout(t.diagnose_exit, stderr.read_to_string(&mut text)).await;
             stderr_tail(&text)
         }
         None => String::new(),
@@ -223,8 +269,8 @@ async fn diagnose_stdio(program: &str, args: &[String]) -> String {
             " (running `{program}` again: it neither answered nor exited, saying: {complaint})"
         ),
         (false, None) => format!(
-            " (running `{program}` again: it neither answered an initialize handshake nor exited within {}s, so it is hanging rather than crashing)",
-            DIAGNOSE_ANSWER_TIMEOUT.as_secs()
+            " (running `{program}` again: it neither answered an initialize handshake nor exited within {:?}, so it is hanging rather than crashing)",
+            t.diagnose_answer
         ),
     }
 }
