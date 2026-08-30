@@ -6,7 +6,9 @@
 //! - Dispatches each returned tool call via [`ToolRegistry`].
 //! - Runs `Sensor::SelfCorrect` sensors after each action; auto-fix patches are
 //!   applied directly to the world, blocking signals are fed back to the model.
-//! - Stops when the model returns no tool calls, or when `policy.max_iters` is hit.
+//! - Stops when the model returns no tool calls, when `policy.max_iters` is
+//!   hit, or when a stuck-detector ([`StuckPolicy`], [`MonotonyPolicy`]) says
+//!   the run is spinning.
 
 pub mod acceptance;
 pub mod goal;
@@ -72,6 +74,72 @@ impl Default for StuckPolicy {
             enabled: true,
             nudge_after: 3,
             abort_after: 6,
+        }
+    }
+}
+
+/// A second stuck signal, orthogonal to [`StuckPolicy`]: the model calls *one*
+/// tool round after round — a different argument every time, so nothing ever
+/// repeats — and never moves on to anything else.
+///
+/// [`StuckPolicy`] cannot see this and must not be changed so that it can. It
+/// keys on *byte-identical consecutive* rounds precisely so that genuine "read
+/// the same file twice" work never trips it, and `graph_find("Xen")` followed
+/// by `graph_find("KVM")` is correctly not a repeat — the request changed. Two
+/// identical calls in a row and one tool worked for twenty rounds are different
+/// shapes, and want different thresholds and different reasons.
+///
+/// Measured on a real run: asked which platforms a product integrates with, an
+/// agent that could not retrieve the anchor entity began guessing candidates
+/// and looking them up one at a time — `graph_find("Nomad")`,
+/// `graph_find("Docker")`, `graph_find("VMware")`, `graph_find("Xen")`,
+/// `graph_find("KVM")` — twelve calls to one tool across twenty rounds, each
+/// with a different argument, none of them useful. Every individual call looked
+/// like progress. The *shape* did not, and the shape is something the loop can
+/// see without knowing anything about what `graph_find` means.
+///
+/// **Off by default, and it has to be.** The predicate is "one tool, many
+/// rounds, nothing else", and there is a large class of healthy agents whose
+/// every round is one tool: give an agent a shell and nothing else and
+/// `run_shell` is the only name it will ever emit, thirty rounds running,
+/// legitimately. No threshold rescues that — the false positive is unbounded in
+/// N, not merely rare — so a default-on version of this guard would terminate
+/// working agents, which is worse than the problem it fixes. A host that knows
+/// its agent has several tools and is meant to use them can switch it on;
+/// nobody else pays anything for its existence.
+#[derive(Debug, Clone)]
+pub struct MonotonyPolicy {
+    /// Off by default. See the type docs for why no default-on threshold is
+    /// safe for this predicate.
+    pub enabled: bool,
+    /// Consecutive single-tool rounds before injecting a "you are working one
+    /// tool and nothing else" feedback signal.
+    ///
+    /// 8, argued rather than rounded. The honest single-tool runs are surveys —
+    /// read five files, grep four paths — and a survey ends by using a
+    /// *different* tool, which resets the count; reaching eight rounds of one
+    /// name with nothing else touched is already past what surveying does. The
+    /// cost of being wrong here is one sentence of feedback, not a terminated
+    /// run, which is why the nudge can sit this close to ordinary work. This is
+    /// also the half of the policy that does the work: in the measured case a
+    /// nudge at round eight arrives with two thirds of the budget unspent.
+    pub nudge_after: u32,
+    /// Consecutive single-tool rounds before terminating with [`Outcome::Stuck`].
+    ///
+    /// 16 — twice the nudge, mirroring [`StuckPolicy`]'s own 3→6 ratio, and
+    /// 2.6× its abort so the two can never race: a byte-identical spiral is
+    /// always caught by the older policy first, under its own reason. Deliberately
+    /// generous, because this end of the policy is fatal and its only job is to
+    /// be a backstop for budgets long enough that the nudge was ignored.
+    pub abort_after: u32,
+}
+
+impl Default for MonotonyPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            nudge_after: 8,
+            abort_after: 16,
         }
     }
 }
@@ -176,6 +244,27 @@ impl Default for CompactPolicy {
 /// ceiling: the point of spilling is that the context gets a *glimpse* and a
 /// path, not four-fifths of the flood.
 const SPILL_PREVIEW_BYTES: usize = 4 * 1024;
+
+/// Told to the model when the step budget ran out and the loop stripped its
+/// tools. See `force_final_synthesis`.
+const BUDGET_SYNTHESIS_PROMPT: &str = "[system: budget exhausted] \
+    You have run out of budget for tool calls. Write your final answer \
+    NOW using only the tool results already in this conversation. Do not \
+    request more tools. Mark facts you could not verify as UNKNOWN. \
+    Include source URLs for every claim that is not UNKNOWN.";
+
+/// Told to the model when [`MonotonyPolicy`] stopped the run. Deliberately
+/// names the shape it was caught in: the failure mode this ends is a model
+/// guessing arguments to one tool, and such a model has usually *found*
+/// something it never got round to reporting. "Say what you could not
+/// determine" is the instruction it needs; "mark it UNKNOWN" is the same
+/// instruction the budget prompt gives for the same reason.
+const MONOTONY_SYNTHESIS_PROMPT: &str = "[system: stopped — no progress] \
+    You have called the same tool many rounds in a row without using any other \
+    tool, so no further tool calls will be granted. Write your final answer NOW \
+    using only the tool results already in this conversation. Do not request \
+    more tools. State plainly which parts you could not determine instead of \
+    guessing at them.";
 
 /// First `n` bytes of `s`, cut on a char boundary.
 fn head_of(s: &str, n: usize) -> &str {
@@ -352,6 +441,20 @@ fn tool_call_fingerprint(calls: &[ToolCall]) -> String {
         .join("|")
 }
 
+/// The one tool a round asked for, when the whole round asked for exactly one
+/// *name*. `None` when the round mixed names — reaching for a second tool is,
+/// on its own, evidence the model is still moving, and resets
+/// [`MonotonyPolicy`]'s count.
+///
+/// Several parallel calls to the same tool count as one round of that tool:
+/// reading four files in one round is efficient work, not monotony, and the
+/// policy's threshold is in *rounds* precisely so that batching is never
+/// punished.
+fn sole_tool(calls: &[ToolCall]) -> Option<&str> {
+    let first = calls.first()?.name.as_str();
+    calls.iter().all(|c| c.name == first).then_some(first)
+}
+
 /// Cheap identity for one tool result, for the stuck detector's "did anything
 /// change" test. Not a checksum anyone depends on — only equality between two
 /// consecutive rounds of the same process matters.
@@ -407,15 +510,22 @@ pub enum Outcome {
         /// caller, and an unattended long run only ever hits the first.
         deadline_reached: bool,
     },
-    /// The agent got stuck: it repeated the *same* tool call for
-    /// `StuckPolicy::abort_after` consecutive rounds without progress, so the
-    /// loop terminated early to save the rest of the budget. Carries partial
-    /// work (last text, files already written by tools) like `BudgetExhausted`.
+    /// The agent got stuck and the loop terminated early to save the rest of
+    /// the budget. Carries partial work (last text, files already written by
+    /// tools) like `BudgetExhausted`.
+    ///
+    /// Two independent detectors end here, and `reason` says which: it repeated
+    /// the *same* tool call for `StuckPolicy::abort_after` rounds without
+    /// progress, or it worked a *single* tool for `MonotonyPolicy::abort_after`
+    /// rounds without touching anything else. Only the second forces a final
+    /// synthesis before returning — see the abort site for why.
     #[non_exhaustive]
     Stuck {
-        /// Human-readable reason, e.g. "repeated `read_file(...)` 6× without progress".
+        /// Human-readable reason, e.g. "repeated `read_file(...)` 6× without progress"
+        /// or "called `graph_find` for 16 consecutive rounds without using any
+        /// other tool".
         reason: String,
-        /// How many consecutive identical rounds were observed.
+        /// How many consecutive rounds the detector counted before aborting.
         repeated: u32,
         iters: u32,
         last_text: Option<String>,
@@ -459,6 +569,9 @@ pub struct AgentLoop<M: Model> {
     pub learning: Option<LearningConfig>,
     /// Loop-detection policy. Enabled by default — see [`StuckPolicy`].
     pub stuck: StuckPolicy,
+    /// Second, independent loop-detection signal: one tool worked round after
+    /// round with nothing else touched. Off by default — see [`MonotonyPolicy`].
+    pub monotony: MonotonyPolicy,
     /// Ceiling on context tokens, overriding the model's own window. `None`
     /// (default) sizes the budget to `ModelInfo::context_window`.
     pub max_input_tokens: Option<u32>,
@@ -525,6 +638,7 @@ impl<M: Model> AgentLoop<M> {
             recall_auto_inject: false,
             learning: None,
             stuck: StuckPolicy::default(),
+            monotony: MonotonyPolicy::default(),
             max_input_tokens: None,
             compaction: CompactPolicy::default(),
             // On by default, because the failure it catches is invisible: a
@@ -598,6 +712,19 @@ impl<M: Model> AgentLoop<M> {
     /// Override the loop-detection policy (thresholds, or disable entirely).
     pub fn with_stuck_policy(mut self, policy: StuckPolicy) -> Self {
         self.stuck = policy;
+        self
+    }
+
+    /// Opt in to (or retune) the single-tool monotony signal. Independent of
+    /// [`with_stuck_policy`](Self::with_stuck_policy): both detectors run, with
+    /// their own thresholds and their own `Outcome::Stuck` reason.
+    ///
+    /// ```ignore
+    /// let agent = AgentLoop::boxed(model)
+    ///     .with_monotony_policy(MonotonyPolicy { enabled: true, ..Default::default() });
+    /// ```
+    pub fn with_monotony_policy(mut self, policy: MonotonyPolicy) -> Self {
+        self.monotony = policy;
         self
     }
 
@@ -1112,6 +1239,11 @@ impl<M: Model> AgentLoop<M> {
         // how many consecutive rounds have repeated it.
         let mut last_fingerprint: Option<String> = None;
         let mut repeat_count: u32 = 0;
+        // Monotony state: the tool that has been the round's only tool, and for
+        // how many consecutive rounds. Separate counter from `repeat_count` on
+        // purpose — the two detectors answer different questions.
+        let mut monotone_tool: Option<String> = None;
+        let mut monotone_rounds: u32 = 0;
         // Read-only calls already answered this run, cleared whenever anything
         // mutates the world. See `ToolResultPolicy::dedupe_repeats`.
         let mut answered: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1656,6 +1788,102 @@ impl<M: Model> AgentLoop<M> {
                     }]);
                 }
             }
+
+            // ── monotony detection ──────────────────────────────────────
+            // The second signal, and deliberately not part of the block above:
+            // that one asks "did this round repeat?", this one asks "has the
+            // model been working a single tool and nothing else?". A guessing
+            // spiral answers no to the first and yes to the second, which is
+            // why the byte-identical policy stays exactly as strict as it is.
+            //
+            // Off unless the host asked for it — see `MonotonyPolicy` for why
+            // no threshold is safe by default. Independent of `stuck.enabled`,
+            // so a host can run either, both, or neither.
+            if self.monotony.enabled {
+                match sole_tool(&out.tool_calls) {
+                    // Same single tool as last round: the run continues.
+                    Some(name) if monotone_tool.as_deref() == Some(name) => monotone_rounds += 1,
+                    // A different single tool: a new run of one.
+                    Some(name) => {
+                        monotone_tool = Some(name.to_string());
+                        monotone_rounds = 1;
+                    }
+                    // A mixed round. Reaching for a second tool is movement,
+                    // and movement is what this detector is looking for.
+                    None => {
+                        monotone_tool = None;
+                        monotone_rounds = 0;
+                    }
+                }
+
+                if monotone_rounds >= self.monotony.abort_after {
+                    let name = monotone_tool.clone().unwrap_or_default();
+                    let reason = format!(
+                        "called `{name}` for {monotone_rounds} consecutive rounds \
+                         without using any other tool"
+                    );
+                    tracing::warn!(tool = %name, rounds = monotone_rounds, "monotony: aborting run");
+
+                    // Force the final answer before returning. A model caught
+                    // here is by definition one that will not stop calling
+                    // tools on its own, so terminating it without asking for
+                    // text hands the caller the same empty partial answer the
+                    // detector exists to prevent — earlier, and therefore
+                    // worse. Stripping the tools and asking once is the exit
+                    // the model could not find; it costs one model call and no
+                    // prompt bytes at all. (The budget-exhausted path has done
+                    // this since it existed; this is the same exit, reached
+                    // sooner.)
+                    if let Some(t) = self
+                        .force_final_synthesis(
+                            &mut ctx,
+                            world,
+                            &mut total_usage,
+                            MONOTONY_SYNTHESIS_PROMPT,
+                        )
+                        .await
+                    {
+                        last_text = Some(t);
+                    }
+
+                    self.hooks.fire(&Event::SessionEnd, world);
+                    return Ok(Outcome::Stuck {
+                        reason,
+                        repeated: monotone_rounds,
+                        iters: iter + 1,
+                        last_text,
+                        tools_called,
+                        usage: total_usage,
+                    });
+                }
+
+                if monotone_rounds == self.monotony.nudge_after {
+                    let name = monotone_tool.clone().unwrap_or_default();
+                    tracing::warn!(
+                        tool = %name,
+                        rounds = monotone_rounds,
+                        "monotony: nudging model to change approach"
+                    );
+                    ctx.push_feedback(vec![harness_core::Signal {
+                        severity: harness_core::Severity::Warn,
+                        origin: "monotony-detector".into(),
+                        message: format!(
+                            "You have called `{name}` for {monotone_rounds} rounds in a row \
+                             and used no other tool. A different argument each time is not \
+                             the same thing as making progress."
+                        ),
+                        agent_hint: Some(
+                            "If you are guessing at arguments to see which one lands, stop: \
+                             report what you did find and say plainly what you could not \
+                             determine. Otherwise reach for a different tool, or give your \
+                             final answer with no tool call."
+                                .into(),
+                        ),
+                        auto_fix: None,
+                        location: None,
+                    }]);
+                }
+            }
         }
         // ── Budget exhausted ─────────────────────────────────────────
         // Force a final synthesis pass with tools DISABLED. Otherwise the
@@ -1666,8 +1894,14 @@ impl<M: Model> AgentLoop<M> {
         // The synthesis call is "free" — it costs one extra model call
         // beyond max_iters but doesn't count toward `iters`. The result
         // lands in `last_text` so callers display it as the answer.
+        //
+        // Signal to any observer (LiveProgressHook, SessionRecorder, custom
+        // hooks) that we've used 100% of the budget and are about to force
+        // synthesis. Pre-existing `BudgetWarning` event was unused; this is
+        // its natural home.
+        self.hooks.fire(&Event::BudgetWarning { ratio: 1.0 }, world);
         let synthesised = self
-            .force_final_synthesis(&mut ctx, world, &mut total_usage)
+            .force_final_synthesis(&mut ctx, world, &mut total_usage, BUDGET_SYNTHESIS_PROMPT)
             .await;
         if let Some(t) = synthesised {
             last_text = Some(t);
@@ -1975,29 +2209,23 @@ impl<M: Model> AgentLoop<M> {
     /// Errors from the model are swallowed — observability is best-effort
     /// here, and a transport blip during synthesis should not turn a
     /// near-complete run into a hard failure.
+    ///
+    /// `prompt` says *why* the loop stopped granting tool calls. Budget
+    /// exhaustion is not the only way a run can end with the model still
+    /// reaching for tools — a detected loop is another — and the model writes a
+    /// better final answer when it is told which one happened.
     async fn force_final_synthesis(
         &self,
         ctx: &mut Context,
         world: &mut World,
         total_usage: &mut harness_core::Usage,
+        prompt: &str,
     ) -> Option<String> {
-        const SYNTHESIS_PROMPT: &str = "[system: budget exhausted] \
-            You have run out of budget for tool calls. Write your final answer \
-            NOW using only the tool results already in this conversation. Do not \
-            request more tools. Mark facts you could not verify as UNKNOWN. \
-            Include source URLs for every claim that is not UNKNOWN.";
-
-        // Signal to any observer (LiveProgressHook, SessionRecorder, custom
-        // hooks) that we've used 100% of the budget and are about to force
-        // synthesis. Pre-existing `BudgetWarning` event was unused; this is
-        // its natural home.
-        self.hooks.fire(&Event::BudgetWarning { ratio: 1.0 }, world);
-
         // Snapshot + clear tool schemas so the model has no choice but text.
         let saved_tools = std::mem::take(&mut ctx.tools);
         ctx.history.push(Turn {
             role: TurnRole::User,
-            blocks: vec![Block::Text(SYNTHESIS_PROMPT.into())],
+            blocks: vec![Block::Text(prompt.into())],
         });
 
         self.hooks.fire(&Event::PreModel { ctx }, world);

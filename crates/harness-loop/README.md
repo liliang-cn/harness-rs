@@ -23,6 +23,13 @@ Also home to **subagent isolation** and **session record/replay**.
 
 - **Stuck detection** (`StuckPolicy`) — repeated identical tool-call rounds get
   a "change your approach" nudge, then a clean `Outcome::Stuck`.
+- **Monotony detection** (`MonotonyPolicy`, **off by default**) — a second,
+  orthogonal signal: one tool worked for N rounds running (8 → nudge, 16 →
+  abort) with no other tool touched, however much the arguments differ. Catches
+  the guessing spiral that `StuckPolicy` correctly does not, and forces a final
+  answer before it stops. Off because an agent given only a shell legitimately
+  calls one tool forever; switch it on when your agent has tools it is supposed
+  to be using.
 - **Result ceiling with spill** (`ToolResultPolicy`) — a single tool result
   larger than `max_bytes` (default 24 KiB) is saved *in full* to
   `.harness/spill/` inside the workspace; the context gets a 4 KiB preview plus
