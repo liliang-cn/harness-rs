@@ -147,6 +147,19 @@ fn safe_split(history: &[Turn], want: usize) -> Option<usize> {
 
 /// Whether the kept history may *begin* at this turn.
 ///
+/// After a cut the first kept turn follows the summary, which is a **user**
+/// turn — so a turn that requests a tool is fine there, exactly as it is after
+/// any user message. What is never fine is a tool *result*, because the
+/// request that earned it was just dropped.
+///
+/// Getting this wrong is easy in both directions and neither shows up except
+/// on a long run. Too loose and the provider rejects the conversation for the
+/// rest of the run; too strict and every stage declines and compaction quietly
+/// stops working. The first version cut anywhere and broke pairs; the second
+/// demanded a user turn, of which an agent run has exactly one, at index 0,
+/// where a cut drops nothing; a real agent history is a bare alternation of
+/// tool requests and results, so it offered nowhere to land at all.
+///
 /// The providers' rule is that a turn requesting a tool must follow a user
 /// turn or a tool result. After a cut the first kept turn follows only the
 /// summary, so it may not be a tool request — and it may not be a tool
@@ -159,14 +172,7 @@ fn safe_split(history: &[Turn], want: usize) -> Option<usize> {
 /// every stage declined and compaction silently stopped compacting. That is
 /// the failure this predicate exists to avoid on both sides.
 fn starts_an_exchange(turn: &Turn) -> bool {
-    match turn.role {
-        TurnRole::User => true,
-        TurnRole::Assistant => !turn
-            .blocks
-            .iter()
-            .any(|b| matches!(b, Block::ToolCall { .. })),
-        _ => false,
-    }
+    turn.role != TurnRole::Tool
 }
 
 impl ModelBackedCompactor {
@@ -266,7 +272,9 @@ impl ModelBackedCompactor {
 
         let summary = out.text.unwrap_or_else(|| "(empty summary)".into());
         let mut new_history = vec![Turn {
-            role: TurnRole::System,
+            // See `starts_an_exchange`: a user turn keeps a following tool
+            // request legal.
+            role: TurnRole::User,
             blocks: vec![Block::Text(format!("[{tag}]\n{summary}"))],
         }];
         new_history.extend(ctx.history.drain(split..));
@@ -453,7 +461,10 @@ fn microcompact_old(ctx: &mut Context) {
     }
 
     let mut new_history = vec![Turn {
-        role: TurnRole::System,
+        // A user turn, not a system one: it is what makes the first kept turn
+        // legal when that turn requests a tool, which in an agent history it
+        // almost always does.
+        role: TurnRole::User,
         blocks: vec![Block::Text(summary)],
     }];
     new_history.extend(ctx.history.drain(split..));
@@ -531,7 +542,10 @@ fn auto_compact(ctx: &mut Context) {
     }
 
     let mut new_history = vec![Turn {
-        role: TurnRole::System,
+        // A user turn, not a system one: it is what makes the first kept turn
+        // legal when that turn requests a tool, which in an agent history it
+        // almost always does.
+        role: TurnRole::User,
         blocks: vec![Block::Text(combined)],
     }];
     new_history.extend(ctx.history.drain(split..));
@@ -578,14 +592,14 @@ mod tests {
     /// providers reject both, and Gemini rejects the second with a permanent
     /// 400 that ends the run.
     fn assert_history_is_legal(history: &[Turn], what: &str) {
-        let opens_with_call = history
-            .iter()
-            .find(|t| t.role != TurnRole::System)
-            .is_some_and(|t| t.blocks.iter().any(|b| matches!(b, Block::ToolCall { .. })));
-        assert!(
-            !opens_with_call,
-            "{what}: history opens with a tool call, which no longer follows a user or tool turn"
-        );
+        // The summary leads as a user turn, so a tool *request* may follow it.
+        // A tool *result* may not: whatever asked for it is gone.
+        if let Some(first) = history.first() {
+            assert!(
+                first.role != TurnRole::Tool,
+                "{what}: history opens with a tool result whose request was dropped"
+            );
+        }
         for (i, turn) in history.iter().enumerate() {
             if turn.role == TurnRole::Tool {
                 let prev_is_call = i > 0
@@ -621,9 +635,9 @@ mod tests {
 
     #[test]
     fn a_split_with_nowhere_legal_to_land_is_declined() {
-        // Nothing here can begin a kept history: a tool result whose request
-        // was dropped, and a turn that requests a tool. Better to skip the
-        // stage than hand the provider a conversation it will refuse.
+        // Only a tool result sits after index 0, and a kept history may not
+        // begin with one. Better to skip the stage than hand the provider a
+        // conversation it will refuse for the rest of the run.
         let history = vec![
             Turn {
                 role: TurnRole::Assistant,
@@ -640,16 +654,46 @@ mod tests {
                     content: serde_json::json!({}),
                 }],
             },
-            Turn {
+        ];
+        assert_eq!(safe_split(&history, 1), None);
+    }
+
+    /// The shape an agent run actually has: one user turn, then nothing but
+    /// tool requests and their results. Demanding a user turn — or even an
+    /// assistant turn that only speaks — finds nowhere to land here, and
+    /// compaction silently stops working on exactly the runs that need it.
+    #[test]
+    fn a_bare_alternation_of_tool_calls_can_still_be_compacted() {
+        let mut ctx = mk_ctx(0);
+        ctx.history.push(Turn {
+            role: TurnRole::User,
+            blocks: vec![Block::Text("the task".into())],
+        });
+        for i in 0..10 {
+            ctx.history.push(Turn {
                 role: TurnRole::Assistant,
                 blocks: vec![Block::ToolCall {
-                    call_id: "c1".into(),
-                    name: "t".into(),
-                    args: serde_json::json!({}),
+                    call_id: format!("c{i}"),
+                    name: "read_file".into(),
+                    args: serde_json::json!({ "path": format!("{i}.txt") }),
                 }],
-            },
-        ];
-        assert_eq!(safe_split(&history, 2), None);
+            });
+            ctx.history.push(Turn {
+                role: TurnRole::Tool,
+                blocks: vec![Block::ToolResult {
+                    call_id: format!("c{i}"),
+                    content: serde_json::json!({ "ok": true }),
+                }],
+            });
+        }
+        let before = ctx.history.len();
+        microcompact_old(&mut ctx);
+        assert!(
+            ctx.history.len() < before,
+            "compaction did nothing on a bare tool alternation: {before} turns in, {} out",
+            ctx.history.len()
+        );
+        assert_history_is_legal(&ctx.history, "bare tool alternation");
     }
 
     /// An agent run has exactly ONE user turn — the task — and it sits at
@@ -751,7 +795,8 @@ mod tests {
             .await
             .unwrap();
         // First turn should be the synthetic system summary.
-        assert!(matches!(ctx.history[0].role, TurnRole::System));
+        // The summary leads as a user turn — see `starts_an_exchange`.
+        assert!(matches!(ctx.history[0].role, TurnRole::User));
         let first_text = match &ctx.history[0].blocks[0] {
             Block::Text(t) => t.clone(),
             _ => String::new(),

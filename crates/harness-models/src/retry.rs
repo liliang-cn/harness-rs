@@ -35,7 +35,34 @@ impl Retryable {
     }
 }
 
-/// Run `f` up to 4 times (1 initial + 3 retries) on transient failures.
+/// How many attempts a transient failure gets, and how far the backoff may
+/// grow. Defaults to 6 attempts capped at 10s — 1+2+4+8+10, about 25 seconds
+/// of tolerance.
+///
+/// The original policy was 4 attempts capped at 4s, which is seven seconds of
+/// network trouble before the call fails. Seven seconds is a reasonable wait
+/// for someone staring at a chat box, and a terrible one for an unattended run
+/// that has been working for hours: a DNS blip ended a twelve-minute task and
+/// took its work with it. Nobody is waiting on a background task, so it should
+/// wait out an outage rather than lose everything to one.
+///
+/// `HARNESS_RETRY_ATTEMPTS` and `HARNESS_RETRY_MAX_DELAY_SECS` override it —
+/// a host running long unattended work can afford minutes.
+fn retry_budget() -> (u32, Duration) {
+    fn env(key: &str, default: u64) -> u64 {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(default)
+    }
+    (
+        env("HARNESS_RETRY_ATTEMPTS", 6) as u32,
+        Duration::from_secs(env("HARNESS_RETRY_MAX_DELAY_SECS", 10)),
+    )
+}
+
+/// Run `f` until it succeeds or the retry budget runs out; see [`retry_budget`].
 ///
 /// `label` shows up in tracing for grep-ability.
 pub async fn with_retry<F, Fut, T>(label: &'static str, mut f: F) -> Result<T, String>
@@ -43,6 +70,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, Retryable>>,
 {
+    let (max_attempts, max_delay) = retry_budget();
     let mut attempt = 0u32;
     let mut delay = Duration::from_secs(1);
     loop {
@@ -54,11 +82,11 @@ where
                 }
                 return Ok(v);
             }
-            Err(e) if e.transient && attempt < 4 => {
+            Err(e) if e.transient && attempt < max_attempts => {
                 tracing::warn!(label, attempt, delay_ms = delay.as_millis() as u64, reason = %e.message,
                     "transient failure, retrying");
                 tokio::time::sleep(delay).await;
-                delay = std::cmp::min(delay * 2, Duration::from_secs(4));
+                delay = std::cmp::min(delay * 2, max_delay);
             }
             Err(e) => {
                 if e.transient {
@@ -81,7 +109,7 @@ where
 /// kind of stringly-typed guessing that goes wrong silently. So the classifier
 /// is passed in and the error type survives.
 ///
-/// Same policy as [`with_retry`]: 1 initial attempt + 3 retries, 1s → 2s → 4s.
+/// Same policy as [`with_retry`]; see [`retry_budget`].
 pub async fn with_retry_typed<F, Fut, T, E>(
     label: &'static str,
     is_transient: impl Fn(&E) -> bool,
@@ -92,6 +120,7 @@ where
     Fut: Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
+    let (max_attempts, max_delay) = retry_budget();
     let mut attempt = 0u32;
     let mut delay = Duration::from_secs(1);
     loop {
@@ -103,11 +132,11 @@ where
                 }
                 return Ok(v);
             }
-            Err(e) if is_transient(&e) && attempt < 4 => {
+            Err(e) if is_transient(&e) && attempt < max_attempts => {
                 tracing::warn!(label, attempt, delay_ms = delay.as_millis() as u64, reason = %e,
                     "transient failure, retrying");
                 tokio::time::sleep(delay).await;
-                delay = std::cmp::min(delay * 2, Duration::from_secs(4));
+                delay = std::cmp::min(delay * 2, max_delay);
             }
             Err(e) => {
                 tracing::error!(label, attempt, reason = %e, "giving up");
@@ -165,7 +194,7 @@ mod tests {
     // Paused clock: the backoff schedule is the thing under test, and sitting
     // through 1s+2s+4s of it proves nothing that auto-advancing does not.
     #[tokio::test(start_paused = true)]
-    async fn transient_gives_up_after_3_retries() {
+    async fn a_transient_failure_uses_the_whole_budget_then_gives_up() {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
         let r: Result<(), _> = with_retry("test:max", || {
@@ -177,7 +206,9 @@ mod tests {
         })
         .await;
         assert!(r.is_err());
-        assert_eq!(count.load(Ordering::SeqCst), 4); // 1 initial + 3 retries
+        // The budget is configurable, so the test asks for it rather than
+        // freezing yesterday's number and failing when it is tuned.
+        assert_eq!(count.load(Ordering::SeqCst), retry_budget().0);
     }
 
     #[derive(Debug, PartialEq)]
@@ -210,7 +241,7 @@ mod tests {
         )
         .await;
         assert_eq!(r.unwrap_err(), E::Limited);
-        assert_eq!(count.load(Ordering::SeqCst), 4);
+        assert_eq!(count.load(Ordering::SeqCst), retry_budget().0);
     }
 
     #[tokio::test]
