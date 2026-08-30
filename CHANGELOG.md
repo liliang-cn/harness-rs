@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.58
+
+### Fixed
+
+- **Compaction still could not find anywhere to cut** (0.0.57 widened the rule; this fixes the cause).
+  The summary that replaces the dropped prefix was a *system* turn, and providers require a turn that
+  requests a tool to follow a **user** turn or a tool result. A real agent history is a bare
+  alternation — `user(task), assistant(call), tool(result), assistant(call), …` — with no plain
+  assistant turns at all, so with a system summary in front, no cut anywhere was legal and every
+  stage kept declining. The summary is now a user turn, which makes a following tool request legal,
+  and the rule collapses to its true form: cut anywhere except immediately before a tool result,
+  whose request would be gone. Three attempts at this bug, and only the third looked at the summary
+  rather than at the cut.
+
+- **A network blip ended a long run and took its work with it.** Transport errors were already
+  retried, but the budget was 4 attempts capped at 4s — seven seconds of trouble before the call
+  fails for good. Seven seconds is a fair wait for someone watching a chat box and a poor one for an
+  unattended task that has been working for hours; a DNS hiccup killed a twelve-minute run.
+  Now 6 attempts capped at 10s (~25s of tolerance), and `HARNESS_RETRY_ATTEMPTS` /
+  `HARNESS_RETRY_MAX_DELAY_SECS` let a host running long work wait out minutes instead.
+
 ## 0.0.57
 
 ### Fixed
