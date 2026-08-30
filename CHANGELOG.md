@@ -5,6 +5,31 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ## 0.0.58
 
+### Added
+
+- **A second stuck signal: `MonotonyPolicy` (off by default).** `StuckPolicy` catches
+  *byte-identical consecutive* rounds, and deliberately nothing else — that strictness is why
+  "read the same file twice" work never trips it. It cannot see the other spiral. Measured on a
+  real run: an agent that could not retrieve an anchor entity started guessing candidates and
+  looking them up one at a time — `graph_find("Nomad")`, `graph_find("Docker")`,
+  `graph_find("Xen")`, `graph_find("KVM")` — twelve calls to one tool across twenty rounds, no
+  two alike, none useful, and it never emitted text without a tool call, so the run died at
+  `BudgetExhausted` with a partial answer. `MonotonyPolicy` keys on the shape instead: one tool
+  and *nothing else* for N consecutive rounds, however much the arguments differ. Nudge at 8
+  (a survey ends by reaching for a different tool, which resets the count; being wrong costs one
+  sentence), abort at 16 (twice the nudge, and 2.6x `StuckPolicy`'s, so a byte-identical spiral
+  is always reported under the older policy's reason — neither detector subsumes the other).
+
+  Off by default and it has to be: give an agent a shell and nothing else and `run_shell` is the
+  only name it will ever emit, thirty rounds running, legitimately. No threshold rescues that, so
+  a default-on version would terminate working agents. Opt in with `with_monotony_policy`.
+
+  Its abort forces the final synthesis before returning — tools stripped, one question — because
+  a model caught here is by definition one that will not stop calling tools on its own, and
+  terminating it without asking for text hands back the same empty answer the detector exists to
+  prevent. That is the reachable exit, reusing the one the budget-exhausted path has always had:
+  no built-in `task_complete` tool, and so no bytes added to the prompt.
+
 ### Fixed
 
 - **Compaction still could not find anywhere to cut** (0.0.57 widened the rule; this fixes the cause).
