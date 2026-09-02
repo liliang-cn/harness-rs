@@ -3,6 +3,26 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.61
+
+### Fixed
+
+- **The merge in 0.0.60 dropped the feature lists its crates had declared**, and
+  `cargo build --workspace` could not see it. Feature unification hands every
+  crate in a workspace the union of what all of them asked for, so
+  `harness-rs-tools` compiled locally on `tokio` features it no longer declared
+  — and then failed to build from its own packaged tarball, which is the first
+  time it was ever compiled alone. `tokio` had lost nine features (`net`,
+  `io-std`, `io-util`, `process`, `time`, `sync`, `rt`, `rt-multi-thread`,
+  `macros`), `harness-rs-loop` had lost `tokio/signal` and
+  `tracing-subscriber/env-filter`.
+
+  The check that catches this is `cargo build -p <crate>` for each crate, one at
+  a time: that resolves features from that crate's own graph and nothing else.
+  Removing the restored list makes it fail again in five places, which is how
+  this was confirmed rather than assumed. 0.0.60 published three crates before
+  stopping; nothing depends on them.
+
 ## 0.0.60
 
 **Breaking: 38 crates are now 15.** Every `use` of a merged crate has to change,

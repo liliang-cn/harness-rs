@@ -30,7 +30,7 @@ async-trait       = { workspace = true }
 tracing           = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
-tokio             = { workspace = true }
+tokio             = { workspace = true, features = ["signal"] }
 schemars          = { workspace = true }
 futures           = { workspace = true }
 # Sealing the acceptance contract (src/seal.rs). Same version harness-hooks
@@ -45,7 +45,7 @@ opentelemetry         = { version = "0.32", optional = true }
 opentelemetry_sdk     = { version = "0.32", optional = true }
 opentelemetry-otlp    = { version = "0.32", features = ["grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.33", optional = true }
-tracing-subscriber    = { workspace = true, optional = true }
+tracing-subscriber    = { workspace = true, features = ["env-filter"], optional = true }
 
 [features]
 # Export the agent's `tracing` telemetry over OTLP (Jaeger / Tempo / SigNoz /
