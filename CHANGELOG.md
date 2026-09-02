@@ -3,6 +3,45 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.59
+
+### Added
+
+- **`harness-rs-tools-agents` — ask another agent.** Claude Code, Codex and the rest are
+  agents in their own right: they read a tree, run commands, and write files. When the work
+  in front of this agent is better done by one of them — a language its model is weak in, a
+  second opinion on a bug, a large mechanical change — the useful move is to ask rather than
+  reimplement. `run_agent` spawns one and reports what happened, with no policy of its own;
+  `AskAgentTool` is that as a tool. A host with an approval flow should wrap the runner:
+  asking another agent to run commands is not gentler than running them yourself.
+
+  Driving them is one non-interactive invocation each, and the entire difficulty is in the
+  flags — **none of which appear in `--help`**. These CLIs are built for a person at a
+  terminal, so a missing flag does not produce an error. It produces a process waiting on a
+  question nobody will answer, or one that quietly does less than it was asked:
+
+  - An agent's working directory is often a scratch directory: not a git repository, and not
+    one anybody has trusted. `codex exec` refuses without `--skip-git-repo-check`; `gemini -p`
+    refuses without `--skip-trust`, and its check is not the git one — it refuses inside a
+    brand-new git repository too. Both refuse before doing any work.
+  - Without `--permission-mode bypassPermissions`, Claude Code stops at the first file it
+    wants to write. A probe that only asks a question never sees this; the measurement behind
+    this release wrote a file.
+  - Codex takes `--dangerously-bypass-approvals-and-sandbox`, not `--full-auto`: the latter
+    gates MCP tool calls behind an approval that cannot be answered without a terminal, so
+    they silently never fire and the agent works with fewer tools than it was given.
+
+  And **the exit code is not the verdict**. A `claude` whose token has been revoked writes
+  "Failed to authenticate" as its answer, sets `is_error` on the result frame, and exits
+  zero — so a caller reading the status alone hands an authentication failure to the model as
+  the answer to its question, which the model then acts on. Each agent declares how it is to
+  be read (`Verdict`), and Claude Code is read from `--output-format json`.
+
+  The table is not a closed list: `<dir>/agents.json` adds an agent or replaces a built-in
+  outright, which is how a CLI whose flags changed gets fixed without waiting for a release.
+  Anything not on `PATH` is not offered, because an agent named in a tool description and
+  missing from the machine costs the model a turn to discover.
+
 ## 0.0.58
 
 ### Added
