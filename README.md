@@ -24,7 +24,7 @@ deterministic-first, observable, governance built in.
 use harness_core::Task;
 use harness_loop::AgentLoop;
 use harness_models::ApiKind;
-use harness_tools_fs::{ListDir, ReadFile};
+use harness_tools::fs::{ListDir, ReadFile};
 use std::sync::Arc;
 
 // One model API: protocol family + base_url + model + key. No hardcoded URLs.

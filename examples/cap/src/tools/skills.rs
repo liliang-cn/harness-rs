@@ -39,7 +39,7 @@ impl Tool for SkillRead {
         _w: &mut World,
     ) -> Result<ToolResult, ToolError> {
         let name = args["name"].as_str().unwrap_or_default();
-        let skills = harness_skills::scan_skills_root(&self.dir).unwrap_or_default();
+        let skills = harness_context::skills::scan_skills_root(&self.dir).unwrap_or_default();
         match skills.iter().find(|s| s.manifest().name == name) {
             Some(sk) => Ok(ToolResult {
                 ok: true,

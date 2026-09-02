@@ -5,7 +5,7 @@
 
 use crate::actionspec;
 use async_trait::async_trait;
-use harness_orchestrator::{
+use harness_loop::orchestrator::{
     Backoff, Job, JobId, JobResult, PlanDelta, Planner, PlannerError, RetryPolicy,
 };
 use sqlx::{PgPool, Row};

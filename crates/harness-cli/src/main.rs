@@ -288,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Skills {
             cmd: SkillsCmd::Validate { path },
-        } => match harness_skills::load_skill_dir(&path) {
+        } => match harness_context::skills::load_skill_dir(&path) {
             Ok(s) => {
                 println!(
                     "✓ valid: {} — {}",
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Skills {
             cmd: SkillsCmd::List { dir },
         } => {
-            let skills = harness_skills::scan_skills_root(&dir)?;
+            let skills = harness_context::skills::scan_skills_root(&dir)?;
             for s in &skills {
                 println!("{}  —  {}", s.manifest().name, s.manifest().description);
             }
@@ -315,7 +315,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Skills {
             cmd: SkillsCmd::Lint { dir },
         } => {
-            let findings = harness_skills::lint_dir(&dir)?;
+            let findings = harness_context::skills::lint_dir(&dir)?;
             if findings.is_empty() {
                 println!("✓ no lint findings in {}", dir.display());
                 return Ok(());
@@ -325,15 +325,15 @@ async fn main() -> anyhow::Result<()> {
             let mut infos = 0;
             for f in &findings {
                 let tag = match f.severity {
-                    harness_skills::LintSeverity::Error => {
+                    harness_context::skills::LintSeverity::Error => {
                         errors += 1;
                         "ERROR"
                     }
-                    harness_skills::LintSeverity::Warning => {
+                    harness_context::skills::LintSeverity::Warning => {
                         warnings += 1;
                         "WARN "
                     }
-                    harness_skills::LintSeverity::Info => {
+                    harness_context::skills::LintSeverity::Info => {
                         infos += 1;
                         "INFO "
                     }
@@ -349,11 +349,11 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Skills {
             cmd: SkillsCmd::Export { target, from },
         } => {
-            let mut registry = harness_skills::SkillRegistry::new().with_macro_skills()?;
+            let mut registry = harness_context::skills::SkillRegistry::new().with_macro_skills()?;
             if let Some(p) = from {
                 registry = registry.with_filesystem_root(&p)?;
             }
-            let paths = harness_skills::export_registry(&registry, &target)?;
+            let paths = harness_context::skills::export_registry(&registry, &target)?;
             for p in &paths {
                 println!("✓ {}", p.display());
             }
@@ -461,22 +461,22 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         // — the documented way to watch a run — produces silence, and the
         // framework's GenAI instrumentation is unreachable from its own CLI.
         .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
-        .with_tool(Arc::new(harness_tools_fs::ReadFile))
-        .with_tool(Arc::new(harness_tools_fs::ListDir))
+        .with_tool(Arc::new(harness_tools::fs::ReadFile))
+        .with_tool(Arc::new(harness_tools::fs::ListDir))
         // Search is read-only, and without it "which files mention X" has only
         // one shape: list everything, read everything, decide in the model.
         // Measured, that brute force cost 54,505 tokens and 159s on a two-file
         // project — not because the loop was inefficient, but because the agent
         // had no way to ask the question. `harness code` has had these all along.
-        .with_tool(Arc::new(harness_tools_fs::Grep))
-        .with_tool(Arc::new(harness_tools_fs::Glob));
+        .with_tool(Arc::new(harness_tools::fs::Grep))
+        .with_tool(Arc::new(harness_tools::fs::Glob));
     if opts.write {
         loop_ = loop_
-            .with_tool(Arc::new(harness_tools_fs::WriteFile))
-            .with_tool(Arc::new(harness_tools_fs::EditFile));
+            .with_tool(Arc::new(harness_tools::fs::WriteFile))
+            .with_tool(Arc::new(harness_tools::fs::EditFile));
     }
     if opts.shell {
-        loop_ = loop_.with_tool(Arc::new(harness_tools_shell::ShellRead));
+        loop_ = loop_.with_tool(Arc::new(harness_tools::shell::ShellRead));
     }
     if opts.progress {
         loop_ = loop_.with_hook(Arc::new(LiveProgressHook::new()));
@@ -689,11 +689,11 @@ fn fmt_tool_args(tool: &str, args: &serde_json::Value) -> String {
 /// (network denied, writes limited to the workspace). Falls back to a normal
 /// world (with a note) if the OS sandbox tool isn't available.
 async fn os_sandbox_world(root: &std::path::Path) -> (harness_core::World, String) {
-    use harness_sandbox::Sandbox;
+    use harness_loop::sandbox::Sandbox;
     #[cfg(target_os = "macos")]
-    let backend = harness_sandbox::SeatbeltSandbox::new(root).with_confine_writes(true);
+    let backend = harness_loop::sandbox::SeatbeltSandbox::new(root).with_confine_writes(true);
     #[cfg(target_os = "linux")]
-    let backend = harness_sandbox::BubblewrapSandbox::new(root);
+    let backend = harness_loop::sandbox::BubblewrapSandbox::new(root);
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         return (
@@ -753,14 +753,14 @@ async fn run_code(
         // the latency a person actually feels, as opposed to how long the whole
         // answer took.
         .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
-        .with_tool(Arc::new(harness_tools_fs::ReadFile))
-        .with_tool(Arc::new(harness_tools_fs::ListDir))
-        .with_tool(Arc::new(harness_tools_fs::Grep))
-        .with_tool(Arc::new(harness_tools_fs::Glob))
-        .with_tool(Arc::new(harness_tools_fs::WriteFile))
-        .with_tool(Arc::new(harness_tools_fs::EditFile))
-        .with_tool(Arc::new(harness_tools_shell::ShellRead))
-        .with_tool(Arc::new(harness_tools_shell::ShellExec))
+        .with_tool(Arc::new(harness_tools::fs::ReadFile))
+        .with_tool(Arc::new(harness_tools::fs::ListDir))
+        .with_tool(Arc::new(harness_tools::fs::Grep))
+        .with_tool(Arc::new(harness_tools::fs::Glob))
+        .with_tool(Arc::new(harness_tools::fs::WriteFile))
+        .with_tool(Arc::new(harness_tools::fs::EditFile))
+        .with_tool(Arc::new(harness_tools::shell::ShellRead))
+        .with_tool(Arc::new(harness_tools::shell::ShellExec))
         .with_hook(Arc::new(ReplHook { yolo }));
 
     let mode = if yolo {
@@ -886,8 +886,8 @@ fn sched_store_path(explicit: Option<PathBuf>) -> PathBuf {
 }
 
 async fn run_sched(cmd: SchedCmd) -> anyhow::Result<()> {
-    use harness_daemon::Schedule;
-    use harness_scheduler::{FileJobStore, Job, JobStore};
+    use harness_loop::daemon::Schedule;
+    use harness_loop::scheduler::{FileJobStore, Job, JobStore};
 
     match cmd {
         SchedCmd::Add {
@@ -1003,9 +1003,9 @@ fn build_scheduler(
     workspace: Option<PathBuf>,
     model: Option<String>,
     base_url: Option<String>,
-) -> anyhow::Result<harness_scheduler::Scheduler> {
+) -> anyhow::Result<harness_loop::scheduler::Scheduler> {
+    use harness_loop::scheduler::{EmailChannel, FileJobStore, JobStore, Scheduler, StdoutChannel};
     use harness_models::OpenAiCompat;
-    use harness_scheduler::{EmailChannel, FileJobStore, JobStore, Scheduler, StdoutChannel};
     use std::sync::Arc;
 
     let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
@@ -1016,9 +1016,9 @@ fn build_scheduler(
 
     let mut sched = Scheduler::new(store, model)
         .with_repo_root(root)
-        .with_tool(Arc::new(harness_tools_fs::ReadFile))
-        .with_tool(Arc::new(harness_tools_fs::ListDir))
-        .with_tool(Arc::new(harness_tools_shell::ShellRead))
+        .with_tool(Arc::new(harness_tools::fs::ReadFile))
+        .with_tool(Arc::new(harness_tools::fs::ListDir))
+        .with_tool(Arc::new(harness_tools::shell::ShellRead))
         .with_channel(Arc::new(StdoutChannel::new()));
     if let Some(email) = EmailChannel::from_env() {
         sched = sched.with_channel(Arc::new(email));
@@ -1030,18 +1030,18 @@ async fn run_mcp_server(workspace: Option<PathBuf>, skills: Option<PathBuf>) -> 
     use std::sync::Arc;
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
     let mut world = harness_context::default_world(root);
-    let mut server = harness_mcp::McpServer::new("harness-mcp", env!("CARGO_PKG_VERSION"))
+    let mut server = harness_tools::mcp::McpServer::new("harness-mcp", env!("CARGO_PKG_VERSION"))
         .with_tools(vec![
-            Arc::new(harness_tools_fs::ReadFile),
-            Arc::new(harness_tools_fs::WriteFile),
-            Arc::new(harness_tools_fs::EditFile),
-            Arc::new(harness_tools_fs::ListDir),
-            Arc::new(harness_tools_shell::ShellRead),
+            Arc::new(harness_tools::fs::ReadFile),
+            Arc::new(harness_tools::fs::WriteFile),
+            Arc::new(harness_tools::fs::EditFile),
+            Arc::new(harness_tools::fs::ListDir),
+            Arc::new(harness_tools::shell::ShellRead),
         ]);
 
     // Load skills from a directory if --skills <path> was given.
     if let Some(skills_root) = skills {
-        let loaded = harness_skills::scan_skills_root(&skills_root)
+        let loaded = harness_context::skills::scan_skills_root(&skills_root)
             .map_err(|e| anyhow::anyhow!("scan skills root {}: {e}", skills_root.display()))?;
         let arc_skills: Vec<Arc<dyn harness_core::Skill>> = loaded
             .into_iter()
@@ -1125,13 +1125,13 @@ async fn replay_session(
     // their recorded calls against the workspace.
     let model = harness_loop::replay_as_mock(&events);
     let loop_ = AgentLoop::new(model)
-        .with_tool(Arc::new(harness_tools_fs::ReadFile))
-        .with_tool(Arc::new(harness_tools_fs::ListDir))
-        .with_tool(Arc::new(harness_tools_fs::Grep))
-        .with_tool(Arc::new(harness_tools_fs::Glob))
-        .with_tool(Arc::new(harness_tools_fs::WriteFile))
-        .with_tool(Arc::new(harness_tools_fs::EditFile))
-        .with_tool(Arc::new(harness_tools_shell::ShellRead));
+        .with_tool(Arc::new(harness_tools::fs::ReadFile))
+        .with_tool(Arc::new(harness_tools::fs::ListDir))
+        .with_tool(Arc::new(harness_tools::fs::Grep))
+        .with_tool(Arc::new(harness_tools::fs::Glob))
+        .with_tool(Arc::new(harness_tools::fs::WriteFile))
+        .with_tool(Arc::new(harness_tools::fs::EditFile))
+        .with_tool(Arc::new(harness_tools::shell::ShellRead));
 
     // Generous iteration cap — the mock naturally terminates when its scripted
     // outputs run out, so this only bounds a pathological log.
@@ -1277,7 +1277,7 @@ use harness::prelude::*;
 use harness_context::default_world;
 use harness_loop::{AgentLoop, LiveProgressHook};
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{ListDir, ReadFile};
+use harness_tools::fs::{ListDir, ReadFile};
 use std::sync::Arc;
 
 /// Echo any text the user provides. Use when the user asks the agent to repeat something verbatim.
@@ -1413,7 +1413,7 @@ fn tracing_subscriber_init(telemetry: bool) {
     use tracing_subscriber::{EnvFilter, fmt};
     // Default to `warn` so real failures (model 401s, delivery errors, dropped
     // jobs) surface instead of vanishing; override verbosity with RUST_LOG,
-    // e.g. `RUST_LOG=harness_scheduler=info,harness_loop=debug`. Logs go to
+    // e.g. `RUST_LOG=harness_loop::scheduler=info,harness_loop=debug`. Logs go to
     // stderr so they never pollute `run --json` / MCP stdout.
     // `--telemetry` is the discoverable form of RUST_LOG=harness.telemetry=info.
     // An explicit RUST_LOG still wins, so the flag never overrides a deliberate

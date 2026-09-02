@@ -16,8 +16,11 @@ name = "harness_context"
 path = "src/lib.rs"
 
 [dependencies]
+inventory   = { workspace = true }
+once_cell   = { workspace = true }
+serde_yaml  = { workspace = true }
+walkdir     = { workspace = true }
 harness-core = { workspace = true }
-harness-redact = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 tokio        = { workspace = true }

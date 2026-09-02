@@ -6,7 +6,7 @@ use harness_context::default_world;
 use harness_core::{Block, Task, Turn, TurnRole};
 use harness_loop::{AgentLoop, Outcome, SessionEvent, SessionRecorder, SessionStats, read_session};
 use harness_models::{MockModel, MockResponse};
-use harness_tools_fs::ReadFile;
+use harness_tools::fs::ReadFile;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;

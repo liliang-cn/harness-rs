@@ -10,11 +10,11 @@
 use async_trait::async_trait;
 use harness_context::{FileMemory, FileRecall, default_world};
 use harness_core::{Model, RecallStore, Task, ToolError, ToolResult, ToolRisk, ToolSchema, World};
+use harness_loop::scheduler::{FileJobStore, Job, Scheduler, StdoutChannel};
 use harness_loop::{AgentLoop, LearningConfig, Outcome};
 use harness_models::OpenAiCompat;
-use harness_scheduler::{FileJobStore, Job, Scheduler, StdoutChannel};
-use harness_tools_memory::RememberThisTool;
-use harness_tools_skills::SkillManageTool;
+use harness_tools::memory::RememberThisTool;
+use harness_tools::skills::SkillManageTool;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -242,7 +242,8 @@ async fn run_scheduler(key: &str) -> anyhow::Result<bool> {
         std::fs::create_dir_all(p)?;
     }
 
-    let jobs: Arc<dyn harness_scheduler::JobStore> = Arc::new(FileJobStore::open(&jobs_path)?);
+    let jobs: Arc<dyn harness_loop::scheduler::JobStore> =
+        Arc::new(FileJobStore::open(&jobs_path)?);
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

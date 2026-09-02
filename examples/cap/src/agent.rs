@@ -6,8 +6,8 @@ use crate::sensor::LspSensor;
 use crate::tools::{HashEdit, HashRead, SkillRead, TaskTool};
 use harness_core::{DynModel, Guide, Hook, Tool};
 use harness_loop::AgentLoop;
-use harness_tools_fs::{Glob, Grep, ListDir, WriteFile};
-use harness_tools_skills::SkillManageTool;
+use harness_tools::fs::{Glob, Grep, ListDir, WriteFile};
+use harness_tools::skills::SkillManageTool;
 use std::path::PathBuf;
 use std::sync::Arc;
 

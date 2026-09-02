@@ -12,7 +12,7 @@ use harness_context::default_world;
 use harness_core::{Event, Hook, HookOutcome, Task};
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{ListDir, ReadFile, WriteFile};
+use harness_tools::fs::{ListDir, ReadFile, WriteFile};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

@@ -1555,16 +1555,16 @@ async fn session_stream_handler(
             ));
             loop_ = loop_
                 .with_tool(Arc::new(
-                    harness_tools_memory::RememberThisTool::with_source(
+                    harness_tools::memory::RememberThisTool::with_source(
                         guarded.clone(),
                         format!("ai-note/user-{uid}/explicit"),
                     ),
                 ))
-                .with_tool(Arc::new(harness_tools_memory::ListMemoriesTool::new(
+                .with_tool(Arc::new(harness_tools::memory::ListMemoriesTool::new(
                     guarded.clone(),
                 )))
-                .with_tool(Arc::new(harness_tools_memory::ForgetMemoryTool::new(
-                    file_arc.clone() as Arc<dyn harness_tools_memory::MemoryDelete>,
+                .with_tool(Arc::new(harness_tools::memory::ForgetMemoryTool::new(
+                    file_arc.clone() as Arc<dyn harness_tools::memory::MemoryDelete>,
                 )));
             // Cheap synth model for auto-distillation; skip if unavailable.
             if let Ok(synth_model) = s.build_model_for("deepseek-v4-flash") {

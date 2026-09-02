@@ -16,6 +16,7 @@ name = "harness_core"
 path = "src/lib.rs"
 
 [dependencies]
+regex       = { workspace = true }
 async-trait     = { workspace = true }
 thiserror       = { workspace = true }
 serde           = { workspace = true }

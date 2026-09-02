@@ -29,10 +29,10 @@ use ecommerce_ops_agent::{
 };
 use harness_context::FileMemory;
 use harness_core::{Memory, Model, Tool};
-use harness_models::ApiKind;
-use harness_orchestrator::{
+use harness_loop::orchestrator::{
     Dag, FileRunStore, Job, Orchestrator, Run, RunBudget, SubagentJobRunner,
 };
+use harness_models::ApiKind;
 use std::sync::Arc;
 
 const DASHSCOPE_BASE: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";

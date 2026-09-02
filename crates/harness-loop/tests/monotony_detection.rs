@@ -15,7 +15,7 @@ use harness_context::default_world;
 use harness_core::{Model, Task};
 use harness_loop::{AgentLoop, MonotonyPolicy, Outcome, StuckPolicy};
 use harness_models::{MockModel, MockResponse};
-use harness_tools_fs::{Grep, ReadFile};
+use harness_tools::fs::{Grep, ReadFile};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;

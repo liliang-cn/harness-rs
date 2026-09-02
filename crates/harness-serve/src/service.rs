@@ -16,10 +16,12 @@
 
 use crate::auth::{Actor, AuthError, Authenticator};
 use crate::session::SessionStore;
+use harness_core::redact::Redactor;
 use harness_core::{DynModel, Event, Hook, HookOutcome, Model, Task, Tool, World};
-use harness_hooks::{ACTOR_KEY, AuditHook, AuditSink, REQUEST_KEY, SESSION_KEY, new_request_id};
+use harness_loop::hooks::{
+    ACTOR_KEY, AuditHook, AuditSink, REQUEST_KEY, SESSION_KEY, new_request_id,
+};
 use harness_loop::{AgentLoop, Outcome, SessionRecorder};
-use harness_redact::Redactor;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -157,7 +159,7 @@ impl ChatService {
     /// Observe every turn this service runs — a live feed, a metrics sink, an audit mirror.
     ///
     /// Added to each per-request loop alongside the audit and replay hooks the service installs
-    /// itself. This is how [`BroadcastHook`](harness_hooks::BroadcastHook) reaches a served
+    /// itself. This is how [`BroadcastHook`](harness_loop::hooks::BroadcastHook) reaches a served
     /// conversation: the streaming endpoint already forwards assistant text, but tool calls,
     /// compaction, budget warnings and errors had nowhere to go.
     ///

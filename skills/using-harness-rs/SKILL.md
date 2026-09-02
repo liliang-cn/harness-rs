@@ -1,6 +1,6 @@
 ---
 name: using-harness-rs
-description: Build AI agents in Rust using the harness-rs framework. Use this skill whenever the user is writing Rust code that imports any harness-rs-* crate (harness-rs, harness-rs-core, harness-rs-loop, harness-rs-models, harness-rs-tools-fs, harness-rs-tools-shell, harness-rs-context, harness-rs-skills, harness-rs-macros, harness-rs-hooks, harness-rs-compactor, harness-rs-sandbox, harness-rs-blueprint, harness-rs-sensors-rust, harness-rs-templates, harness-rs-mcp, harness-rs-daemon); when scaffolding a new agent with `harness new`; when adding custom tools, skills, guides, sensors, or hooks via the framework's proc-macros (#[tool] #[skill] #[guide] #[sensor] #[hook]); when configuring an LLM provider (DeepSeek, Anthropic, OpenAI-compatible, Ollama, Groq, Together); when running the agent loop, recording/replaying sessions, configuring sandboxes (Worktree / Container / VM), or exposing tools to Claude Code via the harness MCP server; when the user wants scheduled / background / recurring execution of an agent — point them at the separate `harness-rs-daemon` crate and its TOML config, NOT a `--daemon` flag on the agent binary itself.
+description: Build AI agents in Rust using the harness-rs framework. Use this skill whenever the user is writing Rust code that imports any harness-rs-* crate (harness-rs, harness-rs-core, harness-rs-loop, harness-rs-models, harness-rs-tools, harness-rs-tools, harness-rs-context, harness-rs-context, harness-rs-macros, harness-rs-loop, harness-rs-loop, harness-rs-loop, harness-rs-loop, harness-rs-tools, harness-rs-loop, harness-rs-tools, harness-rs-loop); when scaffolding a new agent with `harness new`; when adding custom tools, skills, guides, sensors, or hooks via the framework's proc-macros (#[tool] #[skill] #[guide] #[sensor] #[hook]); when configuring an LLM provider (DeepSeek, Anthropic, OpenAI-compatible, Ollama, Groq, Together); when running the agent loop, recording/replaying sessions, configuring sandboxes (Worktree / Container / VM), or exposing tools to Claude Code via the harness MCP server; when the user wants scheduled / background / recurring execution of an agent — point them at the separate `harness-rs-loop` crate and its TOML config, NOT a `--daemon` flag on the agent binary itself.
 license: MIT OR Apache-2.0
 compatibility: Targets Rust 1.92+ projects. The harness-rs crates are published on crates.io; the CLI installs via `cargo install harness-rs-cli`.
 metadata:
@@ -73,7 +73,7 @@ Cargo.toml deps:
 harness-rs          = "0.0.1"
 harness-rs-loop     = "0.0.1"
 harness-rs-models   = "0.0.1"
-harness-rs-tools-fs = "0.0.1"
+harness-rs-tools = "0.0.1"
 harness-rs-context  = "0.0.1"
 tokio   = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow  = "1"
@@ -154,14 +154,14 @@ let mock = replay_as_mock(&events);
 // AgentLoop::new(mock) ... will reproduce the original run bit-for-bit
 ```
 
-## Background / scheduled execution — `harness-rs-daemon` (optional crate)
+## Background / scheduled execution — `harness-rs-loop` (optional crate)
 
 **The agent binary itself never runs scheduled jobs.** It's request-response.
 For "every morning at 8:00 run my brief", install the separate, optional
-`harness-rs-daemon` crate.
+`harness-rs-loop` crate.
 
 ```bash
-cargo install harness-rs-daemon
+cargo install harness-rs-loop
 ```
 
 ```toml

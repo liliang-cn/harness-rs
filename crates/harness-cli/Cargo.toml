@@ -17,16 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 harness-core    = { workspace = true }
-harness-skills  = { workspace = true }
+harness-tools   = { workspace = true }
 harness-loop    = { workspace = true }
-harness-mcp     = { workspace = true }
 harness-context = { workspace = true }
-harness-tools-fs = { workspace = true }
-harness-tools-shell = { workspace = true }
-harness-sandbox = { workspace = true }
 harness-models = { workspace = true }
-harness-scheduler = { workspace = true }
-harness-daemon = { workspace = true }
 clap           = { workspace = true }
 serde_json     = { workspace = true }
 tokio          = { workspace = true }

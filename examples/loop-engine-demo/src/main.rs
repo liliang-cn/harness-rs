@@ -15,9 +15,9 @@
 
 use anyhow::Context as _;
 use harness_core::Model;
-use harness_loop_engine::{LoopEngine, patterns};
+use harness_loop::loop_engine::{LoopEngine, patterns};
 use harness_models::ApiKind;
-use harness_tools_fs::{ListDir, ReadFile};
+use harness_tools::fs::{ListDir, ReadFile};
 use std::sync::Arc;
 
 const DASHSCOPE_BASE: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";

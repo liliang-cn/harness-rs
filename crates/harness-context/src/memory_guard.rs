@@ -4,7 +4,7 @@
 //! before letting `write` through to the inner store:
 //!
 //! 1. **PII redaction** — runs the entry content through a
-//!    [`harness_redact::Redactor`] (default policy: [`Policy::memory_hygiene`]).
+//!    [`harness_core::redact::Redactor`] (default policy: [`Policy::memory_hygiene`]).
 //!    Card numbers are masked to the last 4 digits, emails / phones replaced
 //!    with `<EMAIL>` / `<PHONE>`, and monetary amounts *block* the whole entry
 //!    (transaction figures belong in a ledger, not long-term memory). Redacted
@@ -32,8 +32,8 @@
 //! ```
 
 use async_trait::async_trait;
+use harness_core::redact::{Policy, Redactor};
 use harness_core::{Memory, MemoryEntry, MemoryError};
-use harness_redact::{Policy, Redactor};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Arc;

@@ -18,8 +18,8 @@ name = "seed"
 path = "src/bin/seed.rs"
 
 [dependencies]
-harness-orchestrator = { workspace = true }
 harness-core         = { workspace = true }
+harness-loop    = { workspace = true }
 harness-models       = { workspace = true }
 async-trait          = { workspace = true }
 serde_json           = { workspace = true }

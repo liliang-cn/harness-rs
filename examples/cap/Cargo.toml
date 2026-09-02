@@ -22,13 +22,10 @@ path = "src/bin/cap-tui.rs"
 
 [dependencies]
 harness-core       = { workspace = true }
+harness-tools   = { workspace = true }
 harness-loop       = { workspace = true }
 harness-models     = { workspace = true }
 harness-context    = { workspace = true }
-harness-tools-fs   = { workspace = true }
-harness-skills     = { workspace = true }
-harness-tools-skills = { workspace = true }
-harness-experience = { workspace = true }
 harness-cortexdb   = { workspace = true }
 harness-mcp-client = { workspace = true }
 async-trait        = { workspace = true }

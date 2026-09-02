@@ -19,9 +19,9 @@ use harness_context::default_world;
 use harness_core::{Model, Task};
 use harness_loop::{AgentLoop, Outcome, SessionRecorder};
 use harness_models::OpenAiCompat;
-use harness_sensors_rust::CargoCheck;
-use harness_tools_fs::{ListDir, ReadFile, WriteFile};
-use harness_tools_shell::ShellRead;
+use harness_tools::fs::{ListDir, ReadFile, WriteFile};
+use harness_tools::sensors_rust::CargoCheck;
+use harness_tools::shell::ShellRead;
 use std::path::PathBuf;
 use std::sync::Arc;
 

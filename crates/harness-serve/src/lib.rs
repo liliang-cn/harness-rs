@@ -15,9 +15,9 @@
 //!
 //! ```ignore
 //! use harness_serve::{ChatService, Actor, StaticTokenAuth, InMemorySessions};
-//! use harness_hooks::JsonlAuditSink;
+//! use harness_loop::hooks::JsonlAuditSink;
 //! use harness_models::{ApiKind, ModelRouter, KEEP_LOCAL_KEY};
-//! use harness_redact::Redactor;
+//! use harness_core::redact::Redactor;
 //! use std::sync::Arc;
 //!
 //! // Local-first model with cloud fallback (see harness_models::ModelRouter).
@@ -267,7 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_trail_captures_the_exchange() {
-        use harness_hooks::{AuditRecord, AuditSink};
+        use harness_loop::hooks::{AuditRecord, AuditSink};
         use std::sync::Mutex;
 
         #[derive(Default)]

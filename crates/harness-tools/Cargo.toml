@@ -1,0 +1,52 @@
+[package]
+name = "harness-rs-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The tools a harness-rs agent reaches for — files, shell (with background jobs), memory, skills, tasks, dates, browser, recall, sensors, and an MCP server — in one crate. Tools whose dependencies are heavy live in their own crates instead."
+
+keywords     = ["agent", "ai", "llm", "harness", "tools"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_tools"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Opt-in for the tests that actually drive a browser. `cargo test -p
+# harness-rs-tools --features real-browser` — or set HARNESS_BROWSER_TESTS=1,
+# which the same tests honour. Either way they skip cleanly when no Chrome is
+# installed, so CI never needs a browser image.
+real-browser = []
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+anyhow      = { workspace = true }
+async-trait = { workspace = true }
+cap-std     = "3"
+chrono      = { workspace = true }
+once_cell   = { workspace = true }
+regex       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+uuid        = { version = "1", features = ["v4"] }
+walkdir     = { workspace = true }
+
+# Group-kill for the processes `shell` and `agents` start: both spawn things
+# that spawn things, and killing the direct child alone leaves the rest.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+harness-recall-sqlite = { workspace = true }
+tempfile = "3"
+tokio    = { workspace = true }

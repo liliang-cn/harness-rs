@@ -10,7 +10,7 @@
 
 use harness_core::Memory;
 use harness_cortexdb::CortexdbMemory;
-use harness_experience::{Episode, ExperienceStore};
+use harness_loop::experience::{Episode, ExperienceStore};
 use std::sync::Arc;
 
 #[tokio::main]

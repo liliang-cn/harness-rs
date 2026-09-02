@@ -17,7 +17,7 @@ use harness_core::{
 };
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::{MockModel, MockResponse};
-use harness_tools_fs::{EditFile, ReadFile, WriteFile};
+use harness_tools::fs::{EditFile, ReadFile, WriteFile};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};

@@ -6,26 +6,26 @@
 ┌───────────────────────────────────────────────────────────────┐
 │  harness-rs (facade)        — re-exports the public surface   │
 │  harness-rs-cli             — `harness` binary                 │
-│  harness-rs-templates       — pre-built Blueprints             │
+│  harness-rs-loop       — pre-built Blueprints             │
 └──────────────┬────────────────────────────────────────────────┘
                │
 ┌──────────────┴───────────────────────────────────────────────┐
 │  harness-rs-loop            — AgentLoop + Subagent + replay   │
-│  harness-rs-blueprint       — state machine executor          │
-│  harness-rs-mcp             — JSON-RPC stdio MCP server       │
+│  harness-rs-loop       — state machine executor          │
+│  harness-rs-tools             — JSON-RPC stdio MCP server       │
 └──────────────┬───────────────────────────────────────────────┘
                │
 ┌──────────────┴───────────────────────────────────────────────┐
 │  harness-rs-models          — OpenAiCompat/Anthropic/Mock     │
-│  harness-rs-compactor       — 5-stage compaction              │
-│  harness-rs-sandbox         — Worktree/Container/VM           │
-│  harness-rs-skills          — SKILL.md spec validator         │
-│  harness-rs-hooks           — HookBus, OpenTelemetry feature  │
+│  harness-rs-loop       — 5-stage compaction              │
+│  harness-rs-loop         — Worktree/Container/VM           │
+│  harness-rs-context          — SKILL.md spec validator         │
+│  harness-rs-loop           — HookBus, OpenTelemetry feature  │
 │  harness-rs-context         — Default World runtime           │
-│  harness-rs-tools-fs        — read/write/edit/list (jail-safe)│
-│  harness-rs-tools-shell     — allowlisted shell_read          │
-│  harness-rs-sensors-rust    — cargo check / clippy            │
-│  harness-rs-sensors-common  — shared sensor scaffolding       │
+│  harness-rs-tools        — read/write/edit/list (jail-safe)│
+│  harness-rs-tools     — allowlisted shell_read          │
+│  harness-rs-tools    — cargo check / clippy            │
+│  harness-rs-tools  — shared sensor scaffolding       │
 │  harness-rs-macros          — #[skill] #[tool] #[guide] …     │
 └──────────────┬───────────────────────────────────────────────┘
                │
@@ -40,15 +40,15 @@ If you're building...
 
 | ...this | Pull in |
 |---|---|
-| A minimal CLI agent that reads files | `harness-rs` + `harness-rs-loop` + `harness-rs-models` + `harness-rs-tools-fs` + `harness-rs-context` |
-| ...that also runs `cargo check` | + `harness-rs-sensors-rust` |
+| A minimal CLI agent that reads files | `harness-rs` + `harness-rs-loop` + `harness-rs-models` + `harness-rs-tools` + `harness-rs-context` |
+| ...that also runs `cargo check` | + `harness-rs-tools` |
 | ...with a recorded session log | + `SessionRecorder` from `harness-rs-loop` (no extra crate) |
-| ...isolated in a git worktree | + `harness-rs-sandbox` |
-| ...as a multi-step deterministic + LLM pipeline | + `harness-rs-blueprint` |
+| ...isolated in a git worktree | + `harness-rs-loop` |
+| ...as a multi-step deterministic + LLM pipeline | + `harness-rs-loop` |
 | ...with sub-agents spawning sub-agents | + `Subagent` from `harness-rs-loop` |
-| ...that exposes tools to Claude Code via MCP | + `harness-rs-mcp` (or just run `harness mcp serve`) |
+| ...that exposes tools to Claude Code via MCP | + `harness-rs-tools` (or just run `harness mcp serve`) |
 | Only writing a custom Model adapter | `harness-rs-core` alone — implement `harness_rs_core::Model` |
-| Only writing skills (no agent code) | `harness-rs-skills` alone — for validator/loader API |
+| Only writing skills (no agent code) | `harness-rs-context` alone — for validator/loader API |
 
 ## Pure dependency-light crates
 
@@ -60,7 +60,7 @@ If you're building...
 - No model adapters (those are in `harness-rs-models`)
 - No tokio runtime (consumed in `harness-rs-context`)
 - No HTTP client (in `harness-rs-models`)
-- No file I/O (in `harness-rs-tools-fs`)
+- No file I/O (in `harness-rs-tools`)
 
 Keeps the trait surface portable.
 

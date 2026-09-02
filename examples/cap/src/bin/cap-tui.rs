@@ -21,11 +21,11 @@ use crossterm::{execute, terminal};
 use harness_context::{FileMemory, default_world};
 use harness_core::{DynModel, Event, Hook, HookOutcome, Memory, Model, Skill, Task, World};
 use harness_cortexdb::CortexdbMemory;
-use harness_experience::ExperienceRecorder;
 use harness_loop::Outcome;
+use harness_loop::experience::ExperienceRecorder;
 use harness_mcp_client::McpClient;
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{Glob, Grep, ListDir};
+use harness_tools::fs::{Glob, Grep, ListDir};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::path::PathBuf;
@@ -350,7 +350,7 @@ fn open_submenu(name: &str) -> Option<SubMenu> {
         "/skills" => Some(SubMenu {
             title: "open skill".into(),
             kind: SubKind::Skill,
-            items: harness_skills::scan_skills_root(&cap_home().join("skills"))
+            items: harness_context::skills::scan_skills_root(&cap_home().join("skills"))
                 .unwrap_or_default()
                 .into_iter()
                 .map(|s| {
@@ -398,8 +398,8 @@ fn apply_command(
         }
         Cmd::Model => app.lines.push(('t', format!("model {model_id}"))),
         Cmd::Skills => {
-            for s in
-                harness_skills::scan_skills_root(&cap_home().join("skills")).unwrap_or_default()
+            for s in harness_context::skills::scan_skills_root(&cap_home().join("skills"))
+                .unwrap_or_default()
             {
                 app.lines.push((
                     't',
@@ -479,11 +479,12 @@ fn run_ui(
                                 }
                                 SubKind::Skill => {
                                     app.lines.push(('t', format!("── skill: {value} ──")));
-                                    if let Some(sk) =
-                                        harness_skills::scan_skills_root(&cap_home().join("skills"))
-                                            .unwrap_or_default()
-                                            .into_iter()
-                                            .find(|s| s.manifest().name == value)
+                                    if let Some(sk) = harness_context::skills::scan_skills_root(
+                                        &cap_home().join("skills"),
+                                    )
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .find(|s| s.manifest().name == value)
                                     {
                                         for l in sk.body().lines() {
                                             app.lines.push(('a', l.to_string()));

@@ -6,7 +6,7 @@ use harness_core::{
     Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, Tool, ToolCall,
 };
 use harness_loop::{AgentLoop, LearningConfig};
-use harness_tools_skills::SkillManageTool;
+use harness_tools::skills::SkillManageTool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 

@@ -3,9 +3,9 @@
 //! so we can assert the loop's escalation/stop behavior exactly.
 
 use async_trait::async_trait;
-use harness_compactor::CALIBRATION_KEY;
 use harness_context::default_world;
 use harness_core::{Budget, CompactError, CompactionStage, Compactor, Context, Task};
+use harness_loop::compactor::CALIBRATION_KEY;
 use harness_loop::{AgentLoop, CompactPolicy};
 use harness_models::{MockModel, MockResponse};
 use serde_json::json;
@@ -238,8 +238,8 @@ async fn the_budget_window_comes_from_the_model() {
 /// the target.
 #[tokio::test]
 async fn a_real_oversized_context_is_compacted_under_target() {
-    use harness_compactor::DefaultCompactor;
     use harness_core::{Block, Compactor, Context, Task, Turn, TurnRole};
+    use harness_loop::compactor::DefaultCompactor;
 
     let compactor = DefaultCompactor::default();
 
@@ -305,8 +305,8 @@ async fn a_real_oversized_context_is_compacted_under_target() {
 /// out and the run proceeds straight into a provider rejection.
 #[tokio::test]
 async fn a_short_history_with_one_huge_turn_is_still_compacted() {
-    use harness_compactor::DefaultCompactor;
     use harness_core::{Block, Compactor, Context, Task, Turn, TurnRole};
+    use harness_loop::compactor::DefaultCompactor;
 
     let compactor = DefaultCompactor::default();
     let mut ctx = Context::new(Task {

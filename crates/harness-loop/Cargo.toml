@@ -16,10 +16,15 @@ name = "harness_loop"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow       = { workspace = true }
+chrono       = { workspace = true }
+inventory    = { workspace = true }
+reqwest      = { workspace = true }
+serde_yaml   = { workspace = true }
+thiserror    = { workspace = true }
 harness-core      = { workspace = true }
+harness-tools   = { workspace = true }
 harness-context   = { workspace = true }
-harness-hooks     = { workspace = true }
-harness-compactor = { workspace = true }
 harness-models    = { workspace = true }
 async-trait       = { workspace = true }
 tracing           = { workspace = true }
@@ -61,9 +66,7 @@ name = "memory_guide"
 harness = false
 
 [dev-dependencies]
-harness-skills       = { workspace = true }
-harness-tools-fs     = { workspace = true }
-harness-tools-skills = { workspace = true }
+toml = "0.9"
 once_cell         = { workspace = true }
 harness-context   = { workspace = true }
 harness-core      = { workspace = true }
@@ -74,4 +77,16 @@ tracing-subscriber = { workspace = true }
 
 [[bench]]
 name = "seal_cost"
+harness = false
+
+[[bench]]
+name = "experience_guide"
+harness = false
+
+[[bench]]
+name = "distill_gate"
+harness = false
+
+[[bench]]
+name = "distill_gate_allocs"
 harness = false

@@ -26,9 +26,14 @@ pub mod hook;
 pub mod image;
 pub mod memory;
 pub mod model;
+pub mod permissions;
 pub mod profile;
+// Redaction was its own crate and depended on nothing but `regex`, so the
+// boundary bought a caller nothing. It is a rule about what leaves the
+// process, which belongs beside the types that carry it.
 pub mod recall;
 pub mod recall_testkit;
+pub mod redact;
 pub mod sensor;
 pub mod signal;
 pub mod skill;

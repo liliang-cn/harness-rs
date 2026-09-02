@@ -89,7 +89,7 @@ impl Guide for SkillCatalog {
         SKILL_GUIDE_SCOPE.get_or_init(|| GuideScope::Always)
     }
     async fn apply(&self, ctx: &mut Context, _w: &World) -> Result<(), GuideError> {
-        let skills = harness_skills::scan_skills_root(&self.dir).unwrap_or_default();
+        let skills = harness_context::skills::scan_skills_root(&self.dir).unwrap_or_default();
         if skills.is_empty() {
             ctx.guides.push(Block::Text(
                 "Skills: none yet. When you solve something reusable, save the procedure with \

@@ -8,7 +8,7 @@ use harness_context::default_world;
 use harness_core::Task;
 use harness_loop::{AgentLoop, Outcome, StuckPolicy};
 use harness_models::{MockModel, MockResponse};
-use harness_tools_fs::ReadFile;
+use harness_tools::fs::ReadFile;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;

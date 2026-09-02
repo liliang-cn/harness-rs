@@ -5,7 +5,7 @@
 
 use crate::planner::FLAKY_JOB;
 use async_trait::async_trait;
-use harness_orchestrator::{Job, JobError, JobId, JobResult, JobRunner, SubagentJobRunner};
+use harness_loop::orchestrator::{Job, JobError, JobId, JobResult, JobRunner, SubagentJobRunner};
 use std::collections::HashMap;
 use std::sync::Mutex;
 

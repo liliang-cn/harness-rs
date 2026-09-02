@@ -5,7 +5,7 @@
 //! This test exercises a curated corpus so any future divergence trips a
 //! red CI immediately.
 
-use harness_skills::validate::validate_name;
+use harness_context::skills::validate::validate_name;
 
 /// Mirror of `harness-macros::validate_skill_name` (which can't be imported
 /// directly because it's a proc-macro crate). If you edit the macro's

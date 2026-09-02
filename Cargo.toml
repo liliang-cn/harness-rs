@@ -5,39 +5,15 @@ members = [
     "crates/harness-core",
     "crates/harness-macros",
     "crates/harness-context",
-    "crates/harness-redact",
-    "crates/harness-compactor",
-    "crates/harness-hooks",
     "crates/harness-loop",
     "crates/harness-serve",
-    "crates/harness-loop-engine",
-    "crates/harness-orchestrator",
-    "crates/harness-experience",
     "crates/harness-cortexdb",
-    "crates/harness-blueprint",
-    "crates/harness-sandbox",
-    "crates/harness-permissions",
-    "crates/harness-skills",
-    "crates/harness-tools-fs",
-    "crates/harness-tools-shell",
     "crates/harness-tools-docs",
     "crates/harness-tools-web",
-    "crates/harness-tools-tasks",
+    "crates/harness-tools",
     "crates/harness-tools-sql",
-    "crates/harness-tools-memory",
-    "crates/harness-tools-skills",
-    "crates/harness-tools-recall",
-    "crates/harness-tools-browser",
-    "crates/harness-tools-datetime",
-    "crates/harness-tools-agents",
-    "crates/harness-sensors-rust",
-    "crates/harness-sensors-common",
     "crates/harness-models",
-    "crates/harness-templates",
-    "crates/harness-mcp",
     "crates/harness-mcp-client",
-    "crates/harness-daemon",
-    "crates/harness-scheduler",
     "crates/harness-recall-sqlite",
     "crates/harness-cli",
     "examples/crate-keeper",
@@ -75,41 +51,17 @@ harness            = { package = "harness-rs",            path = "crates/harness
 harness-core       = { package = "harness-rs-core",       path = "crates/harness-core",       version = "0.0.59" }
 harness-macros     = { package = "harness-rs-macros",     path = "crates/harness-macros",     version = "0.0.59" }
 harness-context    = { package = "harness-rs-context",    path = "crates/harness-context",    version = "0.0.59" }
-harness-redact     = { package = "harness-rs-redact",     path = "crates/harness-redact",     version = "0.0.59" }
-harness-compactor  = { package = "harness-rs-compactor",  path = "crates/harness-compactor",  version = "0.0.59" }
-harness-hooks      = { package = "harness-rs-hooks",      path = "crates/harness-hooks",      version = "0.0.59" }
 harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.59" }
 harness-serve      = { package = "harness-rs-serve",      path = "crates/harness-serve",      version = "0.0.59" }
-harness-loop-engine= { package = "harness-rs-loop-engine", path = "crates/harness-loop-engine", version = "0.0.59" }
-harness-orchestrator= { package = "harness-rs-orchestrator", path = "crates/harness-orchestrator", version = "0.0.59" }
-harness-experience = { package = "harness-rs-experience",   path = "crates/harness-experience",   version = "0.0.59" }
 harness-cortexdb   = { package = "harness-rs-cortexdb",     path = "crates/harness-cortexdb",     version = "0.0.59" }
 harness-mcp-client = { package = "harness-rs-mcp-client",   path = "crates/harness-mcp-client",   version = "0.0.59" }
-harness-blueprint  = { package = "harness-rs-blueprint",  path = "crates/harness-blueprint",  version = "0.0.59" }
-harness-sandbox    = { package = "harness-rs-sandbox",    path = "crates/harness-sandbox",    version = "0.0.59" }
-harness-permissions= { package = "harness-rs-permissions",path = "crates/harness-permissions",version = "0.0.59" }
-harness-skills     = { package = "harness-rs-skills",     path = "crates/harness-skills",     version = "0.0.59" }
-harness-tools-fs   = { package = "harness-rs-tools-fs",   path = "crates/harness-tools-fs",   version = "0.0.59" }
-harness-tools-shell= { package = "harness-rs-tools-shell",path = "crates/harness-tools-shell",version = "0.0.59" }
+harness-tools      = { package = "harness-rs-tools",      path = "crates/harness-tools",      version = "0.0.59" }
 harness-tools-docs = { package = "harness-rs-tools-docs", path = "crates/harness-tools-docs", version = "0.0.59" }
 harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.59" }
-harness-tools-tasks= { package = "harness-rs-tools-tasks",path = "crates/harness-tools-tasks",version = "0.0.59" }
 harness-tools-sql  = { package = "harness-rs-tools-sql",  path = "crates/harness-tools-sql",  version = "0.0.59" }
-harness-tools-memory= { package = "harness-rs-tools-memory",path = "crates/harness-tools-memory",version = "0.0.59" }
-harness-tools-skills= { package = "harness-rs-tools-skills",path = "crates/harness-tools-skills",version = "0.0.59" }
-harness-tools-recall= { package = "harness-rs-tools-recall",path = "crates/harness-tools-recall",version = "0.0.59" }
-harness-tools-browser= { package = "harness-rs-tools-browser",path = "crates/harness-tools-browser",version = "0.0.59" }
-harness-tools-datetime= { package = "harness-rs-tools-datetime",path = "crates/harness-tools-datetime",version = "0.0.59" }
-harness-tools-agents= { package = "harness-rs-tools-agents",path = "crates/harness-tools-agents",version = "0.0.59" }
 harness-recall-sqlite= { package = "harness-rs-recall-sqlite",path = "crates/harness-recall-sqlite",version = "0.0.59" }
-harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.59" }
-harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.59" }
 harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.59" }
-harness-templates  = { package = "harness-rs-templates",  path = "crates/harness-templates",  version = "0.0.59" }
-harness-mcp        = { package = "harness-rs-mcp",        path = "crates/harness-mcp",        version = "0.0.59" }
 harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.59" }
-harness-daemon     = { package = "harness-rs-daemon",     path = "crates/harness-daemon",     version = "0.0.59" }
-harness-scheduler  = { package = "harness-rs-scheduler",  path = "crates/harness-scheduler",  version = "0.0.59" }
 
 # external
 async-trait = "0.1"
