@@ -1,0 +1,30 @@
+[package]
+name = "harness-rs-tools-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Ask another AI agent CLI (Claude Code, Codex, Gemini CLI, …) a question from inside a harness-rs agent, non-interactively, and read back a verdict you can trust. Carries the per-CLI flags that headless work actually needs."
+
+keywords     = ["agent", "ai", "llm", "harness", "cli"]
+categories   = ["asynchronous", "development-tools"]
+readme       = "../../README.md"
+
+[lib]
+name = "harness_tools_agents"
+path = "src/lib.rs"
+
+[dependencies]
+harness-core = { workspace = true }
+async-trait  = { workspace = true }
+tokio        = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+harness-context = { workspace = true }

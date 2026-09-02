@@ -29,6 +29,7 @@ members = [
     "crates/harness-tools-recall",
     "crates/harness-tools-browser",
     "crates/harness-tools-datetime",
+    "crates/harness-tools-agents",
     "crates/harness-sensors-rust",
     "crates/harness-sensors-common",
     "crates/harness-models",
@@ -99,6 +100,7 @@ harness-tools-skills= { package = "harness-rs-tools-skills",path = "crates/harne
 harness-tools-recall= { package = "harness-rs-tools-recall",path = "crates/harness-tools-recall",version = "0.0.58" }
 harness-tools-browser= { package = "harness-rs-tools-browser",path = "crates/harness-tools-browser",version = "0.0.58" }
 harness-tools-datetime= { package = "harness-rs-tools-datetime",path = "crates/harness-tools-datetime",version = "0.0.58" }
+harness-tools-agents= { package = "harness-rs-tools-agents",path = "crates/harness-tools-agents",version = "0.0.58" }
 harness-recall-sqlite= { package = "harness-rs-recall-sqlite",path = "crates/harness-recall-sqlite",version = "0.0.58" }
 harness-sensors-rust   = { package = "harness-rs-sensors-rust",   path = "crates/harness-sensors-rust",   version = "0.0.58" }
 harness-sensors-common = { package = "harness-rs-sensors-common", path = "crates/harness-sensors-common", version = "0.0.58" }
