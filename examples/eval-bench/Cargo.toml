@@ -20,9 +20,9 @@ path = "src/bench_suite.rs"
 [dependencies]
 harness         = { workspace = true }
 harness-core    = { workspace = true }
+harness-tools   = { workspace = true }
 harness-models  = { workspace = true }
 harness-loop    = { workspace = true }
-harness-tools-fs = { workspace = true }
 harness-context = { workspace = true }
 tokio           = { workspace = true }
 anyhow          = { workspace = true }

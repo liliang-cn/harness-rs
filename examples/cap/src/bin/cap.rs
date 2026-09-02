@@ -23,11 +23,11 @@ use clap::Parser;
 use harness_context::{FileMemory, default_world};
 use harness_core::{Block, DynModel, Memory, Model, Skill, Task, Turn, TurnRole};
 use harness_cortexdb::CortexdbMemory;
-use harness_experience::ExperienceRecorder;
 use harness_loop::Outcome;
+use harness_loop::experience::ExperienceRecorder;
 use harness_mcp_client::McpClient;
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{Glob, Grep, ListDir};
+use harness_tools::fs::{Glob, Grep, ListDir};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
     // Skills = procedural memory the agent can read and author, at ~/.cap/skills.
     let skills_dir = cap_home().join("skills");
     let _ = std::fs::create_dir_all(&skills_dir);
-    let skill_count = harness_skills::scan_skills_root(&skills_dir)
+    let skill_count = harness_context::skills::scan_skills_root(&skills_dir)
         .map(|s| s.len())
         .unwrap_or(0);
 
@@ -342,7 +342,7 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => eprintln!("\x1b[31mresume failed:\x1b[0m {e}"),
                 },
                 Cmd::Skills => {
-                    for s in harness_skills::scan_skills_root(&cap_home().join("skills"))
+                    for s in harness_context::skills::scan_skills_root(&cap_home().join("skills"))
                         .unwrap_or_default()
                     {
                         eprintln!("  {} — {}", s.manifest().name, s.manifest().description);

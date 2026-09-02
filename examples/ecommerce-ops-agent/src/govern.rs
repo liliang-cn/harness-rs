@@ -8,7 +8,7 @@
 use crate::action::OpsAction;
 use async_trait::async_trait;
 use harness_core::World;
-use harness_loop_engine::{
+use harness_loop::loop_engine::{
     ActionError, ActionExecutor, ActionReceipt, AllowlistGate, GateDecision, HumanGate, LoopSpec,
     ProposedAction,
 };

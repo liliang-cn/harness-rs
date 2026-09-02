@@ -9,6 +9,10 @@ pub mod memory_file;
 pub mod memory_guard;
 pub mod redacting_memory;
 pub mod runtime;
+// Skills were their own crate; they describe what an agent can be taught,
+// which is part of the world it works in, and they cost a caller nothing
+// beyond what this crate already pulls.
+pub mod skills;
 pub mod user_model;
 
 pub use file_recall::*;

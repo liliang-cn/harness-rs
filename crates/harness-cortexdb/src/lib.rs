@@ -14,7 +14,7 @@
 //!
 //! // Spawn CortexDB's MCP server; share the global brain (~/.cortexdb).
 //! let mem = Arc::new(CortexdbMemory::connect_stdio("cortexdb-mcp-stdio", &[]).await?);
-//! let recorder = harness_experience::ExperienceRecorder::new(mem); // semantic!
+//! let recorder = harness_loop::experience::ExperienceRecorder::new(mem); // semantic!
 //! ```
 //!
 //! The memory does not have to be a process this agent spawns. Point it at a
@@ -38,7 +38,7 @@
 //!
 //! ## Record conversations, then distill them into the graph
 //!
-//! Pair the [`TranscriptRecorder`](harness_experience::TranscriptRecorder) hook
+//! Pair the [`TranscriptRecorder`](harness_loop::experience::TranscriptRecorder) hook
 //! (turns → CortexDB) with periodic [`CortexdbMemory::consolidate`] (memories →
 //! knowledge graph, server-side):
 //!
@@ -47,8 +47,8 @@
 //!     .with_scope("session").with_namespace("myapp-chat"));
 //!
 //! // 1. capture every turn as it happens
-//! let (recorder, rx) = harness_experience::TranscriptRecorder::new("sess-1");
-//! harness_experience::spawn_transcript_writer(rx, mem.clone());
+//! let (recorder, rx) = harness_loop::experience::TranscriptRecorder::new("sess-1");
+//! harness_loop::experience::spawn_transcript_writer(rx, mem.clone());
 //! let loop_ = AgentLoop::new(model).with_hook(Arc::new(recorder));
 //!
 //! // 2. every 10 min, let CortexDB distill accumulated turns into the graph

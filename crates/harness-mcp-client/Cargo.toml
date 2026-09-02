@@ -32,11 +32,13 @@ http = ["rmcp/transport-streamable-http-client", "rmcp/transport-streamable-http
 # features = ["http", "tls-native"].
 tls-rustls = ["rmcp/reqwest"]
 tls-native = ["rmcp/reqwest-native-tls"]
-test-server = ["dep:harness-mcp", "dep:harness-context"]
+test-server = ["dep:harness-tools", "dep:harness-context"]
 
 [dependencies]
 harness-core = { workspace = true }
-harness-mcp = { workspace = true, optional = true }
+# Only the echo server used to exercise this client needs the MCP server
+# side, so it stays optional — a client should not pull the tools.
+harness-tools   = { workspace = true, optional = true }
 harness-context = { workspace = true, optional = true }
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-io"] }
 # Optional, only under `http`: lets callers inject a hardened reqwest client

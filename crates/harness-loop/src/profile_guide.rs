@@ -4,7 +4,7 @@
 //!
 //! ```ignore
 //! AgentLoop::new(model)
-//!     .with_guide(std::sync::Arc::new(harness_loop::ProfileGuide))
+//!     .with_guide(std::sync::Arc::new(crate::ProfileGuide))
 //!     .run(task, &mut world).await?;
 //! ```
 //!

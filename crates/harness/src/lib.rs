@@ -77,23 +77,23 @@
 //! - [`harness_macros`] — `#[skill]` / `#[tool]` / `#[guide]` / `#[sensor]` /
 //!   `#[hook]` proc-macros.
 //! - `harness_loop` — `AgentLoop` ReAct executor with auto-fix sensors.
-//! - `harness_hooks` — `HookBus` over 27 lifecycle events.
-//! - `harness_blueprint` — hybrid deterministic + agent state machine.
-//! - `harness_compactor` — five-stage progressive context compaction.
-//! - `harness_sandbox` — `WorktreeSandbox`, `ContainerSandbox`, and the
+//! - `harness_loop::hooks` — `HookBus` over 27 lifecycle events.
+//! - `harness_loop::blueprint` — hybrid deterministic + agent state machine.
+//! - `harness_loop::compactor` — five-stage progressive context compaction.
+//! - `harness_loop::sandbox` — `WorktreeSandbox`, `ContainerSandbox`, and the
 //!   `Sandbox` trait for deployment-owned isolation backends.
 //! - `harness_models` — `OpenAiCompat` / `AnthropicNative` / `MockModel`.
-//! - `harness_mcp` — MCP stdio JSON-RPC server.
+//! - `harness_tools::mcp` — MCP stdio JSON-RPC server.
 //! - [`skills`] — agentskills.io-compliant skill loader + validator.
-//! - `harness_tools_fs` / `harness_tools_shell` — built-in toolsets.
-//! - `harness_sensors_rust` / `harness_sensors_common` — built-in sensors.
+//! - `harness_tools::fs` / `harness_tools::shell` — built-in toolsets.
+//! - `harness_tools::sensors_rust` / `harness_tools::sensors_common` — built-in sensors.
 
 pub use harness_core::*;
 pub use harness_macros::*;
 
 pub mod skills {
     //! agentskills.io-compliant skill loading.
-    pub use harness_skills::*;
+    pub use harness_context::skills::*;
 }
 
 pub mod prelude {

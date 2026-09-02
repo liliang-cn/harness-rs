@@ -64,7 +64,7 @@ use harness_core::{Context, Event, Hook, HookOutcome, Task};
 use harness_loop::acceptance::FilesExist;
 use harness_loop::{AgentLoop, Outcome, StuckPolicy, ToolResultPolicy};
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{EditFile, Grep, ListDir, ReadFile, WriteFile};
+use harness_tools::fs::{EditFile, Grep, ListDir, ReadFile, WriteFile};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

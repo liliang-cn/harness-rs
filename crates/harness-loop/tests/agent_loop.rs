@@ -8,7 +8,7 @@ use harness_core::{
 };
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::{MockModel, MockResponse};
-use harness_tools_fs::{ReadFile, WriteFile};
+use harness_tools::fs::{ReadFile, WriteFile};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -597,8 +597,8 @@ async fn compaction_runs_at_top_of_iter_when_over_budget() {
 
 #[tokio::test]
 async fn skill_registry_catalogue_is_readable_at_session_start() {
+    use harness_context::skills::SkillRegistry;
     use harness_core::SkillManifest;
-    use harness_skills::SkillRegistry;
     use std::borrow::Cow;
     use std::collections::BTreeMap;
 

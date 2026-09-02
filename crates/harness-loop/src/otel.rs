@@ -14,7 +14,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //! // Ship every agent span to an OTLP collector on localhost:4317, then run the
 //! // loop with a `TelemetryHook` as usual. `_otel` flushes on drop.
-//! let _otel = harness_loop::otel::init_tracing_with_otlp(
+//! let _otel = crate::otel::init_tracing_with_otlp(
 //!     "my-agent",
 //!     "http://localhost:4317",
 //! )?;

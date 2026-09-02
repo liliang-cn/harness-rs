@@ -13,21 +13,21 @@
 //! transcript writer and the episode store write through the same trait:
 //!
 //! ```ignore
-//! use harness_context::RedactingMemory;
+//! use crate::RedactingMemory;
 //! // cortex: Arc<dyn Memory> backed by CortexDB
 //! let safe: Arc<dyn Memory> = Arc::new(RedactingMemory::new(cortex));
 //! spawn_transcript_writer(rx, safe.clone());   // every turn is scrubbed
 //! let store = ExperienceStore::new(safe);       // episodes too
 //! ```
 //!
-//! Default policy is [`Redactor::new`] ([`Policy::default`](harness_redact::Policy::default)):
+//! Default policy is [`Redactor::new`] ([`Policy::default`](harness_core::redact::Policy::default)):
 //! cards masked to the last 4, emails / phones labelled, monetary amounts kept
 //! (a transcript legitimately discusses prices — we don't blank them out).
 //! Swap it with [`with_redactor`](RedactingMemory::with_redactor).
 
 use async_trait::async_trait;
+use harness_core::redact::Redactor;
 use harness_core::{Memory, MemoryEntry, MemoryError};
-use harness_redact::Redactor;
 use std::sync::Arc;
 
 /// Wraps any `Arc<dyn Memory>` and redacts PII on `write` without ever dropping

@@ -10,6 +10,22 @@
 //!   hit, or when a stuck-detector ([`StuckPolicy`], [`MonotonyPolicy`]) says
 //!   the run is spinning.
 
+// ── crates that used to be their own ───────────────────────────────────────
+// Ten of them, and not one carried a dependency a caller would want to avoid.
+// The boundaries bought nothing and cost every release ten more publishes and
+// every host ten more version pins; a crate boundary here has to name a
+// dependency you might not want, and these did not.
+pub mod blueprint;
+pub mod compactor;
+pub mod daemon;
+pub mod experience;
+pub mod hooks;
+pub mod loop_engine;
+pub mod orchestrator;
+pub mod sandbox;
+pub mod scheduler;
+pub mod templates;
+
 pub mod acceptance;
 pub mod goal;
 pub mod learning;
@@ -40,13 +56,13 @@ pub use replay::*;
 pub use subagent::*;
 pub use telemetry::*;
 
-use harness_compactor::{CALIBRATION_KEY, DefaultCompactor};
+use crate::compactor::{CALIBRATION_KEY, DefaultCompactor};
+use crate::hooks::HookBus;
 use harness_core::{
     Action, Block, CompactionStage, Compactor, Context, Event, Guide, HarnessError, HookOutcome,
     Model, ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage,
     StopReason, Task, ToolCall, ToolResult, Turn, TurnRole, Usage, World,
 };
-use harness_hooks::HookBus;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -675,7 +691,7 @@ impl<M: Model> AgentLoop<M> {
     pub fn with_model_role(mut self, role: impl Into<String>, model: Arc<dyn Model>) -> Self {
         let role = role.into();
         if role == "compactor" && !self.compactor_custom {
-            self.compactor = Arc::new(harness_compactor::ModelBackedCompactor::new(model.clone()));
+            self.compactor = Arc::new(crate::compactor::ModelBackedCompactor::new(model.clone()));
         }
         self.model_roles.insert(role, model);
         self

@@ -21,7 +21,7 @@
 //!
 //! ```ignore
 //! AgentLoop::new(model)
-//!     .with_guide(std::sync::Arc::new(harness_loop::BoundaryGuide))
+//!     .with_guide(std::sync::Arc::new(crate::BoundaryGuide))
 //! ```
 
 use async_trait::async_trait;

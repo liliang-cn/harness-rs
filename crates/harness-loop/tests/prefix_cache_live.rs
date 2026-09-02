@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use harness_core::{Block, Context, Execution, Guide, GuideError, GuideId, GuideScope, World};
 use harness_loop::{AgentLoop, Outcome};
 use harness_models::OpenAiCompat;
-use harness_tools_fs::{Glob, Grep, ListDir, ReadFile};
+use harness_tools::fs::{Glob, Grep, ListDir, ReadFile};
 use std::sync::Arc;
 
 /// A big, stable system guide so the cached prefix clears DeepSeek's minimum.

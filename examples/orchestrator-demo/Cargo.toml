@@ -5,8 +5,8 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-harness-orchestrator = { workspace = true }
 harness-core         = { workspace = true }
+harness-loop    = { workspace = true }
 harness-models       = { workspace = true }
 anyhow               = { workspace = true }
 tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }

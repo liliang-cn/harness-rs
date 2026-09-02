@@ -36,7 +36,7 @@ fn compactor_role_upgrades_the_default_compactor() {
         "role wiring is a convenience, not an explicit compactor"
     );
     // Behavioural check: with_compactor AFTER the role must win…
-    let custom = Arc::new(harness_compactor::DefaultCompactor::new());
+    let custom = Arc::new(harness_loop::compactor::DefaultCompactor::new());
     let agent2 = AgentLoop::boxed(mock("main"))
         .with_model_role("compactor", mock("cheap"))
         .with_compactor(custom.clone());

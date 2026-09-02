@@ -3,8 +3,8 @@
 use crate::executor::{Row, SqlExecutor};
 use crate::guard::{check_read_only, enforce_limit};
 use async_trait::async_trait;
+use harness_core::redact::Redactor;
 use harness_core::{Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
-use harness_redact::Redactor;
 use serde_json::{Value, json};
 use std::sync::Arc;
 

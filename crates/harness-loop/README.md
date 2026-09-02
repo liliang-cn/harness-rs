@@ -47,7 +47,7 @@ use harness_loop::{AgentLoop, Outcome};
 use harness_models::OpenAiCompat;
 use harness_context::default_world;
 use harness_core::Task;
-use harness_tools_fs::{ReadFile, ListDir};
+use harness_tools::fs::{ReadFile, ListDir};
 use std::sync::Arc;
 
 let model = OpenAiCompat::with_key("https://api.deepseek.com", "deepseek-chat", key);
@@ -74,8 +74,8 @@ match outcome {
 ## Subagents
 
 Run an isolated child agent with its own tools and budget, returning a single
-report to the parent — the basis for `harness-rs-orchestrator` and
-`harness-rs-scheduler`:
+report to the parent — the basis for `harness-rs-loop` and
+`harness-rs-loop`:
 
 ```rust,ignore
 use harness_loop::{Subagent, SubagentSpec};

@@ -11,8 +11,8 @@
 
 use async_trait::async_trait;
 use harness_context::{GuardedMemory, RedactingMemory};
+use harness_core::redact::{Action, PiiKind, Policy, Redactor};
 use harness_core::{Memory, MemoryEntry, MemoryError};
-use harness_redact::{Action, PiiKind, Policy, Redactor};
 use std::sync::{Arc, Mutex};
 
 /// A trivial in-memory `Memory` so the demo prints what actually got stored.

@@ -2,7 +2,7 @@
 //! (lenient JSON extraction from the synthesis agent's text) and the
 //! blast-radius classification that drives governance.
 
-use harness_loop_engine::LoopLevel;
+use harness_loop::loop_engine::LoopLevel;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -17,7 +17,7 @@
 //! that was edited by hand or truncated in transit. It is *not* a signature:
 //! anyone who can rewrite the receipt can recompute it. If you need the trail
 //! itself to be tamper-evident, chain it —
-//! `harness_hooks::audit::HashChainSink` already does that, and
+//! `crate::hooks::audit::HashChainSink` already does that, and
 //! [`Receipt::audit_request`] is where you put the id that points at it.
 
 use crate::{Outcome, Verdict, seal::SealSet};

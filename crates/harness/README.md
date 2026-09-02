@@ -20,7 +20,7 @@ you get the whole public surface: the core traits/types (`harness-rs-core`), the
 harness-rs         = "0.0.44"
 harness-rs-loop    = "0.0.44"
 harness-rs-models  = "0.0.44"
-harness-rs-tools-fs = "0.0.44"
+harness-rs-tools = "0.0.44"
 harness-rs-context = "0.0.44"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -70,9 +70,9 @@ discoverable without a central registry. Scaffold a project with `harness new`.
 |---|---|
 | The ReAct loop, subagents, session replay | [`harness-rs-loop`](https://docs.rs/harness-rs-loop) |
 | Model adapters (OpenAI-compat · Anthropic · Gemini) | [`harness-rs-models`](https://docs.rs/harness-rs-models) |
-| Recurring/governed loops (L1/L2/L3) | `harness-rs-loop-engine` |
-| Concurrent Job DAG + replanning | `harness-rs-orchestrator` |
-| Episodic learning + semantic recall | `harness-rs-experience`, `harness-rs-cortexdb` |
+| Recurring/governed loops (L1/L2/L3) | `harness-rs-loop` |
+| Concurrent Job DAG + replanning | `harness-rs-loop` |
+| Episodic learning + semantic recall | `harness-rs-loop`, `harness-rs-cortexdb` |
 
 Full design rationale: **DESIGN.md** in the [workspace repo](https://github.com/liliang-cn/harness-rs).
 

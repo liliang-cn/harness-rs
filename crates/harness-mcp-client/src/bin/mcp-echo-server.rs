@@ -49,7 +49,7 @@ impl Tool for EchoTool {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut world = harness_context::default_world(".");
-    harness_mcp::McpServer::new("echo-test", "0.1.0")
+    harness_tools::mcp::McpServer::new("echo-test", "0.1.0")
         .with_tool(Arc::new(EchoTool::new()))
         .serve_stdio(&mut world)
         .await
