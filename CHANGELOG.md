@@ -3,6 +3,51 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.60
+
+**Breaking: 38 crates are now 15.** Every `use` of a merged crate has to change,
+and the table below says to what. Nothing else changed — no behaviour, no API
+beyond the paths, and the same 745 tests pass under the same names.
+
+### Changed
+
+- **A crate boundary now has to name a dependency a caller might not want to
+  compile.** Twenty of the thirty-eight named nothing: they pulled `serde`,
+  `tokio`, `async-trait` and no more, so the split bought a consumer nothing
+  while costing every release twenty more publishes — into a rate limit that has
+  swallowed the tail of five of them — and every host twenty more version pins
+  to keep in step. The twelve that stayed separate each name a tree you can
+  refuse: `sqlx`, `rusqlite`, `rmcp`, `tonic`, `axum`, `scraper`, `pdf-extract`,
+  `reqwest`, and a proc-macro crate the compiler will not let anyone merge.
+
+  | was | now |
+  |---|---|
+  | `harness_tools_fs`, `_shell`, `_memory`, `_skills`, `_tasks`, `_datetime`, `_agents`, `_browser`, `_recall` | `harness_tools::{fs, shell, memory, skills, tasks, datetime, agents, browser, recall}` |
+  | `harness_sensors_common`, `harness_sensors_rust`, `harness_mcp` | `harness_tools::{sensors_common, sensors_rust, mcp}` |
+  | `harness_compactor`, `harness_hooks`, `harness_orchestrator`, `harness_blueprint`, `harness_sandbox`, `harness_loop_engine`, `harness_daemon`, `harness_scheduler`, `harness_experience`, `harness_templates` | `harness_loop::{compactor, hooks, orchestrator, blueprint, sandbox, loop_engine, daemon, scheduler, experience, templates}` |
+  | `harness_redact`, `harness_permissions` | `harness_core::{redact, permissions}` |
+  | `harness_skills` | `harness_context::skills` |
+
+  `harness-context` deliberately did **not** go into `harness-core`. Core already
+  has a `context` module — the assembled prompt — while the crate is the World an
+  agent runs in: two different things wearing one word. Merging them would have
+  renamed `harness_context::with_profile`, the most-used call in the workspace,
+  to buy one fewer crate.
+
+- **`harness-daemon` arrived with `clap` in its manifest and no `clap` in its
+  source**, plus a `toml` only its tests used. Neither followed the code in.
+
+### Fixed
+
+- **Plan mode would have silently allowed a risk level that did not exist yet.**
+  `permissions` matched `ToolRisk` with a wildcard arm — mandatory from outside
+  the crate, because the enum is `#[non_exhaustive]` — whose comment read
+  "future variants ⇒ allow by default". In the one place that is supposed to be
+  cautious, a newly added risk level would have been permitted without anyone
+  deciding to permit it. Inside `harness-core` the attribute no longer applies,
+  the arm is gone, and adding a variant now fails to compile until somebody says
+  what plan mode does with it. Found by the merge, not by a test.
+
 ## 0.0.59
 
 ### Added
