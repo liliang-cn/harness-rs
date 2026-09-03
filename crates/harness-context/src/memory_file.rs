@@ -223,6 +223,18 @@ impl FileMemory {
     }
 }
 
+/// The delete half, so `Arc<FileMemory>` is directly a
+/// `harness_core::MemoryDelete` for the `forget_memory` tool.
+#[async_trait::async_trait]
+impl harness_core::MemoryDelete for FileMemory {
+    async fn delete_by_id(&self, id: &str) -> Result<bool, String> {
+        FileMemory::delete_by_id(self, id).map_err(|e| e.to_string())
+    }
+    async fn delete_all(&self) -> Result<u32, String> {
+        FileMemory::delete_all(self).map_err(|e| e.to_string())
+    }
+}
+
 #[async_trait::async_trait]
 impl Memory for FileMemory {
     async fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryEntry>, MemoryError> {

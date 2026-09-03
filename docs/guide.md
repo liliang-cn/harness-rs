@@ -14,7 +14,7 @@ What the crates give you, and how they compose. Rationale lives in
 | **Orchestration** | async Run = concurrent Job DAG + retry/backoff + dynamic replanning + resumable state | `harness-orchestrator` |
 | **Learning** | record episodes (situation → tools used → outcome) + semantic recall · CortexDB-backed `Memory` | `harness-experience`, `harness-cortexdb` |
 | **Skills · Guides · Hooks · Sensors** | proc-macro registered, agentskills.io-compliant | `harness-macros`, `harness-skills` |
-| **Memory · Recall** | `Memory` trait + JSONL store · cross-session search (FTS5 / CJK) | `harness-core`, `harness-recall-sqlite` |
+| **Memory · Recall** | `Memory` / `RecallStore` traits + JSONL stores · `harness_memory::open_memory(url)` / `open_recall(url)` picks the backend by URL: `file://`, `sqlite://` (FTS5 / CJK), `mem://` · `surrealkv://` · `ws://` (SurrealDB: BM25 + optional HNSW hybrid through any `Embedder`), `cortexdb://` | `harness-core`, `harness-context`, `harness-memory` |
 | **Privacy** | PII detect + redact (label/mask/hash/block, Luhn-checked cards) · redact-on-write `Memory` decorators | `harness-redact`, `harness-context` |
 | **Documents** | `read_document` — PDF/Word/Excel/PPT locally (pure Rust) · offline OCR for scanned PDFs (`pdftoppm` + `tesseract`) · LLM/vision fallback | `harness-tools-docs` |
 | **Observability** | `TelemetryHook` (structured `tracing` spans → OTLP) · JSONL session record + deterministic offline `replay` | `harness-loop` |

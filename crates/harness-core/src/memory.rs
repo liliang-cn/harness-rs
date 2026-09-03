@@ -126,6 +126,20 @@ pub trait Memory: Send + Sync {
     async fn write(&self, entry: MemoryEntry) -> Result<(), MemoryError>;
 }
 
+/// Deletion, for backends that support it.
+///
+/// Not part of [`Memory`] because not every store can forget (append-only
+/// logs, shared brains with their own retention) and the ones that can do it
+/// differently (a file rewrites itself; SQL is `DELETE WHERE id = ?`). The
+/// `forget_memory` tool in harness-tools takes any implementor.
+#[async_trait::async_trait]
+pub trait MemoryDelete: Send + Sync {
+    /// Returns `true` if a row was actually removed.
+    async fn delete_by_id(&self, id: &str) -> Result<bool, String>;
+    /// Returns the number of rows removed (best-effort estimate).
+    async fn delete_all(&self) -> Result<u32, String>;
+}
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MemoryError {

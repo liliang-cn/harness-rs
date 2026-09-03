@@ -3,6 +3,45 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Changed
+
+- **One memory crate, every backend behind a feature.** `harness-rs-memory`
+  replaces `harness-rs-recall-sqlite` and holds all the stores that are not
+  the framework's own JSONL files: SQLite FTS5 (`sqlite`), SurrealDB
+  (`surreal`, `surreal-remote`) and CortexDB (`cortexdb`, `cortexdb-grpc`,
+  re-exported from `harness-rs-cortexdb`). One door for all of them:
+  `harness_memory::open_memory(url)` / `open_recall(url)` pick the store from
+  the URL scheme — `file://`, `sqlite://`, `mem://`, `surrealkv://`, `ws://`,
+  `cortexdb://`, `cortexdb+http://` — and a URL whose backend was not compiled
+  in fails naming the feature to enable, never by falling back to a file.
+  `Open::new(url).embedder(..).root(..).namespace(..)` for the knobs.
+  Migration: `harness_recall_sqlite::SqliteRecall` is now
+  `harness_memory::sqlite::SqliteRecall` behind feature `sqlite`; the code is
+  unchanged. Crate count stays at fifteen.
+- **`MemoryDelete` moved to `harness-core`.** It was defined in harness-tools,
+  which meant a backend crate had to depend on the tools crate to be
+  forgettable. harness-tools re-exports it from the old path, so nothing
+  downstream changes.
+
+### Added
+
+- **SurrealDB as a memory backend** (`harness-rs-memory`, feature `surreal`).
+  One `SurrealMemory` implements both `Memory` and `RecallStore`, and runs
+  three ways: `mem://` (tests), `surrealkv://<dir>` (in-process, a directory
+  on disk, no server to run) and `ws://` to a `surreal start`. Recall is
+  SurrealDB's own BM25 full-text index, with an n-gram index beside it so CJK
+  queries match inside unsegmented text — the same split the SQLite backend
+  makes between FTS5 and its trigram table, and it passes the same
+  `recall_contract`. Hand it an `Embedder` and memory recall turns hybrid: an
+  HNSW cosine index over the embeddings, fused with the text ranking by
+  reciprocal rank. This is the first consumer of the `Embedder` trait; the
+  OpenAI / Ollama / Gemini adapters in `harness-models` had nothing to feed
+  until now. Rows are plain objects (`mid`, `seq`) readable from `surreal sql`.
+  The surrealdb crate is a large dependency tree (about two minutes cold),
+  which is exactly why it sits behind a feature.
+
 ## 0.0.61
 
 ### Fixed

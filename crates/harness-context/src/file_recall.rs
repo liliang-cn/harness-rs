@@ -1,7 +1,7 @@
 //! File-backed [`RecallStore`]: append-only JSONL transcripts, one directory
 //! per owner. Open-format, greppable, operator-owned — same posture as
 //! [`crate::FileMemory`]. Search is a linear token-overlap scan (no FTS), fine
-//! at kilobyte–MB scale; apps at scale use `harness-recall-sqlite` instead.
+//! at kilobyte–MB scale; apps at scale open an indexed backend from `harness-memory` instead.
 //!
 //! Layout under `root`:
 //! ```text

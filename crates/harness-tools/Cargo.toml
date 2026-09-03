@@ -47,6 +47,6 @@ walkdir     = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-harness-recall-sqlite = { workspace = true }
+harness-memory = { workspace = true, features = ["sqlite"] }
 tempfile = "3"
 tokio    = { workspace = true }
