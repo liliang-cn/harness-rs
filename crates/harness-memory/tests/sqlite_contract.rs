@@ -1,5 +1,6 @@
+#![cfg(feature = "sqlite")]
 use harness_core::{RecallStore, recall_contract};
-use harness_recall_sqlite::SqliteRecall;
+use harness_memory::sqlite::SqliteRecall;
 use std::sync::Arc;
 
 #[tokio::test]

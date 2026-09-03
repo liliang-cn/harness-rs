@@ -1,0 +1,49 @@
+[package]
+name = "harness-rs-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Every memory and recall backend for harness-rs behind one door: open_memory(url) / open_recall(url) pick the store from the URL. JSONL files with no features; SQLite FTS5, SurrealDB (embedded or remote, BM25 + HNSW hybrid) and CortexDB each behind a feature, so you compile only the store you run."
+
+[lib]
+name = "harness_memory"
+
+[features]
+default = []
+# `sqlite://<file>` — transcripts in SQLite with FTS5 + trigram search. The
+# only feature that pulls rusqlite.
+sqlite = ["dep:rusqlite"]
+# `mem://` and `surrealkv://<dir>` — SurrealDB in-process: facts and
+# transcripts, BM25 with an n-gram index for CJK, and HNSW vector recall when
+# an `Embedder` is supplied. Nothing to run. The only feature that pulls
+# surrealdb (a large tree; budget minutes for a cold build).
+surreal = ["dep:surrealdb", "surrealdb/kv-mem", "surrealdb/kv-surrealkv", "dep:tokio"]
+# `ws://` / `wss://` — the same store against a running `surreal start`.
+surreal-remote = ["surreal", "surrealdb/protocol-ws"]
+# `cortexdb+http://<url>` — facts in a CortexDB brain over MCP.
+cortexdb = ["dep:harness-cortexdb"]
+# `cortexdb://host:port` — the same brain over its own gRPC API (needs
+# `protoc` at build time, as harness-cortexdb's `grpc` feature does).
+cortexdb-grpc = ["cortexdb", "harness-cortexdb/grpc"]
+
+[dependencies]
+harness-core    = { workspace = true }
+harness-context = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tracing         = { workspace = true }
+
+harness-cortexdb = { workspace = true, optional = true }
+rusqlite         = { version = "0.32", features = ["bundled"], optional = true }
+surrealdb        = { version = "3.1", default-features = false, optional = true }
+tokio            = { workspace = true, features = ["time"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.docs.rs]
+all-features = true

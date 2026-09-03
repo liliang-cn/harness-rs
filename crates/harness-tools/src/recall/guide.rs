@@ -165,7 +165,7 @@ mod tests {
     use super::*;
     use harness_context::default_world;
     use harness_core::{RecallMessage, SessionMeta, Task};
-    use harness_recall_sqlite::SqliteRecall;
+    use harness_memory::sqlite::SqliteRecall;
     use serde_json::json;
 
     async fn store() -> Arc<dyn RecallStore> {

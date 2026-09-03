@@ -1,7 +1,7 @@
 //! LLM-facing cross-session recall — letting an agent 翻旧账 on itself.
 //!
 //! [`harness_core::RecallStore`] already keeps the raw transcript of every
-//! session, and `harness-recall-sqlite` already indexes it (FTS5 BM25 + a
+//! session, and `harness-memory` (feature `sqlite`) already indexes it (FTS5 BM25 + a
 //! trigram table so CJK actually matches). What was missing is the piece that
 //! makes any of it reachable *by the model*: a tool it can decide to call.
 //!
@@ -510,7 +510,7 @@ mod tests {
     use super::*;
     use harness_context::default_world;
     use harness_core::{RecallMessage, SessionMeta};
-    use harness_recall_sqlite::SqliteRecall;
+    use harness_memory::sqlite::SqliteRecall;
 
     async fn store_with(msgs: &[(&str, &str, &str)]) -> Arc<dyn RecallStore> {
         let store: Arc<dyn RecallStore> = Arc::new(SqliteRecall::open_in_memory().unwrap());

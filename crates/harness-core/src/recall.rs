@@ -7,7 +7,8 @@
 //!
 //! - Trait + types live here (dependency-light).
 //! - Default file backend: [`harness_context::FileRecall`] (JSONL).
-//! - FTS5 backend: the optional `harness-recall-sqlite` crate.
+//! - Every other backend (SQLite FTS5, SurrealDB): the `harness-memory` crate,
+//!   one feature per backend, one `open_recall(url)` for all of them.
 //!
 //! ## Wiring
 //! `AgentLoop::with_recall(store)` captures each turn into the store and

@@ -14,7 +14,7 @@ members = [
     "crates/harness-tools-sql",
     "crates/harness-models",
     "crates/harness-mcp-client",
-    "crates/harness-recall-sqlite",
+    "crates/harness-memory",
     "crates/harness-cli",
     "examples/crate-keeper",
     "examples/loop-engine-demo",
@@ -59,7 +59,7 @@ harness-tools      = { package = "harness-rs-tools",      path = "crates/harness
 harness-tools-docs = { package = "harness-rs-tools-docs", path = "crates/harness-tools-docs", version = "0.0.61" }
 harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.61" }
 harness-tools-sql  = { package = "harness-rs-tools-sql",  path = "crates/harness-tools-sql",  version = "0.0.61" }
-harness-recall-sqlite= { package = "harness-rs-recall-sqlite",path = "crates/harness-recall-sqlite",version = "0.0.61" }
+harness-memory     = { package = "harness-rs-memory",     path = "crates/harness-memory",     version = "0.0.61" }
 harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.61" }
 harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.61" }
 

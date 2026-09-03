@@ -158,35 +158,10 @@ pub struct ForgetMemoryTool {
     schema: ToolSchema,
 }
 
-/// Extension trait for memory backends that support row deletion.
-///
-/// Not part of `harness-core::Memory` because backends differ (file delete
-/// is rewrite-all; SQL is `DELETE WHERE id=?`). Apps provide a small
-/// adapter that calls the right path.
-#[async_trait]
-pub trait MemoryDelete: Send + Sync {
-    /// Returns `true` if a row was actually removed.
-    async fn delete_by_id(&self, id: &str) -> Result<bool, String>;
-    /// Returns the number of rows removed (best-effort estimate).
-    async fn delete_all(&self) -> Result<u32, String>;
-}
-
-/// Adapter so `Arc<FileMemory>` works directly as the deleter for
-/// `ForgetMemoryTool`. Most apps will just use:
-///
-/// ```ignore
-/// let fm = Arc::new(FileMemory::open(path)?);
-/// let forget = ForgetMemoryTool::new(fm.clone() as Arc<dyn MemoryDelete>);
-/// ```
-#[async_trait]
-impl MemoryDelete for harness_context::FileMemory {
-    async fn delete_by_id(&self, id: &str) -> Result<bool, String> {
-        harness_context::FileMemory::delete_by_id(self, id).map_err(|e| e.to_string())
-    }
-    async fn delete_all(&self) -> Result<u32, String> {
-        harness_context::FileMemory::delete_all(self).map_err(|e| e.to_string())
-    }
-}
+/// The delete half of a memory backend. Lives in harness-core so a backend
+/// crate can implement it without depending on the tools; re-exported here
+/// because this is where it is consumed.
+pub use harness_core::MemoryDelete;
 
 impl ForgetMemoryTool {
     pub fn new(deleter: Arc<dyn MemoryDelete>) -> Self {

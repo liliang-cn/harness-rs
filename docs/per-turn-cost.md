@@ -75,7 +75,7 @@ The four components do not share a backend, so "50 000 items" is not one thing:
 | `MemoryGuide` | `harness_context::FileMemory` (shipped JSONL) | one `MemoryEntry` line |
 | `ExperienceGuide` | `FileMemory` via `ExperienceStore` | one rendered `Episode` |
 | `UserModelGuide` | `FileMemory` via `UserModelStore` | one unrelated `MemoryEntry` (portrait + N noise rows) |
-| `RecallGuide` | `harness_recall_sqlite::SqliteRecall` (in-memory, FTS5 + trigram) | one transcript message |
+| `RecallGuide` | `harness_memory::sqlite::SqliteRecall` (in-memory, FTS5 + trigram) | one transcript message |
 
 `MemoryGuide` and `ExperienceGuide` are also measured against an O(1) stub
 backend, so the guide's own work (filter, score, parse, format, strip-and-push)
@@ -331,7 +331,7 @@ there far sooner.
 2. **Document a size ceiling** on `FileMemory` and have `MemoryGuide` log a
    warning above it, so the failure mode is a log line and not a mystery
    latency. The doc comment already says "kilobyte-scale"; nothing enforces it.
-3. **Point production at `harness-recall-sqlite`-style indexed storage** past a
+3. **Point production at `harness-memory`-style indexed storage (SQLite FTS5, SurrealDB)** past a
    few thousand rows. The infrastructure exists in the workspace; `Memory` just
    has no SQLite implementation yet.
 4. **Do not run `MemoryGuide` and `ExperienceGuide` over the same backend
