@@ -257,20 +257,22 @@ pub async fn run_agent(
         // coming — a hang with no error anywhere.
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    cmd.process_group(0);
+        .stderr(std::process::Stdio::piped());
 
     let started = std::time::Instant::now();
-    let child = cmd
-        .spawn()
-        .map_err(|e| ToolError::Exec(format!("could not start {}: {e}", agent.program)))?;
     // Armed for the whole tree the agent starts; disarmed only if the agent
-    // exits on its own. Both a timeout and a dropped future (a cancelled
-    // run) take the group down through the guard's `Drop`.
+    // exits on its own. Both a timeout and a dropped future (a cancelled run)
+    // take the group down through the guard's `Drop`. `spawn` is what sets
+    // kill_on_drop and the process group, so they cannot be forgotten here.
     #[cfg(unix)]
-    let guard = harness_context::GroupKill::arm(&child);
+    let (child, guard) = harness_context::GroupKill::spawn(&mut cmd)
+        .map_err(|e| ToolError::Exec(format!("could not start {}: {e}", agent.program)))?;
+    #[cfg(not(unix))]
+    let child = {
+        cmd.kill_on_drop(true);
+        cmd.spawn()
+            .map_err(|e| ToolError::Exec(format!("could not start {}: {e}", agent.program)))?
+    };
 
     let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(r) => {
@@ -681,6 +683,25 @@ mod tests {
         assert!(!run.ok);
     }
 
+    /// `echo $! > file` writes the digits and a newline in one `write(2)`.
+    /// Insist on the newline so a torn read cannot parse a prefix of the pid
+    /// as a different, real process. Bounded, so a `sh` that never writes
+    /// fails the test instead of hanging CI.
+    #[cfg(unix)]
+    async fn read_pidfile(path: &std::path::Path) -> i32 {
+        for _ in 0..250 {
+            if let Some(p) = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|s| s.strip_suffix('\n').map(str::to_owned))
+                .and_then(|s| s.parse().ok())
+            {
+                return p;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("sh never wrote its grandchild's pid to {}", path.display());
+    }
+
     // A cancelled run drops `run_agent`'s future mid-flight. That has to
     // reach the agent's whole process tree the same way the timeout does, or
     // the compilers it started keep running under a run that says it stopped.
@@ -713,15 +734,7 @@ mod tests {
             .await
         });
 
-        let grandchild: i32 = loop {
-            if let Some(p) = std::fs::read_to_string(&pidfile)
-                .ok()
-                .and_then(|s| s.trim().parse().ok())
-            {
-                break p;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        };
+        let grandchild = read_pidfile(&pidfile).await;
         let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
         assert!(
             alive(grandchild),

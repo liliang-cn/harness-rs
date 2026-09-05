@@ -24,13 +24,15 @@ harness-core = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 tokio        = { workspace = true }
-# Process-group kill on drop (src/runtime.rs `GroupKill`). Unix only in
-# practice; the crate compiles without it elsewhere via cfg(unix).
-libc         = { workspace = true }
 async-trait  = { workspace = true }
 tracing      = { workspace = true }
 regex        = { workspace = true }
 thiserror    = { workspace = true }
+
+# Process-group kill on drop (src/runtime.rs `GroupKill`). Unix only: the
+# guard and the kill are both cfg(unix), so nothing else needs the crate.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 # Per-turn cost measurement. `harness = false` because the workspace has no
 # criterion dependency and `#[bench]` needs nightly — this is a plain
