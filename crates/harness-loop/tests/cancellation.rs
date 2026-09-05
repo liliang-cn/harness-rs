@@ -67,13 +67,21 @@ async fn a_token_cancelled_before_start_never_calls_the_model() {
         .unwrap();
 
     match outcome {
-        Outcome::Cancelled { iters, tools_called, .. } => {
+        Outcome::Cancelled {
+            iters,
+            tools_called,
+            ..
+        } => {
             assert_eq!(iters, 0, "no iteration should have started");
             assert_eq!(tools_called, 0);
         }
         other => panic!("expected Cancelled, got {other:?}"),
     }
-    assert_eq!(agent.model.call_count(), 0, "a cancelled run must not spend a model call");
+    assert_eq!(
+        agent.model.call_count(),
+        0,
+        "a cancelled run must not spend a model call"
+    );
 }
 
 // ------------------------------------------------------------------
