@@ -12,20 +12,64 @@ use std::time::Duration;
 
 pub struct OpenAiCompat {
     cfg: LlmConfig,
+    /// Bounds total time. Used for anything whose response arrives all at once.
     client: reqwest::Client,
+    /// Bounds silence between chunks. Used only for `stream`.
+    stream_client: reqwest::Client,
     context_window: u32,
 }
 
-/// Per-request HTTP timeout. Defaults to 120s; override via
-/// `HARNESS_HTTP_TIMEOUT_SECS` for slow local backends (e.g. large Ollama
-/// models whose first-token latency can exceed two minutes).
-fn http_timeout() -> Duration {
-    let secs = std::env::var("HARNESS_HTTP_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+/// How long one non-streaming completion may take in total.
+///
+/// It has to cover the whole generation, because a non-streaming response
+/// contains no bytes at all until the answer is finished — there is no
+/// progress to observe and nothing to distinguish a working model from a dead
+/// one. Five minutes matches the t2m relay's own completion bound, so a client
+/// sitting behind that relay does not give up on work the relay is still
+/// waiting for.
+///
+/// This was 120s for both kinds of request, and on a local model that was the
+/// difference between "slow" and "incapable": qwen3.8:27b-mlx at ~16 tok/s
+/// crosses it at roughly 1900 tokens, and the run died mid-task with
+/// "operation timed out" that a benchmark then scored as a failed task.
+const DEFAULT_COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long a *stream* may go silent between chunks.
+///
+/// A stream does report progress, so this bounds the gap rather than the whole
+/// response: a long generation that keeps delivering tokens is never cut off,
+/// while one that stops mid-answer is. A total bound would kill the first case
+/// along with the second, which is the mistake this pair exists to avoid.
+const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Parse a timeout override, falling back to `default` for anything that is
+/// not a positive number of seconds.
+fn parse_timeout(raw: Option<&str>, default: Duration) -> Duration {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|&s| s > 0)
-        .unwrap_or(120);
-    Duration::from_secs(secs)
+        .map(Duration::from_secs)
+        .unwrap_or(default)
+}
+
+/// Build the two clients. They differ only in which kind of waiting they treat
+/// as failure, which is the whole point: one bounds total time, the other
+/// bounds silence.
+fn build_clients(
+    completion: Duration,
+    stream_idle: Duration,
+) -> (reqwest::Client, reqwest::Client) {
+    let blocking = reqwest::Client::builder()
+        .timeout(completion)
+        .build()
+        .expect("reqwest client builds");
+    // No total timeout here, deliberately. `read_timeout` restarts on every
+    // chunk, so an hour-long stream that keeps producing is fine and one that
+    // stalls for stream_idle is not.
+    let streaming = reqwest::Client::builder()
+        .read_timeout(stream_idle)
+        .build()
+        .expect("reqwest client builds");
+    (blocking, streaming)
 }
 
 /// Optional JSON object merged into every request body, from
@@ -97,15 +141,39 @@ fn request_body<T: Serialize>(req: &T) -> serde_json::Value {
 
 impl OpenAiCompat {
     pub fn new(cfg: LlmConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(http_timeout())
-            .build()
-            .expect("reqwest client builds");
+        let (client, stream_client) = build_clients(
+            parse_timeout(
+                std::env::var("HARNESS_HTTP_TIMEOUT_SECS").ok().as_deref(),
+                DEFAULT_COMPLETION_TIMEOUT,
+            ),
+            parse_timeout(
+                std::env::var("HARNESS_HTTP_IDLE_TIMEOUT_SECS")
+                    .ok()
+                    .as_deref(),
+                DEFAULT_STREAM_IDLE_TIMEOUT,
+            ),
+        );
         Self {
             cfg,
             client,
+            stream_client,
             context_window: 128_000,
         }
+    }
+
+    /// Set both HTTP bounds for this model.
+    ///
+    /// Per-model rather than only per-process, because one process routes to
+    /// several: a 27B model on a laptop and a hosted flash model want bounds
+    /// an order of magnitude apart, and an env var cannot say both.
+    ///
+    /// `completion` bounds a whole non-streaming request; `stream_idle` bounds
+    /// the gap between chunks of a streamed one.
+    pub fn with_timeouts(mut self, completion: Duration, stream_idle: Duration) -> Self {
+        let (client, stream_client) = build_clients(completion, stream_idle);
+        self.client = client;
+        self.stream_client = stream_client;
+        self
     }
 
     /// Convenience: 3-arg construction without writing out an `LlmConfig`.
@@ -728,7 +796,7 @@ impl Model for OpenAiCompat {
             self.cfg.base_url.trim_end_matches('/')
         );
         let resp = self
-            .client
+            .stream_client
             .post(&url)
             .bearer_auth(&self.cfg.api_key)
             .json(&request_body(&req))
@@ -1276,6 +1344,179 @@ mod tests {
     use super::*;
     use harness_core::{Block, Policy, Task, Turn, TurnRole};
     use std::collections::BTreeMap;
+
+    // `HARNESS_HTTP_TIMEOUT_SECS` is parsed from a raw string so the rule is
+    // testable without touching process-global env, which no parallel test can
+    // do safely.
+    #[test]
+    fn a_timeout_override_is_read_and_nonsense_falls_back() {
+        let default = Duration::from_secs(600);
+
+        assert_eq!(parse_timeout(None, default), default, "unset means default");
+        assert_eq!(
+            parse_timeout(Some("30"), default),
+            Duration::from_secs(30),
+            "a plain number of seconds is honoured"
+        );
+        // Zero is how a caller says "no timeout" in some tools and "instant
+        // failure" in others. Neither is what this knob means, so it is not a
+        // valid value and must not silently disable or zero the bound.
+        assert_eq!(
+            parse_timeout(Some("0"), default),
+            default,
+            "zero is not a timeout"
+        );
+        assert_eq!(
+            parse_timeout(Some("later"), default),
+            default,
+            "junk falls back"
+        );
+        assert_eq!(
+            parse_timeout(Some(""), default),
+            default,
+            "empty falls back"
+        );
+    }
+
+    /// Serve one chat completion, after withholding the response for `delay`.
+    ///
+    /// A real socket rather than a mocked client, because the behaviour under
+    /// test belongs to the HTTP layer: what reqwest does while a server that
+    /// has accepted the request sends nothing back. A mock would assert on the
+    /// mock.
+    async fn slow_server(delay: Duration) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // Read the request head so the client is not blocked on write.
+            let mut buf = [0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+
+            tokio::time::sleep(delay).await;
+
+            let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, resp.as_bytes()).await;
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn probe_ctx() -> Context {
+        Context {
+            system: vec![],
+            guides: vec![],
+            history: vec![],
+            task: Task {
+                description: "say hi".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
+            metadata: BTreeMap::new(),
+            tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
+        }
+    }
+
+    /// Regression for the bug that made a slow local model look incapable.
+    ///
+    /// One total timeout bounded every request. A non-streaming completion
+    /// sends nothing until the whole answer exists, so on a model slower than
+    /// that bound the call died with "operation timed out" partway through a
+    /// task — and the bench above scored it as a task the model could not do.
+    /// qwen3.8:27b-mlx at ~16 tok/s crossed the 120s default routinely.
+    ///
+    /// Silence during a completion is work, not death, so the completion bound
+    /// must be independent of — and looser than — the streaming idle bound.
+    #[tokio::test]
+    async fn a_completion_slower_than_the_idle_bound_still_succeeds() {
+        let base = slow_server(Duration::from_millis(600)).await;
+        let model = OpenAiCompat::with_key(base, "m", "k")
+            .with_timeouts(Duration::from_secs(5), Duration::from_millis(150));
+
+        let out = model.complete(&probe_ctx()).await;
+
+        assert!(
+            out.is_ok(),
+            "a completion that outlives the idle bound is still being generated: {:?}",
+            out.err()
+        );
+    }
+
+    /// A stream that keeps producing is never cut off, however long it runs.
+    ///
+    /// Written after the two above rather than driving them, so it is coverage
+    /// for a property the fix relies on rather than a test that shaped it: the
+    /// streaming client carries no total timeout at all. Giving it one would
+    /// look like a tidier symmetry and would silently cap every long stream at
+    /// the completion bound — the same class of error, moved.
+    #[tokio::test]
+    async fn a_stream_outliving_the_completion_bound_is_not_cut_off() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, head.as_bytes()).await;
+            // Six chunks, 100ms apart: 600ms total, well past the 200ms
+            // completion bound below, with every gap inside the idle bound.
+            for i in 0..6 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let chunk =
+                    format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{i}\"}}}}]}}\n\n");
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, chunk.as_bytes()).await;
+            }
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, b"data: [DONE]\n\n").await;
+        });
+
+        let model = OpenAiCompat::with_key(format!("http://{addr}/v1"), "m", "k")
+            .with_timeouts(Duration::from_millis(200), Duration::from_secs(5));
+
+        let mut stream = model.stream(&probe_ctx()).await.expect("stream opens");
+        let mut text = String::new();
+        while let Some(delta) = futures::StreamExt::next(&mut stream).await {
+            if let ModelDelta::Text(t) = delta.expect("no chunk errors") {
+                text.push_str(&t);
+            }
+        }
+
+        assert_eq!(
+            text, "012345",
+            "every chunk of a progressing stream arrives"
+        );
+    }
+
+    /// The looser bound is still a bound: a completion past it must fail, or
+    /// the fix would have replaced a wrong timeout with no timeout.
+    ///
+    /// Slow on purpose, and the reason is worth knowing: `complete` retries
+    /// through `with_retry`, which treats a timeout as transient and spends
+    /// HARNESS_RETRY_ATTEMPTS (6) attempts with backoff before giving up. So
+    /// the bound is not what a caller waits — it is multiplied. Under the old
+    /// 120s bound that made a slow local model hang for over ten minutes per
+    /// task before failing, which is how one bench run spent 755s on a single
+    /// task and called it a capability failure.
+    #[tokio::test]
+    async fn a_completion_past_its_own_bound_still_times_out() {
+        let base = slow_server(Duration::from_secs(3)).await;
+        let model = OpenAiCompat::with_key(base, "m", "k")
+            .with_timeouts(Duration::from_millis(300), Duration::from_millis(150));
+
+        let out = model.complete(&probe_ctx()).await;
+
+        assert!(
+            out.is_err(),
+            "a completion past the completion bound must fail"
+        );
+    }
 
     // A base_url without `/v1` is the commonest way to misconfigure a local
     // server, and the reply is a bare "404 page not found" that names nothing.
