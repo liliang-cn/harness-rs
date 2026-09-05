@@ -53,7 +53,9 @@
 | `crates/harness-tools/src/agents.rs` | modify | `run_agent` uses the same guard on drop and timeout (Task 3b) |
 | `crates/harness-tools/src/shell/background.rs` | modify | two comments: `SessionEnd` also fires on `Cancelled` (Task 3b) |
 | `crates/harness-loop/src/hooks/broadcast.rs` | modify | project `Cancelled` onto the SSE feed (Task 5) |
-| `crates/harness-loop/src/telemetry.rs` | modify | record `run.cancelled` inside the run span (Task 5) |
+| `crates/harness-loop/src/telemetry.rs` | modify | record `run.cancelled` inside the run span; settle the cancelled dispatch's `tool_starts` entry (Task 5) |
+| `crates/harness-loop/src/lib.rs` | modify | `pub use tokio_util::sync::CancellationToken` (Task 5b) |
+| `crates/harness-cli/Cargo.toml`, `crates/harness-cli/src/interrupt.rs` (**create**), `crates/harness-cli/src/main.rs` | modify/create | Ctrl-C cancels the armed run, per turn in the REPL; idle Ctrl-C exits 130 (Task 5b) |
 | `CHANGELOG.md` | modify | one entry under Unreleased |
 
 No new source files in `lib.rs`'s neighbourhood: the loop crate keeps its one-big-file convention and this change is ~80 lines of it.
@@ -1333,6 +1335,8 @@ git commit -m "fix(context,tools): a dropped child process dies with its process
 
 (`Cargo.lock` gains one edge — `libc` under `harness-rs-context` — and has to travel with the manifest change or a `--locked` build breaks. The first execution omitted it and it was folded in by amend before review.)
 
+**Executed as `8c76a1f`; review fixes in the commit after it.** Code review found, in order of weight: (1) the plan's stdin comment was **false** — tokio's `Command::output`, unlike std's, leaves stdin *inheriting* the parent's, so `stdin(null)` is a real behaviour change for every shell tool (a child could read REPL keystrokes or hang on `git commit`); it is the right change and the comment now says so, and Task 6's changelog records it under *Changed*; (2) `process_group(0)` removes terminal Ctrl-C propagation to shell children, and `harness-cli` has no Ctrl-C handler — so Ctrl-C in the REPL now kills the harness by default disposition and orphans a running `cargo build`: the same "cancellation that appears to work" this task exists to remove, relocated from Esc to Ctrl-C. That is **Task 5b**; (3) the `disarm` half of the contract had no test — added `a_child_that_exits_normally_keeps_its_detached_grandchild` (grandchild stdio redirected so it does not hold the runner's pipes open), proven meaningful by temporarily removing `disarm` and watching it fail; (4) `GroupKill` gained `spawn(&mut Command) -> (Child, GroupKill)` as the **only** way to obtain a guard, so `kill_on_drop` + `process_group(0)` cannot be forgotten at a call site — `arm` went private, the type got `#[must_use]` and `Debug`, and both call sites use it; (5) `libc` moved to `[target.'cfg(unix)'.dependencies]`; the pid-file waits are bounded and insist on `echo`'s trailing newline so a torn read can never parse a prefix as a different real pid; a comment says the guard is left armed across the `?` on purpose; the doc notes `ContainerSandbox` weakens the guarantee (recorded as a follow-up).
+
 ```bash
 # (end of Step 12)
 ```
@@ -1876,6 +1880,243 @@ git commit -m "feat(loop): a cancel reaches the broadcast feed and the run trace
 
 ---
 
+### Task 5b: Ctrl-C cancels the run in `harness-cli` instead of killing the harness
+
+**Why this task exists.** Task 3b puts every shell tool's child in its own process group so a cancelled run can kill the whole tree. The same change means a terminal Ctrl-C no longer reaches that child by group propagation — and `harness-cli` has no Ctrl-C handler at all (the only `ctrl_c` in the workspace is the daemon's). So after 3b, Ctrl-C in `harness code` kills the harness by default disposition: no unwinding, no `GroupKill::drop`, and a running `cargo build` is orphaned. That is the "cancellation that appears to work" failure, relocated from Esc to Ctrl-C. The fix is this branch's own feature: take SIGINT, cancel the run's token, let the loop unwind and the group die. Two consumers: `harness run` (one loop, one run) and the `harness code` REPL (one loop, many turns — and a token is one-way, so Ctrl-C must cancel a **per-turn** token, and a Ctrl-C at an idle prompt should still quit).
+
+**Files:**
+- Modify: `crates/harness-loop/src/lib.rs` — one `pub use` next to the others (~line 40-56)
+- Modify: `crates/harness-cli/Cargo.toml` — `tokio` gains the `signal` feature
+- Create: `crates/harness-cli/src/interrupt.rs`
+- Modify: `crates/harness-cli/src/main.rs` — `mod interrupt;`, `run_agent` (~441-503), `run_code` (~742-830)
+
+Package name: `harness-rs-cli` (binary `harness`). The crate is a single `main.rs` today; `interrupt.rs` is its first module. `main` is `#[tokio::main]` (multi-thread), so a spawned watcher task keeps running while the REPL blocks in `stdin.read_line`.
+
+- [ ] **Step 1: Re-export the token type**
+
+In `crates/harness-loop/src/lib.rs`, directly after `pub use seal::{SealBreach, SealSet};` (~line 43), add:
+
+```rust
+/// The token `AgentLoop::with_cancellation` takes, re-exported so a caller can
+/// cancel a run without depending on `tokio-util` directly.
+pub use tokio_util::sync::CancellationToken;
+```
+
+`cargo build -p harness-rs-loop` → clean. (The `use tokio_util::sync::CancellationToken;` Task 2 added at the top of the file stays; a `pub use` of the same path alongside a private `use` is fine, but if rustc reports the name as already imported, replace Task 2's private `use` with this `pub use` instead.)
+
+- [ ] **Step 2: Give the CLI signal support**
+
+In `crates/harness-cli/Cargo.toml`, change the line `tokio          = { workspace = true }` to:
+
+```toml
+tokio          = { workspace = true, features = ["signal"] }
+```
+
+- [ ] **Step 3: Write the failing tests for the interrupt policy**
+
+Create `crates/harness-cli/src/interrupt.rs` with **only** the tests first — the types they name do not exist yet:
+
+```rust
+//! Ctrl-C as a cancel, not a kill.
+//!
+//! A shell tool's child runs in its own process group so a cancelled run can
+//! kill everything it started — which also means a terminal Ctrl-C no longer
+//! reaches that child by group propagation. If the harness simply died on
+//! SIGINT, the child would be orphaned: the failure cancellation exists to
+//! prevent, moved from Esc to Ctrl-C. So the CLI takes SIGINT itself and turns
+//! it into a cancel of whatever run is in flight; the loop unwinds, drops the
+//! tool, and the group dies with it.
+
+#[cfg(test)]
+mod tests {
+    use super::Current;
+
+    #[test]
+    fn a_ctrl_c_cancels_the_armed_run() {
+        let current = Current::new();
+        let token = current.arm();
+        assert!(!token.is_cancelled());
+
+        assert!(current.interrupt(), "there was a run to cancel");
+        assert!(token.is_cancelled(), "the armed token must be cancelled");
+        assert!(!current.interrupt(), "the same run is not cancelled twice");
+    }
+
+    #[test]
+    fn a_ctrl_c_with_nothing_armed_is_reported_as_idle() {
+        let current = Current::new();
+        assert!(!current.interrupt());
+    }
+
+    // The REPL disarms between turns: a Ctrl-C at the prompt must not reach
+    // into a run that already finished — and must not poison the next one.
+    #[test]
+    fn a_disarmed_token_is_left_alone() {
+        let current = Current::new();
+        let token = current.arm();
+        current.disarm();
+
+        assert!(!current.interrupt(), "nothing armed, so idle");
+        assert!(!token.is_cancelled(), "the finished turn's token is untouched");
+    }
+}
+```
+
+In `crates/harness-cli/src/main.rs`, directly below the crate-level `use` block at the top (before the first `fn`/`struct`), add:
+
+```rust
+mod interrupt;
+```
+
+- [ ] **Step 4: Run to verify they fail**
+
+Run: `cargo test -p harness-rs-cli --lib interrupt::`
+Expected: compile error — `cannot find type `Current` in module `super``. (If the CLI has no `[lib]` and `--lib` is rejected, use `cargo test -p harness-rs-cli --bin harness interrupt::`.)
+
+- [ ] **Step 5: Implement the policy**
+
+Add to `crates/harness-cli/src/interrupt.rs`, **above** the `#[cfg(test)]` module:
+
+```rust
+use harness_loop::CancellationToken;
+use std::sync::{Arc, Mutex};
+
+/// The run currently entitled to be cancelled by Ctrl-C, if any.
+///
+/// `harness run` arms it once. The REPL arms it per turn and disarms between
+/// turns, because a token is one-way: cancelling a loop-lifetime token on turn
+/// three would make every later turn return `Cancelled` on entry.
+#[derive(Clone, Default)]
+pub struct Current(Arc<Mutex<Option<CancellationToken>>>);
+
+impl Current {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Hand Ctrl-C a fresh token for the run about to start, and return it
+    /// for `AgentLoop::cancel` / `with_cancellation`.
+    pub fn arm(&self) -> CancellationToken {
+        let token = CancellationToken::new();
+        *self.0.lock().unwrap() = Some(token.clone());
+        token
+    }
+
+    /// The run is over. Until the next `arm`, Ctrl-C means "quit".
+    pub fn disarm(&self) {
+        self.0.lock().unwrap().take();
+    }
+
+    /// One Ctrl-C. Cancels the armed run if there is one and says whether
+    /// there was; the caller decides what an idle Ctrl-C means.
+    pub fn interrupt(&self) -> bool {
+        match self.0.lock().unwrap().take() {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Watch for Ctrl-C for the life of the process. Each one cancels the armed
+/// run; one that finds nothing armed calls `on_idle`. The CLI passes an exit
+/// with status 130 — the shell's own code for "interrupted" — so a Ctrl-C at
+/// an idle prompt still quits, and a second Ctrl-C during a cancel that is
+/// slow to unwind still ends the process.
+///
+/// Installing the handler replaces SIGINT's default disposition for the whole
+/// process, which is why `on_idle` has to exist: without it, an idle Ctrl-C
+/// would be swallowed.
+pub fn watch(current: Current, on_idle: impl Fn() + Send + 'static) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if tokio::signal::ctrl_c().await.is_err() {
+                // No signal support on this platform/terminal: leave the
+                // default disposition in place rather than pretend.
+                return;
+            }
+            if !current.interrupt() {
+                on_idle();
+            }
+        }
+    })
+}
+```
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `cargo test -p harness-rs-cli --lib interrupt::` (or `--bin harness`)
+Expected: `test result: ok. 3 passed`.
+
+- [ ] **Step 7: Wire `harness run`**
+
+In `run_agent` (`main.rs` ~441), directly after `let mut world = harness_context::default_world(root);` add:
+
+```rust
+    // Ctrl-C cancels the run rather than killing the harness, so an in-flight
+    // tool is dropped and the child processes it started die with their
+    // group. A second Ctrl-C, or one after the run has ended, exits.
+    let current = interrupt::Current::new();
+    let _watcher = interrupt::watch(current.clone(), || std::process::exit(130));
+```
+
+and change `let mut loop_ = AgentLoop::new(model)` to `let mut loop_ = AgentLoop::new(model).with_cancellation(current.arm())` (keep the rest of the builder chain as is). Nothing else in `run_agent` changes: the `Outcome::Cancelled` arms Task 2b added to both its JSON and human output paths already print `"cancelled"` / `(cancelled after N iters)`.
+
+- [ ] **Step 8: Wire the `harness code` REPL, per turn**
+
+In `run_code` (`main.rs` ~742):
+
+(a) Change `let loop_ = AgentLoop::new(model)` (~line 771) to `let mut loop_ = AgentLoop::new(model)` — the token is swapped per turn.
+
+(b) Directly before `let mut seed: Vec<Turn> = Vec::new();` (~line 799) add:
+
+```rust
+    // Ctrl-C during a turn cancels that turn — a fresh token each time, since
+    // a cancelled token stays cancelled and would poison every later turn.
+    // Ctrl-C at the prompt, with nothing armed, quits like any other REPL.
+    let current = interrupt::Current::new();
+    let _watcher = interrupt::watch(current.clone(), || {
+        println!();
+        std::process::exit(130)
+    });
+```
+
+(c) Around the turn's run — the `let outcome = loop_.run_with_seed_history(task, seed.clone(), &mut world, max_iters).await;` (~line 805-807) — arm before and disarm after:
+
+```rust
+        loop_.cancel = current.arm();
+        let outcome = loop_
+            .run_with_seed_history(task, seed.clone(), &mut world, max_iters)
+            .await;
+        current.disarm();
+```
+
+`AgentLoop::cancel` is a `pub` field (Task 2), so assignment is the intended way to give an existing loop a new token. The REPL's `Ok(Outcome::Cancelled { .. })` arm from Task 2b prints `(cancelled after N iters)` and keeps the partial reply in the conversation seed, which is the right behaviour: the user stopped the turn, they did not discard it.
+
+- [ ] **Step 9: Verify**
+
+```bash
+cargo fmt --all && cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p harness-rs-cli 2>&1 | grep -E "^test result|FAILED"
+cargo test -p harness-rs-loop 2>&1 | grep -E "^test result|FAILED"
+cargo build -p harness-rs-cli
+```
+
+Then a manual smoke, which is the only honest test of a signal: in a scratch directory, `harness code --model <any configured model>` … but a live model is not available in CI, so the plan accepts the unit tests on `Current` plus this reasoning as the gate: `watch` is eleven lines whose only logic is `interrupt()` → `on_idle`, both exercised by the tests. Record in the report whether a manual smoke was possible.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add crates/harness-loop/src/lib.rs crates/harness-cli/Cargo.toml crates/harness-cli/src/interrupt.rs crates/harness-cli/src/main.rs
+git commit -m "feat(cli): Ctrl-C cancels the run instead of killing the harness"
+```
+(add `Cargo.lock` if the `signal` feature changed it.)
+
+---
+
 ### Task 6: Changelog
 
 **Files:**
@@ -1895,8 +2136,32 @@ Open `CHANGELOG.md`. There is **no** `## Unreleased` section yet — the file go
   the *next* variant too. Under Cargo's `0.0.x` rules every release is already
   incompatible, so pinned consumers are unaffected until they bump.
 
+### Changed
+
+- **A shell tool's child no longer inherits the harness's stdin.** `TokioRunner::exec`
+  now spawns with `stdin(null)`. tokio's `Command::output` — unlike std's —
+  leaves stdin inheriting the parent's, so a tool's child could read the
+  user's keystrokes out from under the `harness code` REPL, or hang on
+  `git commit` waiting for an editor. Nothing a tool runs should read a
+  terminal; `run_agent` had already closed stdin for the same reason.
+- **A shell tool's child runs in its own process group and dies with it.**
+  `TokioRunner::exec` spawns through `GroupKill::spawn`, which sets
+  `process_group(0)` and `kill_on_drop`, and arms a guard that `SIGKILL`s the
+  group when the exec future is dropped — a cancelled run, a tool deadline.
+  Before, dropping the future orphaned the child: Esc during `cargo test`
+  reported `Cancelled` while the toolchain kept running. The guard is
+  disarmed when the child exits on its own, so a deliberately detached
+  grandchild (`nohup server &`) still survives. Consequence: a terminal
+  Ctrl-C no longer reaches the child by group propagation — the CLI now
+  handles Ctrl-C itself by cancelling the run (see below).
+
 ### Added
 
+- **Ctrl-C cancels the run in `harness-cli`.** `harness run` and the
+  `harness code` REPL install a `tokio::signal::ctrl_c` handler that cancels
+  the loop's token instead of letting the process die. The run returns
+  `Outcome::Cancelled` with its partial work, in-flight tools and model calls
+  are dropped, and child processes die with their group.
 - **Run-level cancellation.** `AgentLoop::with_cancellation(CancellationToken)`
   stops a run from outside. The token is checked every iteration and raced
   against the model step and every tool dispatch, so a cancel drops the
@@ -1935,6 +2200,7 @@ All three must be clean before `superpowers:finishing-a-development-branch`.
 - **`harness-cli`'s JSON `"outcome"` string is an undocumented public contract.** A table test over `Outcome → kind` would pin the four strings; it needs the tuple `match` in `main.rs` (~506-560) extracted into a testable `fn`. Reasonable follow-up, not a blocker.
 - **A nested `Subagent` does not inherit the parent's token.** `Subagent::new` builds a fresh `AgentLoop` with a fresh, never-cancelled token. The only place a subagent is started *inside* a run is a tool (`examples/cap/src/tools/task.rs:90`), and tools receive `&mut World`, not the loop — so there is no path to hand them the parent's token without putting one on `World`, which is a `harness-core` change. What happens today on a parent cancel: `dispatch_bounded` drops the `task` tool's future, so the nested loop simply stops being polled — the work stops — but the nested run's `SessionEnd` never fires, so its `JobReaperHook` never reaps background jobs it started. Decision for this branch: drop is the mechanism, documented on `dispatch_bounded`. Revisit with a `cancel` field on `World` (or a `child_token()` handed through `SubagentSpec`) when a real consumer needs nested cleanup; the other four `Subagent::new` sites (`learning` review, `loop_engine` maker/checker, `scheduler`, `orchestrator`) run outside or after a loop iteration and are not affected.
 - **`background.rs` still says `SessionEnd` fires "on Done / Stuck / BudgetExhausted alike"** (`crates/harness-tools/src/shell/background.rs:24` and `:753`) — now also on `Cancelled`, and that is load-bearing: `JobReaperHook` matches only `SessionEnd`, so the cancel exit firing it is what reaps background jobs on Esc. Two comment lines; fold into Task 3b since it opens that crate.
+- **`ContainerSandbox` weakens the group-kill guarantee** (`crates/harness-loop/src/sandbox.rs` ~291): every `runner.exec` there goes through `docker exec`, so `GroupKill` kills the host-side client and the process inside the container survives — `docker exec` propagates no signal. Pre-existing (nothing killed it before either); the `GroupKill` doc now says so. A real fix is `docker kill`/`docker exec … kill` on drop inside that backend.
 - **A `Detached` background job dropped inside its spawn grace window is orphaned unrecorded** (`background.rs:190, 210-240`: `kill_on_drop(scope != Detached)`, and the job is inserted into the `JobTable` only after the grace `timeout(GRACE_MS, child.wait())`). A cancel landing in that window leaves a running detached child with no table entry for `shell_job_kill`, and two `pump` tasks writing its log forever. Narrow, `Detached`-only, pre-existing on the deadline path.
 - **`bench_suite` credits a cancelled-but-verified trial as `resolved`** (status map puts `(_, true) => "resolved"` first). Pre-existing semantics shared with `timeout`/`error`, and unreachable today (nothing in eval-bench cancels). Revisit if the bench ever cancels on its own timeout instead of dropping the future.
 
