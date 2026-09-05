@@ -2277,6 +2277,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-opentelemetry",
