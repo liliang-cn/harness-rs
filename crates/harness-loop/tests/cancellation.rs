@@ -514,3 +514,38 @@ async fn cancelling_mid_completion_drops_the_request() {
         "cancel must drop the in-flight completion: took {elapsed:?}"
     );
 }
+
+/// The chunks a stream delivered before the cancel were already shown to the
+/// user through `ModelTokenDelta`; the outcome has to carry them too, or the
+/// conversation the model sees next turn disagrees with the one the person
+/// just watched. Task 3 established this for tools; a stream is no different.
+#[tokio::test]
+async fn streamed_partial_text_survives_a_cancel() {
+    let (_td, mut world) = tmp_workspace();
+    let entered = Arc::new(Notify::new());
+    let model = SlowStreamModel {
+        inner: MockModel::new().script(MockResponse::text("unused")),
+        entered: entered.clone(),
+    };
+    let token = CancellationToken::new();
+    cancel_on_entry(entered, token.clone());
+
+    let outcome = AgentLoop::new(model)
+        .with_streaming(true)
+        .with_cancellation(token)
+        .run_with_max_iters(task("stream something long"), &mut world, 5)
+        .await
+        .unwrap();
+
+    match outcome {
+        Outcome::Cancelled { last_text, .. } => {
+            let text = last_text.expect("the streamed chunks must reach the outcome");
+            assert!(!text.is_empty());
+            assert!(
+                text.chars().all(|c| c == 'x'),
+                "only the model's own chunks, nothing else: {text:?}"
+            );
+        }
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+}

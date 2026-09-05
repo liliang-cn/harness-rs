@@ -1438,8 +1438,14 @@ impl<M: Model> AgentLoop<M> {
             }
 
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
-            let Some(out) = self.model_step(&ctx, world).await? else {
+            let mut partial = String::new();
+            let Some(out) = self.model_step(&ctx, world, &mut partial).await? else {
                 tracing::info!(iter, "run cancelled during model step");
+                // What the stream delivered before the cancel is what the person
+                // saw; it belongs to the outcome, not to the dropped future.
+                if !partial.is_empty() {
+                    last_text = Some(std::mem::take(&mut partial));
+                }
                 self.hooks.fire(&Event::Cancelled, world);
                 self.hooks.fire(&Event::SessionEnd, world);
                 return Ok(Outcome::Cancelled {
@@ -2036,16 +2042,19 @@ impl<M: Model> AgentLoop<M> {
     /// what cancels the underlying HTTP request (reqwest aborts on drop) or
     /// the SSE stream, so the model stops generating rather than finishing
     /// into a void. `biased` so a token already cancelled wins a tie.
+    ///
+    /// `partial` collects streamed text so a cancel can hand it to the outcome.
     async fn model_step(
         &self,
         ctx: &Context,
         world: &mut World,
+        partial: &mut String,
     ) -> Result<Option<ModelOutput>, HarnessError> {
         if self.streaming {
             tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => Ok(None),
-                r = self.complete_via_stream(ctx, world) => r.map(Some),
+                r = self.complete_via_stream(ctx, world, partial) => r.map(Some),
             }
         } else {
             tokio::select! {
@@ -2067,10 +2076,19 @@ impl<M: Model> AgentLoop<M> {
     /// works — the loop sees one big `ModelDelta::Text(...)` followed by
     /// `Stop`, fires one big `ModelTokenDelta`, and proceeds. So enabling
     /// `streaming` is safe regardless of which provider the user picked.
+    ///
+    /// `sink` is where the text accumulates, owned by the caller so that a
+    /// cancel — which drops this future mid-stream — does not drop the chunks
+    /// already delivered along with it. A completed stream leaves it empty.
+    ///
+    /// Tool-call deltas need no such rescue: they fire no hook, and no dispatch
+    /// happens until after the output is pushed, so a cancel mid-tool-call
+    /// loses nothing anyone observed.
     async fn complete_via_stream(
         &self,
         ctx: &Context,
         world: &mut World,
+        sink: &mut String,
     ) -> Result<ModelOutput, HarnessError> {
         use futures::StreamExt;
         let mut stream = self
@@ -2078,7 +2096,6 @@ impl<M: Model> AgentLoop<M> {
             .stream(ctx)
             .await
             .map_err(harness_core::HarnessError::Model)?;
-        let mut text = String::new();
         let mut reasoning = String::new();
         let mut usage = Usage::default();
         let mut stop_reason = StopReason::EndTurn;
@@ -2095,7 +2112,7 @@ impl<M: Model> AgentLoop<M> {
                 ModelDelta::Text(t) => {
                     if !t.is_empty() {
                         self.hooks.fire(&Event::ModelTokenDelta { text: &t }, world);
-                        text.push_str(&t);
+                        sink.push_str(&t);
                     }
                 }
                 ModelDelta::ToolCallStart { id, name } => {
@@ -2150,6 +2167,7 @@ impl<M: Model> AgentLoop<M> {
         } else {
             stop_reason
         };
+        let text = std::mem::take(sink);
         Ok(ModelOutput {
             text: if text.is_empty() { None } else { Some(text) },
             tool_calls,

@@ -1242,6 +1242,11 @@ fn translate_turn(turn: &harness_core::Turn, out: &mut Vec<ChatMessage>) {
         Some(Content::Parts(parts))
     };
 
+    // Nothing to say and nothing called: a bare {"role":"assistant"} is rejected upstream.
+    if content.is_none() && tool_calls.is_empty() {
+        return;
+    }
+
     out.push(ChatMessage {
         role: role.into(),
         content,
@@ -1868,6 +1873,42 @@ mod tests {
         assert_eq!(
             msgs[1].content.as_ref().and_then(Content::as_text),
             Some("say hi")
+        );
+    }
+
+    // A cancelled or stuck turn can leave an assistant message with no text
+    // and no tool calls. Serialised, that is a bare `{"role":"assistant"}`,
+    // which OpenAI-shaped endpoints reject. The Anthropic and Gemini adapters
+    // already skip such a turn; this one has to as well.
+    #[test]
+    fn an_empty_assistant_turn_is_not_sent() {
+        let ctx = Context {
+            system: vec![],
+            guides: vec![],
+            history: vec![
+                Turn {
+                    role: TurnRole::User,
+                    blocks: vec![Block::Text("hi".into())],
+                },
+                Turn {
+                    role: TurnRole::Assistant,
+                    blocks: vec![Block::Text(String::new())],
+                },
+            ],
+            task: Task {
+                description: "carry on".into(),
+                source: None,
+                deadline: None,
+            },
+            policy: Policy::default(),
+            metadata: BTreeMap::new(),
+            tools: Vec::new(),
+            response_format: harness_core::ResponseFormat::Free,
+        };
+        let msgs = build_messages(&ctx);
+        assert!(
+            msgs.iter().all(|m| m.role != "assistant"),
+            "an assistant message with nothing in it must be dropped: {msgs:?}"
         );
     }
 
