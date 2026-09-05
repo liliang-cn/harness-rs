@@ -239,7 +239,7 @@ mod cancellation_event {
     use super::Event;
 
     // Cancellation is its own lifecycle event, not a `Stop` or an `Error`:
-    // a hook that pages on `Error` must not fire when a user pressed Esc, and
+    // a hook that pages on `Error` must not fire when a user pressed Ctrl-C, and
     // a hook that bills on `Stop` must know this run did not finish.
     #[test]
     fn cancelled_is_a_named_lifecycle_event() {

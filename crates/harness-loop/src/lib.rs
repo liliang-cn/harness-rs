@@ -553,15 +553,16 @@ pub enum Outcome {
     },
     /// The caller stopped the run through [`AgentLoop::with_cancellation`]
     /// before the model reached a natural end. Carries partial work like
-    /// `Stuck` does, because the user who pressed Esc still wants what was
+    /// `Stuck` does, because the user who pressed Ctrl-C still wants what was
     /// done. The loop makes **no** further model call after this — not even
     /// the forced final synthesis the other early exits perform.
     ///
     /// A tool that was mid-flight when the token fired may still finish its
     /// side effects — a file write on a blocking thread completes, a child
     /// process keeps running unless its runner kills it on drop — but its
-    /// result is discarded before it reaches history, so nothing here records
-    /// that it happened.
+    /// result is discarded before it reaches history, but the dispatch is
+    /// still counted in `tools_called` — the telemetry `run.end` line
+    /// reconciles against that number.
     #[non_exhaustive]
     Cancelled {
         /// Iterations completed before the cancel. `0` means the token was
@@ -1958,7 +1959,7 @@ impl<M: Model> AgentLoop<M> {
                     // prompt bytes at all. (The budget-exhausted path has done
                     // this since it existed; this is the same exit, reached
                     // sooner.)
-                    if let Some(t) = self
+                    match self
                         .force_final_synthesis(
                             &mut ctx,
                             world,
@@ -1967,7 +1968,22 @@ impl<M: Model> AgentLoop<M> {
                         )
                         .await
                     {
-                        last_text = Some(t);
+                        Synthesis::Text(Some(t)) => last_text = Some(t),
+                        Synthesis::Text(None) => {}
+                        // Stop means stop: the synthesis is a model call like
+                        // any other, and the run owes the caller a `Cancelled`
+                        // rather than the `Stuck` it was on its way to.
+                        Synthesis::Cancelled => {
+                            tracing::info!(iter, "run cancelled during final synthesis");
+                            self.hooks.fire(&Event::Cancelled, world);
+                            self.hooks.fire(&Event::SessionEnd, world);
+                            return Ok(Outcome::Cancelled {
+                                iters: iter + 1,
+                                last_text,
+                                tools_called,
+                                usage: total_usage,
+                            });
+                        }
                     }
 
                     self.hooks.fire(&Event::SessionEnd, world);
@@ -2024,11 +2040,27 @@ impl<M: Model> AgentLoop<M> {
         // synthesis. Pre-existing `BudgetWarning` event was unused; this is
         // its natural home.
         self.hooks.fire(&Event::BudgetWarning { ratio: 1.0 }, world);
-        let synthesised = self
+        match self
             .force_final_synthesis(&mut ctx, world, &mut total_usage, BUDGET_SYNTHESIS_PROMPT)
-            .await;
-        if let Some(t) = synthesised {
-            last_text = Some(t);
+            .await
+        {
+            Synthesis::Text(Some(t)) => last_text = Some(t),
+            Synthesis::Text(None) => {}
+            // A cancel that lands here has to win: this is the last model call
+            // of the run, and it is made after the loop's last cancel check.
+            // No learning review either — it is one more model call, and the
+            // other cancel exits all skip it.
+            Synthesis::Cancelled => {
+                tracing::info!(iters = iters_done, "run cancelled during final synthesis");
+                self.hooks.fire(&Event::Cancelled, world);
+                self.hooks.fire(&Event::SessionEnd, world);
+                return Ok(Outcome::Cancelled {
+                    iters: iters_done,
+                    last_text,
+                    tools_called,
+                    usage: total_usage,
+                });
+            }
         }
 
         self.hooks.fire(&Event::SessionEnd, world);
@@ -2407,7 +2439,7 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         total_usage: &mut harness_core::Usage,
         prompt: &str,
-    ) -> Option<String> {
+    ) -> Synthesis {
         // Snapshot + clear tool schemas so the model has no choice but text.
         let saved_tools = std::mem::take(&mut ctx.tools);
         ctx.history.push(Turn {
@@ -2416,8 +2448,23 @@ impl<M: Model> AgentLoop<M> {
         });
 
         self.hooks.fire(&Event::PreModel { ctx }, world);
-        let result = self.model.complete(ctx).await;
+        // `biased` with the token first means an already-cancelled token wins
+        // the race outright, so no separate `is_cancelled()` pre-check is
+        // needed here — the select is the check.
+        let result = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => None,
+            r = self.model.complete(ctx) => Some(r),
+        };
         ctx.tools = saved_tools;
+
+        let Some(result) = result else {
+            // Drop the synthesis prompt pushed above. Nothing answered it, and
+            // leaving it would hand the next reader of this context a dangling
+            // user turn.
+            ctx.history.pop();
+            return Synthesis::Cancelled;
+        };
 
         match result {
             Ok(out) => {
@@ -2427,11 +2474,20 @@ impl<M: Model> AgentLoop<M> {
                 total_usage.cached_input_tokens += out.usage.cached_input_tokens;
                 total_usage.cache_write_input_tokens += out.usage.cache_write_input_tokens;
                 ctx.push_model_output(&out);
-                out.text
+                Synthesis::Text(out.text)
             }
-            Err(_) => None,
+            Err(_) => Synthesis::Text(None),
         }
     }
+}
+
+/// What the forced final synthesis produced.
+enum Synthesis {
+    /// The model answered (or errored — errors are swallowed, see the fn doc).
+    Text(Option<String>),
+    /// The run's token fired before or during the call; no text was produced
+    /// and nothing was pushed to the context.
+    Cancelled,
 }
 
 /// A persistent multi-turn conversation over one [`AgentLoop`].

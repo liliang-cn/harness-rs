@@ -26,7 +26,7 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   `TokioRunner::exec` spawns through `GroupKill::spawn`, which sets
   `process_group(0)` and `kill_on_drop`, and arms a guard that `SIGKILL`s the
   group when the exec future is dropped — a cancelled run, a tool deadline.
-  Before, dropping the future orphaned the child: Esc during `cargo test`
+  Before, dropping the future orphaned the child: a cancel during `cargo test`
   reported `Cancelled` while the toolchain kept running. The guard is
   disarmed when the child exits on its own, so a deliberately detached
   grandchild (`nohup server &`) still survives. Consequence: a terminal
@@ -53,9 +53,17 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
   The run returns `Outcome::Cancelled { iters, last_text, tools_called, usage }`
   — an outcome, not an error, because the partial work is still the caller's —
   and makes no further model call, not even the forced final synthesis the
-  other early exits perform. Fires the new `Event::Cancelled` (the 30th
-  lifecycle event) followed by `SessionEnd`. A `Session` inherits its loop's
-  token. Default is a token nobody holds, so existing callers are unchanged.
+  other early exits perform. Fires the new `Event::Cancelled` followed by
+  `SessionEnd`. A `Session` inherits its loop's token. Default is a token
+  nobody holds, so existing callers are unchanged.
+
+### Fixed
+
+- **`OpenAiCompat` no longer sends an empty assistant turn.** An assistant
+  turn with no text and no tool calls — a cancelled or otherwise empty
+  turn — was serialised as a bare `{"role":"assistant"}`, which
+  OpenAI-shaped endpoints reject with 400. `translate_turn` now skips it,
+  as the Anthropic and Gemini adapters already did.
 
 ## 0.0.62
 
