@@ -735,8 +735,120 @@ async fn a_cancel_is_recorded_on_the_run_trace() {
         cancelled < ended,
         "run.cancelled must be recorded before run.end:\n{output}"
     );
+    // Scoped to the run.end line: model.complete renders a `tool_calls` field
+    // of its own (calls requested), and a whole-output search would match that.
+    let end = output
+        .lines()
+        .find(|l| l.contains("run.end"))
+        .expect("run.end line");
     assert!(
-        output.contains("tool_calls=1"),
+        end.contains("tool_calls=1"),
         "run.end must count the cancelled dispatch, as Outcome::Cancelled does:\n{output}"
+    );
+}
+
+// ------------------------------------------------------------------
+// 9. A denied call from an earlier run is not billed to a later cancel
+// ------------------------------------------------------------------
+
+/// Denies the first tool call it sees and allows everything after it.
+struct DenyOnce(AtomicU32);
+impl Hook for DenyOnce {
+    fn name(&self) -> &str {
+        "deny-once"
+    }
+    fn matches(&self, ev: &Event<'_>) -> bool {
+        matches!(ev, Event::PreToolUse { .. })
+    }
+    fn fire(&self, _ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            HookOutcome::Deny {
+                reason: "not this one".into(),
+            }
+        } else {
+            HookOutcome::Allow
+        }
+    }
+}
+
+/// A denied tool call fires PreToolUse and never PostToolUse, so its entry
+/// stays in the telemetry hook's map. One `AgentLoop` serves many runs, and
+/// so does its hook: a cancel in a *later* run must not sweep that stale
+/// entry into its own `tool_calls`, or `run.end` disagrees with the outcome.
+#[tokio::test]
+async fn a_denied_call_from_an_earlier_run_is_not_billed_to_a_cancel() {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .without_time()
+        .with_ansi(false)
+        .finish();
+
+    let output = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (_td, mut world) = tmp_workspace();
+        // Different args on purpose: MockModel derives a call's id from its
+        // name and args, and the telemetry map is keyed by that id. Identical
+        // calls would share a key and the second would silently overwrite the
+        // leaked first — hiding exactly the bug this test is for.
+        let model = MockModel::new()
+            .script(MockResponse::tool_call("slow", json!({"n": 1})))
+            .script(MockResponse::text("done"))
+            .script(MockResponse::tool_call("slow", json!({"n": 2})))
+            .script(MockResponse::text("unreachable"));
+        let entered = Arc::new(Notify::new());
+        // Telemetry registered *before* the denier, so it sees the PreToolUse
+        // that the denier then stops.
+        let mut agent = AgentLoop::new(model)
+            .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
+            .with_hook(Arc::new(DenyOnce(AtomicU32::new(0))))
+            .with_tool(Arc::new(SlowTool::new(
+                "slow",
+                ToolRisk::Idempotent,
+                entered.clone(),
+            )));
+
+        // Run 1: the call is denied, the model then answers, the run is Done.
+        let first = agent
+            .run_with_max_iters(task("first"), &mut world, 5)
+            .await
+            .unwrap();
+        assert!(matches!(first, Outcome::Done { .. }), "got {first:?}");
+
+        // Run 2 on the same loop and hook: the call is allowed, entered, and
+        // cancelled. A fresh token, since the field is one-way.
+        let token = CancellationToken::new();
+        agent.cancel = token.clone();
+        cancel_on_entry(entered, token);
+        let second = agent
+            .run_with_max_iters(task("second"), &mut world, 5)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                second,
+                Outcome::Cancelled {
+                    tools_called: 1,
+                    ..
+                }
+            ),
+            "got {second:?}"
+        );
+
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    };
+
+    let ends: Vec<&str> = output.lines().filter(|l| l.contains("run.end")).collect();
+    assert_eq!(ends.len(), 2, "one run.end per run:\n{output}");
+    assert!(
+        ends[0].contains("tool_calls=0"),
+        "a denied call is not a dispatch:\n{}",
+        ends[0]
+    );
+    assert!(
+        ends[1].contains("tool_calls=1"),
+        "the cancel counts its own dispatch and nothing leaked from run 1:\n{}",
+        ends[1]
     );
 }
