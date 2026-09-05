@@ -383,7 +383,7 @@ git commit -m "feat(loop): a CancellationToken on AgentLoop, checked per iterati
 - [ ] **Step 1: Confirm the failing gate**
 
 Run: `cargo build --workspace --all-targets --message-format=short 2>&1 | grep -c E0004`
-Expected: `10` (cargo stops at the first failing crate in each dependency chain, so this undercounts the 18 sites; the grep in Step 3 is the full list).
+Expected: **some number ≥ 1 — it is not stable.** Cargo compiles crates in parallel and stops scheduling new work once errors appear, so how many crates get far enough to report varies between runs (observed 1, 8 and 10 on the same tree). Do not treat any particular count as pass/fail; the point of this step is only that the gate is red. The grep in Step 3 is the authoritative, complete list of sites, and Step 12's zero-error build is the pass condition.
 
 - [ ] **Step 2: `harness-serve` — the answer helper**
 
