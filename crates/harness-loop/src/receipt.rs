@@ -126,11 +126,29 @@ impl ReceiptBuilder {
                 SealSet::default(),
                 None,
             ),
-            _ => (
-                0,
-                0,
-                harness_core::Usage::default(),
-                Some(Verdict::failed("the run did not complete")),
+            Outcome::Stuck {
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                *iters,
+                *tools_called,
+                usage.clone(),
+                Some(Verdict::failed("the run got stuck before finishing")),
+                SealSet::default(),
+                None,
+            ),
+            Outcome::Cancelled {
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                *iters,
+                *tools_called,
+                usage.clone(),
+                Some(Verdict::failed("the run was cancelled before finishing")),
                 SealSet::default(),
                 None,
             ),
@@ -360,6 +378,28 @@ mod tests {
             "{}",
             unsealed_pass.summary()
         );
+    }
+
+    /// A cancelled run did real work, and its receipt has to say so: before
+    /// this arm existed a wildcard signed zeros over the top of it.
+    #[test]
+    fn a_cancelled_run_keeps_its_accounting_on_the_receipt() {
+        let outcome = crate::Outcome::Cancelled {
+            iters: 3,
+            last_text: Some("partial".into()),
+            tools_called: 2,
+            usage: harness_core::Usage {
+                input_tokens: 120,
+                output_tokens: 45,
+                ..Default::default()
+            },
+        };
+        let r = ReceiptBuilder::new("t", "m", 1).build(&outcome);
+        assert_eq!(r.iters, 3);
+        assert_eq!(r.tools_called, 2);
+        assert_eq!(r.input_tokens, 120);
+        assert_eq!(r.output_tokens, 45);
+        assert!(!r.passed);
     }
 
     #[test]
