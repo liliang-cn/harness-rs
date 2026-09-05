@@ -66,6 +66,7 @@ use harness_core::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 /// Governs the loop's stuck-detector. When the model repeats the *same* tool
 /// call (name + args) round after round without making progress, the loop first
@@ -548,6 +549,20 @@ pub enum Outcome {
         tools_called: u32,
         usage: harness_core::Usage,
     },
+    /// The caller stopped the run through [`AgentLoop::with_cancellation`]
+    /// before the model reached a natural end. Carries partial work like
+    /// `Stuck` does, because the user who pressed Esc still wants what was
+    /// done. The loop makes **no** further model call after this — not even
+    /// the forced final synthesis the other early exits perform.
+    #[non_exhaustive]
+    Cancelled {
+        /// Iterations that had *started* when the token fired. `0` means the
+        /// token was already cancelled on entry.
+        iters: u32,
+        last_text: Option<String>,
+        tools_called: u32,
+        usage: harness_core::Usage,
+    },
 }
 
 /// The agent loop.
@@ -576,6 +591,11 @@ pub struct AgentLoop<M: Model> {
     /// text fragment. Tool-call deltas are still assembled inside the loop;
     /// only the terminal `ModelOutput` shape is observable downstream.
     pub streaming: bool,
+    /// Stops the run from outside. Checked at the top of every iteration and
+    /// raced against the model step and every tool dispatch, so a cancel
+    /// lands within one await point rather than at the next iteration
+    /// boundary. Defaults to a token nobody holds, which never fires.
+    pub cancel: CancellationToken,
     /// Optional cross-session recall store. When set, the loop captures every
     /// turn and the `session_search` tool is registered. See `with_recall`.
     pub recall: Option<Arc<dyn harness_core::RecallStore>>,
@@ -650,6 +670,7 @@ impl<M: Model> AgentLoop<M> {
             tool_timeout: Some(Duration::from_secs(120)),
             response_format: ResponseFormat::Free,
             streaming: false,
+            cancel: CancellationToken::new(),
             recall: None,
             recall_auto_inject: false,
             learning: None,
@@ -761,6 +782,20 @@ impl<M: Model> AgentLoop<M> {
     /// each fragment as it arrives; the rest of the loop is unchanged.
     pub fn with_streaming(mut self, enable: bool) -> Self {
         self.streaming = enable;
+        self
+    }
+
+    /// Hand the run a token the caller can cancel. Cloning a
+    /// `CancellationToken` shares it, so keep one and pass a clone here:
+    ///
+    /// ```ignore
+    /// let token = CancellationToken::new();
+    /// let agent = AgentLoop::new(model).with_cancellation(token.clone());
+    /// // … later, from anywhere:
+    /// token.cancel();
+    /// ```
+    pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancel = token;
         self
     }
 
@@ -1011,6 +1046,9 @@ impl<M: Model> AgentLoop<M> {
             }
             | Outcome::Stuck {
                 last_text: Some(t), ..
+            }
+            | Outcome::Cancelled {
+                last_text: Some(t), ..
             } => t,
             Outcome::Done { text: None, .. } => {
                 return Err(HarnessError::Other(
@@ -1029,6 +1067,13 @@ impl<M: Model> AgentLoop<M> {
             } => {
                 return Err(HarnessError::Other(
                     "run_typed: budget exhausted with no text".into(),
+                ));
+            }
+            Outcome::Cancelled {
+                last_text: None, ..
+            } => {
+                return Err(HarnessError::Other(
+                    "run_typed: run cancelled with no text".into(),
                 ));
             }
         };
@@ -1288,6 +1333,18 @@ impl<M: Model> AgentLoop<M> {
         let mut deadline_reached = false;
 
         for iter in 0..ctx.policy.max_iters {
+            if self.cancel.is_cancelled() {
+                tracing::info!(iter, "run cancelled by caller");
+                self.hooks.fire(&Event::Cancelled, world);
+                self.hooks.fire(&Event::SessionEnd, world);
+                return Ok(Outcome::Cancelled {
+                    iters: iter,
+                    last_text,
+                    tools_called,
+                    usage: total_usage,
+                });
+            }
+
             // ── wall-clock budget ───────────────────────────────────────
             // `max_iters` bounds *steps*, which says nothing about elapsed
             // time: one iteration can be a 100ms read or a 20-minute build.
@@ -2315,9 +2372,9 @@ impl<'a, M: Model> Session<'a, M> {
             .await?;
         let reply = match &outcome {
             Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
-            Outcome::BudgetExhausted { last_text, .. } | Outcome::Stuck { last_text, .. } => {
-                last_text.clone().unwrap_or_default()
-            }
+            Outcome::BudgetExhausted { last_text, .. }
+            | Outcome::Stuck { last_text, .. }
+            | Outcome::Cancelled { last_text, .. } => last_text.clone().unwrap_or_default(),
         };
         self.history.push(Turn {
             role: TurnRole::User,
