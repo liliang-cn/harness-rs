@@ -147,6 +147,12 @@ async fn main() -> anyhow::Result<()> {
             iters,
             usage,
             ..
+        }
+        | Outcome::Cancelled {
+            last_text,
+            iters,
+            usage,
+            ..
         } => (last_text.clone().unwrap_or_default(), *iters, usage.clone()),
     };
 

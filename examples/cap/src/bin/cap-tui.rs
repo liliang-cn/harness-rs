@@ -291,7 +291,8 @@ async fn agent_loop(
         {
             Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),
             Ok(Outcome::BudgetExhausted { last_text, .. })
-            | Ok(Outcome::Stuck { last_text, .. }) => last_text.unwrap_or_default(),
+            | Ok(Outcome::Stuck { last_text, .. })
+            | Ok(Outcome::Cancelled { last_text, .. }) => last_text.unwrap_or_default(),
             Err(e) => format!("[error] {e}"),
         };
         recorder.record(prompt.clone(), reply.clone()).await;

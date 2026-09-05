@@ -886,6 +886,9 @@ async fn run_once(
         }
         | Outcome::Stuck {
             iters, last_text, ..
+        }
+        | Outcome::Cancelled {
+            iters, last_text, ..
         } => {
             eprintln!("✗ stopped after {iters} iteration(s)");
             if let Some(t) = last_text {
@@ -999,6 +1002,9 @@ async fn run_repl(
                 iters, last_text, ..
             })
             | Ok(Outcome::Stuck {
+                iters, last_text, ..
+            })
+            | Ok(Outcome::Cancelled {
                 iters, last_text, ..
             }) => {
                 eprintln!("\nasst> ✗ stopped after {iters} iterations.");

@@ -464,11 +464,12 @@ impl Hook for StreamForwardHook {
 }
 
 /// Best-effort answer text from any terminal [`Outcome`] — a partial answer from
-/// a budget-exhausted or stuck run beats an empty reply.
+/// a budget-exhausted, stuck or cancelled run beats an empty reply.
 fn answer_of(outcome: &Outcome) -> String {
     match outcome {
         Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
         Outcome::BudgetExhausted { last_text, .. } => last_text.clone().unwrap_or_default(),
         Outcome::Stuck { last_text, .. } => last_text.clone().unwrap_or_default(),
+        Outcome::Cancelled { last_text, .. } => last_text.clone().unwrap_or_default(),
     }
 }

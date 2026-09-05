@@ -600,6 +600,13 @@ async fn run_once(
             tools_called,
             usage,
             ..
+        }
+        | Outcome::Cancelled {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
         } => {
             eprintln!(
                 "✗ stopped after {iters} iter(s), {tools_called} tool call(s), \
@@ -734,6 +741,13 @@ async fn run_repl(
                 ..
             })
             | Ok(Outcome::Stuck {
+                iters,
+                last_text,
+                tools_called,
+                usage,
+                ..
+            })
+            | Ok(Outcome::Cancelled {
                 iters,
                 last_text,
                 tools_called,
