@@ -122,10 +122,10 @@ In `Event::name()`, immediately before the `Event::Stop => "Stop",` arm, add:
 Run: `cargo test -p harness-rs-core --lib cancelled_is_a_named_lifecycle_event`
 Expected: `test result: ok. 1 passed`
 
-- [ ] **Step 6: Make sure nothing else pattern-matched exhaustively on Event**
+- [ ] **Step 6: Sanity-build the workspace**
 
 Run: `cargo build --workspace`
-Expected: clean. (`Event` is `#[non_exhaustive]`, so downstream `match`es already carry a wildcard; if this errors, the failing match is inside the workspace — add `Event::Cancelled => …` mirroring its `Stop` arm.)
+Expected: clean, no edits needed. This was checked on 2026-09-06: no `match` on `Event` anywhere lists `Event::Stop` as an arm — every consumer uses `matches!`/`if let` or already ends in `_ =>` — so a new variant cannot make any match non-exhaustive. If this build *does* error, stop and report `BLOCKED` with the error; do not add arms on your own.
 
 - [ ] **Step 7: Commit**
 
@@ -250,11 +250,7 @@ async fn an_uncancelled_token_changes_nothing() {
 }
 ```
 
-Add `tokio-util` to the loop crate's **dev-dependencies** too, since the test file names the type. In `crates/harness-loop/Cargo.toml`, under `[dev-dependencies]` (create the section if it does not exist, after `[dependencies]`):
-
-```toml
-tokio-util = { workspace = true }
-```
+No `[dev-dependencies]` change is needed: `tokio-util` became a normal dependency in Task 1, and integration tests under `tests/` can use any normal dependency of the crate.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -483,11 +479,7 @@ async fn cancellation_does_not_force_a_final_synthesis() {
 }
 ```
 
-Add `async-trait` to `[dev-dependencies]` in `crates/harness-loop/Cargo.toml` if it is not already there (it is a workspace dep):
-
-```toml
-async-trait = { workspace = true }
-```
+`async-trait` is already in `[dev-dependencies]` of `crates/harness-loop/Cargo.toml` (line 73); nothing to add.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -557,7 +549,18 @@ Note the deadline arm now returns `Ok(ToolResult { .. })` (wrapped) because it l
 
 - [ ] **Step 4: Exit the iteration once a tool reports the cancel**
 
-Find the sequential tool loop, `for call in &out.tool_calls {`. After the line that obtains the result — it reads `self.dispatch_bounded(&action, world).await` (~line 1620) and its value is bound to a local (call it `r` or whatever the code names it) — and **before** that result is pushed into `ctx`/history, insert:
+Find the sequential tool loop, `for call in &out.tool_calls {`. Inside it (~line 1617-1622) the result is obtained and counted like this:
+
+```rust
+                let result = if let Some(r) = prefetched.remove(&action.call_id) {
+                    r
+                } else {
+                    self.dispatch_bounded(&action, world).await
+                };
+                tools_called += 1;
+```
+
+Insert the block below **directly after `tools_called += 1;`** and before the `let result = ToolResult { content: self.shape_result(…` that follows it. (On a cancel the prefetch map is empty — Step 5 makes it so — so control always reaches `dispatch_bounded`, which returns immediately with the cancelled result, and `tools_called` has already been incremented, which is what the test asserts.)
 
 ```rust
                 if self.cancel.is_cancelled() {
@@ -876,7 +879,7 @@ git commit -m "test(loop): Cancelled fires once and SessionEnd follows"
 
 - [ ] **Step 1: Add the entry**
 
-Open `CHANGELOG.md`. Under the topmost `## Unreleased` heading (create it above the newest version heading if absent), add:
+Open `CHANGELOG.md`. There is **no** `## Unreleased` section yet — the file goes straight from its intro paragraph to `## 0.0.62` (line 6). Insert the following directly above the `## 0.0.62` line, leaving one blank line after the intro paragraph and one before `## 0.0.62`:
 
 ```markdown
 ### Added
