@@ -36,6 +36,8 @@
 - `Tool` trait (`crates/harness-core/src/tool.rs:40`): `fn name(&self)->&str; fn schema(&self)->&ToolSchema; fn risk(&self)->ToolRisk; async fn invoke(&self, args: Value, world: &mut World)->Result<ToolResult,ToolError>`. `ToolSchema { name, description, input }`. `ToolRisk::{ReadOnly, Idempotent, Destructive, Network}`. `ToolResult { ok, content, trace }`.
 - `Hook` trait: `fn name(&self)->&str; fn matches(&self,&Event<'_>)->bool; fn fire(&self,&Event<'_>,&mut World)->HookOutcome` (`HookOutcome::Allow`).
 
+**Standing rule for every task — run `cargo fmt --all` before every commit, and confirm `cargo fmt --all -- --check` exits 0.** CI (`.github/workflows/ci.yml`) enforces it. The code blocks in this plan were written by hand and are *not* guaranteed rustfmt-clean; copy them verbatim as instructed, then let rustfmt reflow them. Task 2's first commit went red on exactly this and needed a follow-up.
+
 ---
 
 ## File Structure
