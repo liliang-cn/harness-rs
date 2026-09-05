@@ -1909,7 +1909,7 @@ Package name: `harness-rs-cli` (binary `harness`). The crate is a single `main.r
 
 - [ ] **Step 1: Re-export the token type**
 
-In `crates/harness-loop/src/lib.rs`, directly after `pub use seal::{SealBreach, SealSet};` (~line 43), add:
+In `crates/harness-loop/src/lib.rs` the name is currently brought in by a **private** `use tokio_util::sync::CancellationToken;` at ~line 69 (added in Task 2). Two `use` items importing the same name into one module conflict (`E0252`), so this is a **move**, not an addition: delete that line 69, and directly after `pub use seal::{SealBreach, SealSet};` (~line 43, where the crate clusters its re-exports) add:
 
 ```rust
 /// The token `AgentLoop::with_cancellation` takes, re-exported so a caller can
@@ -1917,7 +1917,7 @@ In `crates/harness-loop/src/lib.rs`, directly after `pub use seal::{SealBreach, 
 pub use tokio_util::sync::CancellationToken;
 ```
 
-`cargo build -p harness-rs-loop` → clean. (The `use tokio_util::sync::CancellationToken;` Task 2 added at the top of the file stays; a `pub use` of the same path alongside a private `use` is fine, but if rustc reports the name as already imported, replace Task 2's private `use` with this `pub use` instead.)
+A `pub use` also brings the name into scope for the module's own code, so every existing `CancellationToken` in `lib.rs` still resolves. `cargo build -p harness-rs-loop` → clean.
 
 - [ ] **Step 2: Give the CLI signal support**
 
@@ -2098,7 +2098,7 @@ In `run_code` (`main.rs` ~742):
     });
 ```
 
-(c) Around the turn's run — the `let outcome = loop_.run_with_seed_history(task, seed.clone(), &mut world, max_iters).await;` (~line 805-807) — arm before and disarm after:
+(c) Around the turn's run — the `let outcome = loop_.run_with_seed_history(task, seed.clone(), &mut world, max_iters).await;` (~line 826-830 after Task 2b's insertions; the `.run_with_seed_history(` line itself is ~828) — arm before and disarm after. Note `main.rs` has other `AgentLoop::new(model)` sites (~1155, ~1355) belonging to other subcommands; only `run_code`'s (~771) and `run_agent`'s (~458) are in scope:
 
 ```rust
         loop_.cancel = current.arm();
