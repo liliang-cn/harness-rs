@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 use harness_core::Skill;
 use std::path::{Path, PathBuf};
 
+mod interrupt;
+
 #[derive(Parser, Debug)]
 #[command(name = "harness", version, about = "Harness agent framework CLI")]
 struct Cli {
@@ -451,11 +453,18 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let mut world = harness_context::default_world(root);
 
+    // Ctrl-C cancels the run rather than killing the harness, so an in-flight
+    // tool is dropped and the child processes it started die with their
+    // group. A second Ctrl-C, or one after the run has ended, exits.
+    let current = interrupt::Current::new();
+    let _watcher = interrupt::watch(current.clone(), || std::process::exit(130));
+
     let mut model = OpenAiCompat::with_key(base_url, model_id, key);
     if let Some(w) = opts.context_window {
         model = model.with_context_window(w);
     }
     let mut loop_ = AgentLoop::new(model)
+        .with_cancellation(current.arm())
         // Always on: the hook only emits `tracing` spans/events, which cost
         // nothing without a subscriber. Without it, `RUST_LOG=harness.telemetry=info`
         // — the documented way to watch a run — produces silence, and the
@@ -768,7 +777,7 @@ async fn run_code(
     };
     let model = OpenAiCompat::with_key(base_url, model_id.clone(), key);
 
-    let loop_ = AgentLoop::new(model)
+    let mut loop_ = AgentLoop::new(model)
         .with_streaming(true)
         // Same reasoning as `run`, and more so here: this is the streaming
         // command, so it is the only one that can report time-to-first-token —
@@ -795,6 +804,15 @@ async fn run_code(
         root.display()
     );
     println!("tools: read · write · edit · list · grep · glob · shell    /reset · /exit\n");
+
+    // Ctrl-C during a turn cancels that turn — a fresh token each time, since
+    // a cancelled token stays cancelled and would poison every later turn.
+    // Ctrl-C at the prompt, with nothing armed, quits like any other REPL.
+    let current = interrupt::Current::new();
+    let _watcher = interrupt::watch(current.clone(), || {
+        println!();
+        std::process::exit(130)
+    });
 
     let mut seed: Vec<Turn> = Vec::new();
     let stdin = std::io::stdin();
@@ -824,9 +842,11 @@ async fn run_code(
             source: None,
             deadline: None,
         };
+        loop_.cancel = current.arm();
         let outcome = loop_
             .run_with_seed_history(task, seed.clone(), &mut world, max_iters)
             .await;
+        current.disarm();
         println!(); // terminate the streamed line
         let reply = match outcome {
             Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),

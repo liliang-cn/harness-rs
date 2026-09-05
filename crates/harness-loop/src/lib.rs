@@ -41,6 +41,9 @@ pub use acceptance::{Acceptance, FilesExist, NonEmptyAnswer, Verdict};
 pub use goal::{Goal, GoalStore, Phase, PhaseStatus};
 pub use receipt::{Receipt, ReceiptBuilder};
 pub use seal::{SealBreach, SealSet};
+/// The token `AgentLoop::with_cancellation` takes, re-exported so a caller can
+/// cancel a run without depending on `tokio-util` directly.
+pub use tokio_util::sync::CancellationToken;
 pub mod replay;
 pub mod subagent;
 pub mod telemetry;
@@ -66,7 +69,6 @@ use harness_core::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 
 /// Governs the loop's stuck-detector. When the model repeats the *same* tool
 /// call (name + args) round after round without making progress, the loop first
