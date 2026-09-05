@@ -556,8 +556,8 @@ pub enum Outcome {
     /// the forced final synthesis the other early exits perform.
     #[non_exhaustive]
     Cancelled {
-        /// Iterations that had *started* when the token fired. `0` means the
-        /// token was already cancelled on entry.
+        /// Iterations completed before the cancel. `0` means the token was
+        /// already cancelled on entry.
         iters: u32,
         last_text: Option<String>,
         tools_called: u32,
@@ -785,15 +785,25 @@ impl<M: Model> AgentLoop<M> {
         self
     }
 
-    /// Hand the run a token the caller can cancel. Cloning a
-    /// `CancellationToken` shares it, so keep one and pass a clone here:
+    /// Hand the run a token the caller can cancel from anywhere.
+    ///
+    /// The token belongs to the **loop, not to one run**, and cancellation is
+    /// **one-way**: once `cancel()` has been called, every later `run` (and
+    /// every later `Session::turn`) on this loop returns `Outcome::Cancelled`
+    /// immediately, with `iters: 0`. That is right for a loop built for one
+    /// job and wrong for one that serves many turns. For per-turn cancellation
+    /// give each turn its own token — either rebuild the loop, or keep a parent
+    /// and hand out `parent.child_token()`, dropping the child when the turn
+    /// ends so the parent stays live:
     ///
     /// ```ignore
     /// let token = CancellationToken::new();
     /// let agent = AgentLoop::new(model).with_cancellation(token.clone());
-    /// // … later, from anywhere:
+    /// // … later, from anywhere — this loop is now finished with, permanently:
     /// token.cancel();
     /// ```
+    ///
+    /// Cloning a `CancellationToken` shares it, so keep one and pass a clone.
     pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
         self.cancel = token;
         self
