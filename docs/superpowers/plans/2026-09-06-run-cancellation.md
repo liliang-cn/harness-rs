@@ -47,6 +47,8 @@
 | `crates/harness-core/src/event.rs` | modify | add `Event::Cancelled`; fix the "29" doc; name mapping |
 | `crates/harness-loop/src/lib.rs` | modify | `cancel` field, `with_cancellation`, `Outcome::Cancelled`, the three check/race points, skip synthesis |
 | `crates/harness-loop/tests/cancellation.rs` | **create** | all behavioural tests for this feature |
+| `crates/harness-loop/src/hooks/broadcast.rs` | modify | project `Cancelled` onto the SSE feed (Task 5) |
+| `crates/harness-loop/src/telemetry.rs` | modify | record `run.cancelled` inside the run span (Task 5) |
 | `CHANGELOG.md` | modify | one entry under Unreleased |
 
 No new source files in `lib.rs`'s neighbourhood: the loop crate keeps its one-big-file convention and this change is ~80 lines of it.
@@ -99,7 +101,7 @@ tokio-util       = { workspace = true }
 
 - [ ] **Step 4: Add the variant**
 
-In `crates/harness-core/src/event.rs`, change the doc on line 7 from `All 29 lifecycle events` to `All 30 lifecycle events`.
+In `crates/harness-core/src/event.rs`, line 7 says `All 29 lifecycle events the framework emits (DESIGN.md §10).` — and the number is wrong (the enum has 32 variants; five places in the repo disagree on the count). **Drop the number** rather than correct it: make the line `/// All lifecycle events the framework emits (DESIGN.md §10).` Do the same in `crates/harness-core/Cargo.toml`'s `description` (line 9): replace `and 29 lifecycle events` with `and the lifecycle events`. (Executed as commits `f5bd669` + `97c4b95`; the second is the code-review fix that made this decision.)
 
 In the `Event` enum, immediately **before** the `Stop,` variant (~line 149), add:
 
@@ -798,11 +800,15 @@ git commit -m "feat(loop): a cancel drops the in-flight model request or stream"
 
 ---
 
-### Task 5: The event fires exactly once, then SessionEnd
+### Task 5: The event fires exactly once, then SessionEnd — and reaches the feed and the trace
 
 **Files:**
 - Modify: `crates/harness-loop/tests/cancellation.rs`
-- Modify (only if the test fails): `crates/harness-loop/src/lib.rs`
+- Modify (only if Step 2 fails): `crates/harness-loop/src/lib.rs`
+- Modify: `crates/harness-loop/src/hooks/broadcast.rs` — `project()` (~line 120-160)
+- Modify: `crates/harness-loop/src/telemetry.rs` — the `match ev` in `fire()` (~line 139-340)
+
+**Why the last two are here.** Code review of Task 1 found that firing `Event::Cancelled` is not enough on its own: two consumers drop it on the floor. `BroadcastHook::project()` ends in `_ => return None`, and `matches()` is `project(ev).is_some()`, so an SSE client watching a run (`harness-serve`, `examples/ai-note`) would see the feed simply stop, never told the run was cancelled. And `TelemetryHook` has no end-state arm at all — `SessionEnd` writes `run.end` regardless of how the run ended — so a cancelled run's trace is indistinguishable from a completed one. Both are three-line fixes and both belong with the event, not in a later cleanup.
 
 - [ ] **Step 1: Add the test**
 
@@ -868,6 +874,196 @@ Expected: PASS on the first run — Tasks 2–4 each fire `Cancelled` then `Sess
 ```bash
 git add crates/harness-loop/tests/cancellation.rs
 git commit -m "test(loop): Cancelled fires once and SessionEnd follows"
+```
+
+- [ ] **Step 4: Write the failing broadcast test**
+
+Append to `crates/harness-loop/tests/cancellation.rs`:
+
+```rust
+// ------------------------------------------------------------------
+// 7. A cancel reaches the broadcast feed
+// ------------------------------------------------------------------
+
+use harness_loop::hooks::broadcast::BroadcastHook;
+
+/// The SSE feed is how a UI watches a run. Before this, `project()` had no
+/// arm for `Cancelled`, so a client saw the stream stop with no reason —
+/// the exact failure the event's own doc comment warns against.
+#[tokio::test]
+async fn a_cancel_reaches_the_broadcast_feed() {
+    let (_td, mut world) = tmp_workspace();
+    let model = MockModel::new()
+        .script(MockResponse::tool_call("slow", json!({})))
+        .script(MockResponse::text("unreachable"));
+    // Subscribe before the hook is handed to the loop: `subscribe` takes
+    // `&self`, and the receiver outlives the hook independently.
+    let hook = BroadcastHook::new(64);
+    let mut rx = hook.subscribe();
+    let token = CancellationToken::new();
+    let fire = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        fire.cancel();
+    });
+
+    let _ = AgentLoop::new(model)
+        .with_tool(Arc::new(SlowTool::new()))
+        .with_hook(Arc::new(hook))
+        .with_cancellation(token)
+        .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+        .await
+        .unwrap();
+
+    // Drain what the feed carried. `try_recv` returns `Err(Empty)` once the
+    // buffer is exhausted, which ends the loop.
+    let mut names = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        names.push(ev.event);
+    }
+    let cancelled = names.iter().position(|n| *n == "Cancelled");
+    let ended = names.iter().position(|n| *n == "SessionEnd");
+    assert!(cancelled.is_some(), "Cancelled never reached the feed: {names:?}");
+    assert!(ended.is_some(), "SessionEnd never reached the feed: {names:?}");
+    assert!(cancelled < ended, "Cancelled must precede SessionEnd on the feed: {names:?}");
+}
+```
+
+- [ ] **Step 5: Run it to verify it fails**
+
+Run: `cargo test -p harness-rs-loop --test cancellation a_cancel_reaches_the_broadcast_feed`
+Expected: FAIL with `Cancelled never reached the feed: [...]` — the list will contain `"SessionEnd"` but not `"Cancelled"`, because `project()` returns `None` for it and `matches()` therefore never lets it through.
+
+- [ ] **Step 6: Project the event**
+
+In `crates/harness-loop/src/hooks/broadcast.rs`, inside `fn project`, directly after the line `Event::SessionEnd => json!({}),` (~line 144), add:
+
+```rust
+        // No fields: the outcome carries the partial work, the feed only
+        // needs to know the run was ended from outside rather than finished.
+        Event::Cancelled => json!({}),
+```
+
+Nothing else changes: `matches()` is `project(ev).is_some()`, so this one arm is what makes the hook both match and forward the event.
+
+- [ ] **Step 7: Run it to verify it passes**
+
+Run: `cargo test -p harness-rs-loop --test cancellation a_cancel_reaches_the_broadcast_feed`
+Expected: PASS.
+
+- [ ] **Step 8: Write the failing telemetry test**
+
+Append to `crates/harness-loop/tests/cancellation.rs`:
+
+```rust
+// ------------------------------------------------------------------
+// 8. A cancel is recorded on the run trace
+// ------------------------------------------------------------------
+
+use std::io::Write;
+use tracing_subscriber::fmt::MakeWriter;
+
+/// A `tracing` writer that appends everything into a shared buffer.
+/// (Copied from tests/telemetry.rs — test crates cannot share fixtures.)
+#[derive(Clone)]
+struct BufWriter(Arc<Mutex<Vec<u8>>>);
+impl Write for BufWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> MakeWriter<'a> for BufWriter {
+    type Writer = BufWriter;
+    fn make_writer(&'a self) -> BufWriter {
+        self.clone()
+    }
+}
+
+/// `SessionEnd` writes `run.end` however the run ended, so without its own
+/// line a cancelled run's trace reads exactly like a finished one.
+#[tokio::test]
+async fn a_cancel_is_recorded_on_the_run_trace() {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .without_time()
+        .with_ansi(false)
+        .finish();
+
+    let output = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (_td, mut world) = tmp_workspace();
+        let model = MockModel::new()
+            .script(MockResponse::tool_call("slow", json!({})))
+            .script(MockResponse::text("unreachable"));
+        let token = CancellationToken::new();
+        let fire = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            fire.cancel();
+        });
+
+        let _ = AgentLoop::new(model)
+            .with_tool(Arc::new(SlowTool::new()))
+            .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
+            .with_cancellation(token)
+            .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+            .await
+            .unwrap();
+
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    };
+
+    assert!(output.contains("run.cancelled"), "missing run.cancelled:\n{output}");
+    assert!(output.contains("run.end"), "run.end must still close the trace:\n{output}");
+    let cancelled = output.find("run.cancelled").unwrap();
+    let ended = output.find("run.end").unwrap();
+    assert!(cancelled < ended, "run.cancelled must be recorded before run.end:\n{output}");
+}
+```
+
+`tracing-subscriber` is already a dev-dependency of the loop crate (used by `tests/telemetry.rs`), and `tracing` is a normal dependency, so nothing is added to `Cargo.toml`.
+
+- [ ] **Step 9: Run it to verify it fails**
+
+Run: `cargo test -p harness-rs-loop --test cancellation a_cancel_is_recorded_on_the_run_trace`
+Expected: FAIL with `missing run.cancelled:` followed by the captured output, which will contain `run.start` and `run.end` but no `run.cancelled`.
+
+- [ ] **Step 10: Record the cancel on the span**
+
+In `crates/harness-loop/src/telemetry.rs`, inside `fn fire`'s `match ev`, immediately **before** the `Event::SessionEnd => {` arm (~line 312), add:
+
+```rust
+            Event::Cancelled => self.in_run(|| {
+                // Warn, not info: a cancel is the person deciding the run was
+                // not worth finishing, which is worth seeing in a trace that
+                // would otherwise look like any other run.end.
+                tracing::warn!(target: "harness.telemetry", event = "run.cancelled");
+            }),
+```
+
+`in_run` scopes the event to the run's span (if any), the same way `BudgetWarning` does two arms above.
+
+- [ ] **Step 11: Run the tests to verify they pass**
+
+Run: `cargo test -p harness-rs-loop --test cancellation`
+Expected: `test result: ok. 8 passed`.
+
+- [ ] **Step 12: Run the whole loop crate**
+
+Run: `cargo test -p harness-rs-loop`
+Expected: green. `tests/telemetry.rs` asserts on the shape of `run.start`/`run.end` and is unaffected by an extra line; the broadcast hook's own unit tests (in `hooks/broadcast.rs`) count projected events for specific inputs and do not include `Cancelled`.
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add crates/harness-loop/src/hooks/broadcast.rs crates/harness-loop/src/telemetry.rs crates/harness-loop/tests/cancellation.rs
+git commit -m "feat(loop): a cancel reaches the broadcast feed and the run trace"
 ```
 
 ---
