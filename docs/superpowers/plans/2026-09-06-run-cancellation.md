@@ -2209,10 +2209,12 @@ git commit -m "docs: changelog for run-level cancellation"
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 ```
 
-All three must be clean before `superpowers:finishing-a-development-branch`.
+The first two must be clean. The third must show **exactly three** failures, all doctests, all pre-existing on `main` before this branch was cut and being fixed in their own task: `crates/harness-core/src/redact/mod.rs` (`redact`, line 22), `crates/harness-tools/src/datetime/mod.rs` (`datetime::resolve`, line 124), `crates/harness-tools/src/browser/policy.rs` (`browser::policy::UrlPolicy`, line 73). Any other failure belongs to this branch. (`--no-fail-fast` matters: without it cargo stops after the first failing doctest binary and hides the other two, which misled a baseline read early in this plan.) Do not fix those three here — widening the branch to unrelated doctests is exactly the scope creep the task chips exist to prevent.
+
+All of that must hold before `superpowers:finishing-a-development-branch`.
 
 ## Follow-ups found in review, deliberately out of scope for this branch
 
