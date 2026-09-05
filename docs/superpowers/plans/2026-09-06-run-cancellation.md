@@ -587,7 +587,41 @@ The body ("✗ stopped after {iters} iter(s), …") is accurate for a cancel and
 
 (b) ~line 729-742: identical shape wrapped in `Ok(…)`. Insert `| Ok(Outcome::Cancelled { iters, last_text, tools_called, usage, .. })` as the third alternative, formatted like its neighbours.
 
-- [ ] **Step 8: `personal-assistant` — two or-patterns; fold**
+- [ ] **Step 8: `personal-assistant` — two sites; `Cancelled` gets its own arm at each**
+
+**Correction (code review of the executed task).** This step originally said "fold", and the fold was executed in `bf4bc43`. It was wrong: the shared bodies print `— forced-synthesis answer (tool-less) —` and `asst (forced-synthesis)>`, a claim about *where the text came from* that holds for `BudgetExhausted` and `Stuck` (the loop runs `force_final_synthesis` and overwrites `last_text`) and is false for `Cancelled` (the loop returns `last_text` untouched and never synthesises). The fold-vs-own-arm rule must be judged on the arm's **body**, not only its pattern head — a body that asserts something variant-specific is discriminating even when the pattern looks shared. Fixed in the follow-up commit by removing `Cancelled` from both or-patterns and adding, at the one-shot site:
+
+```rust
+        Outcome::Cancelled { iters, last_text, .. } => {
+            eprintln!("✗ cancelled after {iters} iteration(s)");
+            // Not a synthesis: a cancelled run never gets a tool-less final
+            // turn, so this is whatever the model had said when it was stopped.
+            if let Some(t) = last_text {
+                eprintln!("\n— last assistant message before cancelling —\n{t}");
+            }
+            if let Some(s) = &synth_handle {
+                s.flush_pending().await;
+            }
+            std::process::exit(2);
+        }
+```
+
+and at the REPL site:
+
+```rust
+            Ok(Outcome::Cancelled {
+                iters, last_text, ..
+            }) => {
+                eprintln!("\nasst> ✗ cancelled after {iters} iterations.");
+                if let Some(t) = last_text {
+                    println!("\nasst (partial)> {t}");
+                }
+            }
+```
+
+`investor-bot`'s folds (Step 7) were checked against the same standard and are correct: its shared body says only "✗ stopped after …" plus a provenance-neutral "last assistant message before stopping", which is honest for all three.
+
+*(Original, superseded instruction follows for the record.)*
 
 (a) ~line 884-889: replace
 ```rust
@@ -1478,6 +1512,13 @@ cargo test --workspace
 ```
 
 All three must be clean before `superpowers:finishing-a-development-branch`.
+
+## Follow-ups found in review, deliberately out of scope for this branch
+
+- **`harness-serve` retries a run whose answer is blank** (`crates/harness-serve/src/service.rs` ~312-320 and ~392-401): `answer_of(&outcome)` empty → `warn!("empty answer — retrying once")` → re-run the agent. A cancel at iteration 0 has `last_text: None`, so it takes this path. Harmless today only because the token is loop-scoped: the retry hits the same cancelled token and returns immediately. If `harness-serve` ever gives each request its own token, "user cancels" becomes "server starts a fresh run". When that wiring is done: skip the retry on `matches!(outcome, Outcome::Cancelled { .. })`.
+- **`ai-note`'s frontend has no case for `warning: "cancelled"`** (`examples/ai-note/user-ui/src/components/chat/chat-sheet.tsx` ~252 handles only `budget_exhausted`; `"stuck"` has never had a case either). Nothing breaks — the string is passed through opaquely — but a cancelled turn shows no toast. Belongs with whatever adds a cancel button to that UI.
+- **`harness-cli`'s JSON `"outcome"` string is an undocumented public contract.** A table test over `Outcome → kind` would pin the four strings; it needs the tuple `match` in `main.rs` (~506-560) extracted into a testable `fn`. Reasonable follow-up, not a blocker.
+- **`bench_suite` credits a cancelled-but-verified trial as `resolved`** (status map puts `(_, true) => "resolved"` first). Pre-existing semantics shared with `timeout`/`error`, and unreachable today (nothing in eval-bench cancels). Revisit if the bench ever cancels on its own timeout instead of dropping the future.
 
 **Do not merge this branch with Tasks 3 or 4 unlanded.** The rustdoc on `AgentLoop::cancel` (written in Task 2) states the token is "raced against the model step and every tool dispatch" — that is true only once Tasks 3 and 4 exist. Landing Task 2 alone would ship documentation promising mid-tool cancellation the code does not deliver.
 
