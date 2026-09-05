@@ -352,3 +352,165 @@ async fn cancelling_during_the_parallel_prefetch_returns_promptly() {
         "cancel must drop the prefetch, not await it: took {elapsed:?}"
     );
 }
+
+// ------------------------------------------------------------------
+// 7. A cancel mid-stream stops generation
+// ------------------------------------------------------------------
+
+use futures::stream::BoxStream;
+use harness_core::{
+    Context, Event, Hook, HookOutcome, Model, ModelDelta, ModelError, ModelInfo, ModelOutput,
+};
+use std::sync::atomic::AtomicU32;
+
+/// Streams one character every 100ms for five seconds, and announces the first
+/// chunk through `entered` so a test can cancel the instant the stream is
+/// provably mid-flight. Delegates everything that is not streaming to a
+/// `MockModel` so `info()` needs no hand-built `ModelInfo`.
+struct SlowStreamModel {
+    inner: MockModel,
+    entered: Arc<Notify>,
+}
+#[async_trait]
+impl Model for SlowStreamModel {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        self.inner.complete(ctx).await
+    }
+    async fn stream(
+        &self,
+        _ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        let entered = self.entered.clone();
+        let s = futures::stream::unfold(0u32, move |i| {
+            let entered = entered.clone();
+            async move {
+                if i >= 50 {
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                // Announce as the first chunk goes out. The loop consumes it
+                // and fires ModelTokenDelta within the same poll, so the
+                // cancel that this triggers lands on the *next* await.
+                if i == 0 {
+                    entered.notify_one();
+                }
+                Some((Ok(ModelDelta::Text("x".into())), i + 1))
+            }
+        });
+        Ok(Box::pin(s))
+    }
+    fn info(&self) -> ModelInfo {
+        let mut info = self.inner.info();
+        info.supports_streaming = true;
+        info
+    }
+}
+
+/// A non-streaming model whose `complete` takes ten seconds and announces
+/// its entry. This is the loop's **default** path — `streaming` is off unless
+/// a caller opts in — so a cancel that only worked mid-stream would miss most
+/// real runs.
+struct SlowCompleteModel {
+    inner: MockModel,
+    entered: Arc<Notify>,
+}
+#[async_trait]
+impl Model for SlowCompleteModel {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        self.entered.notify_one();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        self.inner.complete(ctx).await
+    }
+    fn info(&self) -> ModelInfo {
+        self.inner.info()
+    }
+}
+
+/// Counts `ModelTokenDelta` events, so the test can prove the stream was
+/// running when it was cut, not finished before the cancel landed.
+struct DeltaCounter(Arc<AtomicU32>);
+impl Hook for DeltaCounter {
+    fn name(&self) -> &str {
+        "delta-counter"
+    }
+    fn matches(&self, ev: &Event<'_>) -> bool {
+        matches!(ev, Event::ModelTokenDelta { .. })
+    }
+    fn fire(&self, _ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        HookOutcome::Allow
+    }
+}
+
+#[tokio::test]
+async fn cancelling_mid_stream_stops_generation() {
+    let (_td, mut world) = tmp_workspace();
+    let entered = Arc::new(Notify::new());
+    let model = SlowStreamModel {
+        inner: MockModel::new().script(MockResponse::text("unused")),
+        entered: entered.clone(),
+    };
+    let deltas = Arc::new(AtomicU32::new(0));
+    let token = CancellationToken::new();
+    cancel_on_entry(entered, token.clone());
+
+    let started = Instant::now();
+    let outcome = AgentLoop::new(model)
+        .with_streaming(true)
+        .with_hook(Arc::new(DeltaCounter(deltas.clone())))
+        .with_cancellation(token)
+        .run_with_max_iters(task("stream something long"), &mut world, 5)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(outcome, Outcome::Cancelled { iters: 1, .. }),
+        "got {outcome:?}"
+    );
+    let seen = deltas.load(Ordering::SeqCst);
+    assert!(
+        seen >= 1,
+        "the stream had started delivering before the cancel"
+    );
+    assert!(
+        seen < 50,
+        "the stream was cut short, not drained: saw {seen} of 50"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancel must drop the stream: took {elapsed:?}"
+    );
+}
+
+/// The default, non-streaming path: `complete()` is one HTTP round trip that
+/// returns nothing until the whole answer exists. A cancel has to drop that
+/// request, not wait for it.
+#[tokio::test]
+async fn cancelling_mid_completion_drops_the_request() {
+    let (_td, mut world) = tmp_workspace();
+    let entered = Arc::new(Notify::new());
+    let model = SlowCompleteModel {
+        inner: MockModel::new().script(MockResponse::text("never returned")),
+        entered: entered.clone(),
+    };
+    let token = CancellationToken::new();
+    cancel_on_entry(entered, token.clone());
+
+    let started = Instant::now();
+    let outcome = AgentLoop::new(model)
+        .with_cancellation(token)
+        .run_with_max_iters(task("think for a long time"), &mut world, 5)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(outcome, Outcome::Cancelled { iters: 1, .. }),
+        "got {outcome:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancel must drop the in-flight completion: took {elapsed:?}"
+    );
+}
