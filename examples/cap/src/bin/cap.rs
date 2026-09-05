@@ -284,6 +284,12 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
                 last_text.clone().unwrap_or_default()
             }
+            Outcome::Cancelled {
+                last_text, iters, ..
+            } => {
+                eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
+                last_text.clone().unwrap_or_default()
+            }
         };
         recorder.record(situation, reply.clone()).await;
         sess.push("user", &p);
@@ -365,7 +371,8 @@ async fn main() -> anyhow::Result<()> {
         {
             Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),
             Ok(Outcome::BudgetExhausted { last_text, .. })
-            | Ok(Outcome::Stuck { last_text, .. }) => last_text.unwrap_or_default(),
+            | Ok(Outcome::Stuck { last_text, .. })
+            | Ok(Outcome::Cancelled { last_text, .. }) => last_text.unwrap_or_default(),
             Err(e) => {
                 eprintln!("\n\x1b[31merror:\x1b[0m {e}");
                 continue;

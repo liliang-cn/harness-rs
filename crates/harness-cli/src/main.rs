@@ -546,6 +546,20 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
                 usage.input_tokens,
                 usage.output_tokens,
             ),
+            Outcome::Cancelled {
+                last_text,
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                "cancelled",
+                last_text.clone(),
+                *iters,
+                *tools_called,
+                usage.input_tokens,
+                usage.output_tokens,
+            ),
         };
         println!(
             "{}",
@@ -578,6 +592,14 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
                 ..
             } => {
                 eprintln!("(stuck after {iters} iters: {reason})");
+                if let Some(t) = last_text {
+                    println!("{}", t.trim());
+                }
+            }
+            Outcome::Cancelled {
+                last_text, iters, ..
+            } => {
+                eprintln!("(cancelled after {iters} iters)");
                 if let Some(t) = last_text {
                     println!("{}", t.trim());
                 }
@@ -821,6 +843,12 @@ async fn run_code(
                 ..
             }) => {
                 eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
+                last_text.unwrap_or_default()
+            }
+            Ok(Outcome::Cancelled {
+                last_text, iters, ..
+            }) => {
+                eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
                 last_text.unwrap_or_default()
             }
             Err(e) => {
@@ -1165,6 +1193,9 @@ async fn replay_session(
         }
         Outcome::Stuck { iters, reason, .. } => {
             println!("  outcome:       Stuck after {iters} iter(s): {reason}");
+        }
+        Outcome::Cancelled { iters, .. } => {
+            println!("  outcome:       Cancelled after {iters} iter(s)");
         }
     }
     Ok(())

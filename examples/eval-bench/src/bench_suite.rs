@@ -735,6 +735,9 @@ async fn run_task(task: &BenchTask, level: Level, trial: u32) -> Row {
         Ok(Ok(Outcome::Stuck { iters, usage, .. })) => {
             ("stuck", iters, usage.input_tokens, usage.output_tokens)
         }
+        Ok(Ok(Outcome::Cancelled { iters, usage, .. })) => {
+            ("cancelled", iters, usage.input_tokens, usage.output_tokens)
+        }
         Ok(Err(e)) => {
             eprintln!("  ! run error: {e}");
             ("error", 0, 0, 0)
@@ -756,6 +759,7 @@ async fn run_task(task: &BenchTask, level: Level, trial: u32) -> Row {
         ("timeout", false) => "timeout",
         ("error", false) => "error",
         ("stuck", false) => "stuck",
+        ("cancelled", false) => "cancelled",
         (_, false) => "wrong",
     };
 

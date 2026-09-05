@@ -155,6 +155,10 @@ async fn main() -> anyhow::Result<()> {
             println!("\n✗ stuck after {iters} iteration(s): {reason}");
             std::process::exit(2);
         }
+        Outcome::Cancelled { iters, .. } => {
+            println!("\n✗ cancelled after {iters} iteration(s)");
+            std::process::exit(2);
+        }
     }
     Ok(())
 }
