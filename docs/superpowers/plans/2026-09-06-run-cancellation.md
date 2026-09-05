@@ -1336,7 +1336,7 @@ git commit -m "fix(context,tools): a dropped child process dies with its process
 ### Task 4: A cancel mid-generation drops the request
 
 **Files:**
-- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1435 after Task 3) and `complete_via_stream` (~2030 after Task 3)
+- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1441 after Task 3's fix commit `06c9355`) and `complete_via_stream` (~2036); `dispatch_bounded` is at ~2148 and is **not** touched here
 - Modify: `crates/harness-loop/tests/cancellation.rs`
 
 - [ ] **Step 1: Add a slow streaming model and the test**
@@ -1352,11 +1352,13 @@ use futures::stream::BoxStream;
 use harness_core::{Context, Event, Hook, HookOutcome, Model, ModelDelta, ModelError, ModelInfo, ModelOutput};
 use std::sync::atomic::AtomicU32;
 
-/// Streams one character every 100ms for five seconds. Delegates everything
-/// that is not streaming to a `MockModel` so `info()` needs no hand-built
-/// `ModelInfo`.
+/// Streams one character every 100ms for five seconds, and announces the first
+/// chunk through `entered` so a test can cancel the instant the stream is
+/// provably mid-flight. Delegates everything that is not streaming to a
+/// `MockModel` so `info()` needs no hand-built `ModelInfo`.
 struct SlowStreamModel {
     inner: MockModel,
+    entered: Arc<Notify>,
 }
 #[async_trait]
 impl Model for SlowStreamModel {
@@ -1367,12 +1369,22 @@ impl Model for SlowStreamModel {
         &self,
         _ctx: &Context,
     ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
-        let s = futures::stream::unfold(0u32, |i| async move {
-            if i >= 50 {
-                return None;
+        let entered = self.entered.clone();
+        let s = futures::stream::unfold(0u32, move |i| {
+            let entered = entered.clone();
+            async move {
+                if i >= 50 {
+                    return None;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                // Announce as the first chunk goes out. The loop consumes it
+                // and fires ModelTokenDelta within the same poll, so the
+                // cancel that this triggers lands on the *next* await.
+                if i == 0 {
+                    entered.notify_one();
+                }
+                Some((Ok(ModelDelta::Text("x".into())), i + 1))
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            Some((Ok(ModelDelta::Text("x".into())), i + 1))
         });
         Ok(Box::pin(s))
     }
@@ -1380,6 +1392,26 @@ impl Model for SlowStreamModel {
         let mut info = self.inner.info();
         info.supports_streaming = true;
         info
+    }
+}
+
+/// A non-streaming model whose `complete` takes ten seconds and announces
+/// its entry. This is the loop's **default** path — `streaming` is off unless
+/// a caller opts in — so a cancel that only worked mid-stream would miss most
+/// real runs.
+struct SlowCompleteModel {
+    inner: MockModel,
+    entered: Arc<Notify>,
+}
+#[async_trait]
+impl Model for SlowCompleteModel {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        self.entered.notify_one();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        self.inner.complete(ctx).await
+    }
+    fn info(&self) -> ModelInfo {
+        self.inner.info()
     }
 }
 
@@ -1402,14 +1434,14 @@ impl Hook for DeltaCounter {
 #[tokio::test]
 async fn cancelling_mid_stream_stops_generation() {
     let (_td, mut world) = tmp_workspace();
-    let model = SlowStreamModel { inner: MockModel::new().script(MockResponse::text("unused")) };
+    let entered = Arc::new(Notify::new());
+    let model = SlowStreamModel {
+        inner: MockModel::new().script(MockResponse::text("unused")),
+        entered: entered.clone(),
+    };
     let deltas = Arc::new(AtomicU32::new(0));
     let token = CancellationToken::new();
-    let fire = token.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(350)).await;
-        fire.cancel();
-    });
+    cancel_on_entry(entered, token.clone());
 
     let started = Instant::now();
     let outcome = AgentLoop::new(model)
@@ -1427,18 +1459,47 @@ async fn cancelling_mid_stream_stops_generation() {
     assert!(seen < 50, "the stream was cut short, not drained: saw {seen} of 50");
     assert!(elapsed < Duration::from_secs(2), "cancel must drop the stream: took {elapsed:?}");
 }
+
+/// The default, non-streaming path: `complete()` is one HTTP round trip that
+/// returns nothing until the whole answer exists. A cancel has to drop that
+/// request, not wait for it.
+#[tokio::test]
+async fn cancelling_mid_completion_drops_the_request() {
+    let (_td, mut world) = tmp_workspace();
+    let entered = Arc::new(Notify::new());
+    let model = SlowCompleteModel {
+        inner: MockModel::new().script(MockResponse::text("never returned")),
+        entered: entered.clone(),
+    };
+    let token = CancellationToken::new();
+    cancel_on_entry(entered, token.clone());
+
+    let started = Instant::now();
+    let outcome = AgentLoop::new(model)
+        .with_cancellation(token)
+        .run_with_max_iters(task("think for a long time"), &mut world, 5)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(matches!(outcome, Outcome::Cancelled { iters: 1, .. }), "got {outcome:?}");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancel must drop the in-flight completion: took {elapsed:?}"
+    );
+}
 ```
 
 Check the exact builder name for adding a hook: run `grep -n "pub fn with_hook" crates/harness-loop/src/lib.rs`. If it is named differently, use that name in the test.
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p harness-rs-loop --test cancellation cancelling_mid_stream_stops_generation`
-Expected: FAIL — either `saw 50 of 50` (stream drained) or the elapsed assertion at ~5s. Both mean the same thing: the stream was awaited to the end.
+Run: `cargo test -p harness-rs-loop --test cancellation cancelling_mid_`
+Expected: **both** new tests FAIL. `cancelling_mid_stream_stops_generation` fails on `saw 50 of 50` (stream drained) or on the elapsed assertion at ~5 s — both mean the stream was awaited to the end. `cancelling_mid_completion_drops_the_request` fails on its elapsed assertion at ~10 s — the `complete()` future was awaited to the end, then Task 2's top-of-iteration check noticed the token. If either passes before Step 3, stop: the test is not exercising the model step.
 
 - [ ] **Step 3: Race the model step against the token**
 
-Replace the model call at ~line 1435:
+Replace the model call at ~line 1441:
 
 ```rust
             let out = if self.streaming {
@@ -1501,7 +1562,7 @@ If `HarnessError::Model` is not the variant the existing `?` on `self.model.comp
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 6 passed`, the mid-stream test finishing in well under a second.
+Expected: `test result: ok. 8 passed`, the two new tests finishing in well under a second each (Task 3's fix round brought the file to 6; these add 2).
 
 - [ ] **Step 5: Run the whole loop crate**
 
@@ -1793,7 +1854,7 @@ Also extend the telemetry test's assertions (Step 8's `a_cancel_is_recorded_on_t
 - [ ] **Step 11: Run the tests to verify they pass**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 9 passed`.
+Expected: `test result: ok. 11 passed` (8 after Task 4, plus the event-order, broadcast and telemetry tests here).
 
 - [ ] **Step 12: Run the whole loop crate**
 
