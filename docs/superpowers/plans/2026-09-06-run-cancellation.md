@@ -11,7 +11,7 @@
 **Why not an error variant:** `Stuck` and `BudgetExhausted` are already outcomes carrying `last_text`/`tools_called`/`usage` so a caller can salvage partial work. Cancellation is the same shape — the user pressed Esc, they still want what was done. An `Err` would throw that away.
 
 **Repo facts the implementer needs (verified 2026-09-06 at commit `bf304a1`):**
-- The loop body is `AgentLoop::run_with_seed_history` in `crates/harness-loop/src/lib.rs`; the iteration is `for iter in 0..ctx.policy.max_iters { … }` starting near line 1330. The model is called once per iteration at ~line 1368:
+- The loop body is `AgentLoop::run_with_seed_history` in `crates/harness-loop/src/lib.rs`; the iteration is `for iter in 0..ctx.policy.max_iters { … }` at line 1335 (after Task 2; 1290 before it). The model is called once per iteration at ~line 1425:
   ```rust
   let out = if self.streaming {
       self.complete_via_stream(&ctx, world).await?
@@ -19,7 +19,7 @@
       self.model.complete(&ctx).await?
   };
   ```
-- Tools are dispatched through `async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult` (~line 2052), which already wraps the future in `tokio::time::timeout(self.tool_timeout)`. It is called from two places: a parallel read-only prefetch (`futures::future::join_all` at ~line 1567, on a cloned `World`) and the sequential per-call path (~line 1620).
+- Tools are dispatched through `async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult` (~line 2109 after Task 2), which already wraps the future in `tokio::time::timeout(self.tool_timeout)`. It is called from two places: a parallel read-only prefetch (`if lead.len() > 1 {` at ~1615, `futures::future::join_all` at ~1628, on a cloned `World`) and the sequential per-call path (`for call in &out.tool_calls {` at ~1634; `tools_called += 1;` at ~1679).
 - Early exits look like this (the stuck detector, ~line 1767) — mirror it:
   ```rust
   self.hooks.fire(&Event::SessionEnd, world);
@@ -405,7 +405,7 @@ fn answer_of(outcome: &Outcome) -> String {
 - [ ] **Step 3: Get the full site list now that `harness-serve` compiles**
 
 Run: `grep -rn "Outcome::Stuck" crates examples --include='*.rs' | grep -v "crates/harness-loop/"`
-Expected: exactly these 17 lines (line numbers ±2):
+Expected: exactly these 18 lines (line numbers ±2):
 `crates/harness-cli/src/main.rs:535`, `:574`, `:817`, `:1166`; `crates/harness-serve/src/service.rs:472`; `examples/ai-note/src/server.rs:1346`, `:1632`; `examples/cap/src/bin/cap.rs:278`, `:368`; `examples/cap/src/bin/cap-tui.rs:294`; `examples/investor-bot/src/main.rs:597`, `:736`; `examples/personal-assistant/src/main.rs:887`, `:1001`; `examples/eval-bench/src/main.rs:145`; `examples/eval-bench/src/bench_suite.rs:735`; `examples/crate-keeper/src/main.rs:154`; `examples/deepseek-caps-e2e/src/main.rs:78`. Every one of these is a match that lists `Stuck` and therefore must now list `Cancelled`. If you find a line not in this list, it still gets the same treatment — report it in your summary.
 
 - [ ] **Step 4: `harness-cli` — four sites, each distinguishes outcomes, so each gets its own arm**
@@ -676,7 +676,7 @@ git commit -m "feat: every consumer of Outcome says \"cancelled\" rather than fa
 ### Task 3: A cancel during a tool call does not wait for the tool
 
 **Files:**
-- Modify: `crates/harness-loop/src/lib.rs` — `dispatch_bounded` (~2052), the sequential tool loop (~1620), the prefetch block (~1560-1575)
+- Modify: `crates/harness-loop/src/lib.rs` — `dispatch_bounded` (~2109), the sequential tool loop (~1634-1680), the prefetch block (~1615-1631)
 - Modify: `crates/harness-loop/tests/cancellation.rs`
 
 - [ ] **Step 1: Add a slow tool and two tests**
@@ -865,7 +865,7 @@ Note the deadline arm now returns `Ok(ToolResult { .. })` (wrapped) because it l
 
 - [ ] **Step 4: Exit the iteration once a tool reports the cancel**
 
-Find the sequential tool loop, `for call in &out.tool_calls {`. Inside it (~line 1617-1622) the result is obtained and counted like this:
+Find the sequential tool loop, `for call in &out.tool_calls {`. Inside it (~line 1674-1679) the result is obtained and counted like this:
 
 ```rust
                 let result = if let Some(r) = prefetched.remove(&action.call_id) {
@@ -933,7 +933,7 @@ git commit -m "feat(loop): a cancel drops the in-flight tool instead of awaiting
 ### Task 4: A cancel mid-generation drops the request
 
 **Files:**
-- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1368) and `complete_via_stream` (~1946)
+- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1425) and `complete_via_stream` (~2003)
 - Modify: `crates/harness-loop/tests/cancellation.rs`
 
 - [ ] **Step 1: Add a slow streaming model and the test**
@@ -1035,7 +1035,7 @@ Expected: FAIL — either `saw 50 of 50` (stream drained) or the elapsed asserti
 
 - [ ] **Step 3: Race the model step against the token**
 
-Replace the model call at ~line 1368:
+Replace the model call at ~line 1425:
 
 ```rust
             let out = if self.streaming {
