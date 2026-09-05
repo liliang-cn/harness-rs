@@ -560,9 +560,9 @@ pub enum Outcome {
     /// A tool that was mid-flight when the token fired may still finish its
     /// side effects — a file write on a blocking thread completes, a child
     /// process keeps running unless its runner kills it on drop — but its
-    /// result is discarded before it reaches history, but the dispatch is
-    /// still counted in `tools_called` — the telemetry `run.end` line
-    /// reconciles against that number.
+    /// result is discarded before it reaches history. The dispatch is still
+    /// counted in `tools_called` — the telemetry `run.end` line reconciles
+    /// against that number.
     #[non_exhaustive]
     Cancelled {
         /// Iterations completed before the cancel. `0` means the token was
@@ -2051,7 +2051,7 @@ impl<M: Model> AgentLoop<M> {
             // No learning review either — it is one more model call, and the
             // other cancel exits all skip it.
             Synthesis::Cancelled => {
-                tracing::info!(iters = iters_done, "run cancelled during final synthesis");
+                tracing::info!(iter = iters_done, "run cancelled during final synthesis");
                 self.hooks.fire(&Event::Cancelled, world);
                 self.hooks.fire(&Event::SessionEnd, world);
                 return Ok(Outcome::Cancelled {
@@ -2428,6 +2428,12 @@ impl<M: Model> AgentLoop<M> {
     /// Errors from the model are swallowed — observability is best-effort
     /// here, and a transport blip during synthesis should not turn a
     /// near-complete run into a hard failure.
+    ///
+    /// The call is raced against the run's cancellation token like every
+    /// other model call: a cancel before or during it produces no text,
+    /// leaves the context as it was, and is reported as
+    /// [`Synthesis::Cancelled`] so the caller can return `Outcome::Cancelled`
+    /// instead of pretending the run ended on its own terms.
     ///
     /// `prompt` says *why* the loop stopped granting tool calls. Budget
     /// exhaustion is not the only way a run can end with the model still
