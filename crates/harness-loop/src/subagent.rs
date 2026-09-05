@@ -111,7 +111,14 @@ impl<M: Model> Subagent<M> {
             // finished work as an error message and cancelling everything
             // downstream. Work that exists is reported as work, with the caveat
             // that it was cut short; only an empty hand is `Blocked`.
+            // A cancel is reported like an exhausted budget: the work done so far still counts.
             Outcome::BudgetExhausted {
+                iters,
+                last_text,
+                usage,
+                ..
+            }
+            | Outcome::Cancelled {
                 iters,
                 last_text,
                 usage,
@@ -144,29 +151,6 @@ impl<M: Model> Subagent<M> {
                 iters,
                 usage,
             },
-            // Cancelled is an external stop, not the model looping or running
-            // out of budget — but it carries the same partial-work shape as
-            // `BudgetExhausted`, so it is judged the same way: text on hand
-            // means the work is reported, an empty hand means `Blocked`.
-            Outcome::Cancelled {
-                iters,
-                last_text,
-                usage,
-                ..
-            } => {
-                let empty_handed = last_text.as_deref().map(str::trim).unwrap_or("").is_empty();
-                SubagentReport {
-                    name,
-                    status: if empty_handed {
-                        SubagentStatus::Blocked
-                    } else {
-                        SubagentStatus::DoneWithConcerns
-                    },
-                    text: last_text,
-                    iters,
-                    usage,
-                }
-            }
         };
         tracing::info!(
             subagent = %report.name,
