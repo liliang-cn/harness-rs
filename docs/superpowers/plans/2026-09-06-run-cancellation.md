@@ -27,7 +27,7 @@
   ```
   `last_text: Option<String>`, `tools_called: u32`, `total_usage: harness_core::Usage` are locals of the run body.
 - `Event<'a>` in `crates/harness-core/src/event.rs` is `#[derive(Debug)] #[non_exhaustive]`; every variant has a line in `Event::name()` (~line 205-227). The doc comment on line 7 says "All 29 lifecycle events".
-- `Outcome` is at ~line 488 of lib.rs; variants are `#[non_exhaustive]`.
+- `Outcome` is at ~line 488 of lib.rs. Its **variants** are `#[non_exhaustive]` (so new *fields* don't break `..` destructuring) but the **enum itself is not** — it is `#[derive(Debug, Clone)]` only. So adding the `Cancelled` variant makes every exhaustive `match` on `Outcome` in every *other* crate of the workspace a compile error (`harness-serve`, `harness-cli`, most `examples/*`). This was missed when the plan was written and discovered by Task 2's implementer; Task 2b below is the sweep. Matches inside `harness-loop` itself (`run_typed_with_max_iters`, `Session::turn`, `subagent.rs`, `tests/prefix_cache_live.rs`) were fixed as part of Task 2 because the crate could not compile otherwise.
 - `AgentLoop::new` (~line 641) initialises every field literally, e.g. `streaming: false,`.
 - Builder methods are `pub fn with_x(mut self, …) -> Self` (see `with_streaming` ~line 762).
 - Integration tests live in `crates/harness-loop/tests/*.rs`; `tests/agent_loop.rs` lines 1–58 define the `tmp_workspace()` / `TestDir` / `task()` fixtures. **Copy those fixtures into the new test file** — test files are separate crates and cannot share them.
@@ -338,7 +338,9 @@ In the run body, find the line `for iter in 0..ctx.policy.max_iters {`. Insert a
             }
 ```
 
-`last_text`, `tools_called`, `total_usage` are the run body's existing locals (used the same way by the `Outcome::Stuck` return). If `last_text` is declared *after* this point in the body, move its declaration (`let mut last_text: Option<String> = None;`) above the `for` loop.
+`last_text`, `tools_called`, `total_usage` are the run body's existing locals (used the same way by the `Outcome::Stuck` return); `last_text` is declared at ~line 1252, above the loop.
+
+**Also required for the crate to compile (discovered in execution, commit `4a192fe`):** four exhaustive matches on `Outcome` *inside* `harness-loop` needed a `Cancelled` arm — `run_typed_with_max_iters`'s text extraction and `Session::turn`'s reply (both `lib.rs`, fold into the existing `last_text` arm), `Subagent::run`'s report (`src/subagent.rs`, mirror the `BudgetExhausted` arm: text → `DoneWithConcerns`, none → `Blocked`), and `tests/prefix_cache_live.rs`'s usage closure. These are the minimal folds, not new behaviour.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -355,6 +357,316 @@ Expected: all green, same count as before plus 2.
 ```bash
 git add crates/harness-loop/Cargo.toml crates/harness-loop/src/lib.rs crates/harness-loop/tests/cancellation.rs
 git commit -m "feat(loop): a CancellationToken on AgentLoop, checked per iteration"
+```
+
+---
+
+### Task 2b: Every consumer of `Outcome` learns to say "cancelled"
+
+**Why this task exists.** `Outcome` is not `#[non_exhaustive]` at the enum level (only its variants are), so Task 2's new variant broke every exhaustive `match` on `Outcome` in every other crate of the workspace — 18 sites in 11 files. `cargo build --workspace --all-targets` currently fails with `error[E0004]`. Each site needs a real `Cancelled` arm. **The rule:** where a site already treats `BudgetExhausted` and `Stuck` identically through an or-pattern, fold `Cancelled` in (it binds the same four fields). Where a site distinguishes them — a status string, a label, a message — `Cancelled` gets its own arm with its own honest word. **Never** route a cancel through a wildcard `_ =>`: that hides the next variant too, and a UI that says "stuck" for a run the user stopped is lying.
+
+**Files (all Modify):**
+- `crates/harness-serve/src/service.rs` — `answer_of` (~line 466-474)
+- `crates/harness-cli/src/main.rs` — JSON-mode match (~521-549), human-mode match (~562-585), REPL match (~809-830), replay summary (~1156-1169)
+- `examples/ai-note/src/server.rs` — sync chat match (~1331-1357), SSE chat match (~1593-1658)
+- `examples/cap/src/bin/cap.rs` — one-shot match (~270-287), REPL match (~362-373)
+- `examples/cap/src/bin/cap-tui.rs` — (~288-296)
+- `examples/investor-bot/src/main.rs` — (~580-620), (~719-760)
+- `examples/personal-assistant/src/main.rs` — (~874-899), (~991-1010)
+- `examples/eval-bench/src/main.rs` — (~135-151)
+- `examples/eval-bench/src/bench_suite.rs` — outcome match (~728-743) **and** status match (~754-760)
+- `examples/crate-keeper/src/main.rs` — (~150-158)
+- `examples/deepseek-caps-e2e/src/main.rs` — `outcome_text` (~75-82)
+
+- [ ] **Step 1: Confirm the failing gate**
+
+Run: `cargo build --workspace --all-targets --message-format=short 2>&1 | grep -c E0004`
+Expected: `10` (cargo stops at the first failing crate in each dependency chain, so this undercounts the 18 sites; the grep in Step 3 is the full list).
+
+- [ ] **Step 2: `harness-serve` — the answer helper**
+
+In `crates/harness-serve/src/service.rs`, replace the whole `answer_of` function (its doc comment included) with:
+
+```rust
+/// Best-effort answer text from any terminal [`Outcome`] — a partial answer from
+/// a budget-exhausted, stuck or cancelled run beats an empty reply.
+fn answer_of(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::Done { text, .. } => text.clone().unwrap_or_default(),
+        Outcome::BudgetExhausted { last_text, .. } => last_text.clone().unwrap_or_default(),
+        Outcome::Stuck { last_text, .. } => last_text.clone().unwrap_or_default(),
+        Outcome::Cancelled { last_text, .. } => last_text.clone().unwrap_or_default(),
+    }
+}
+```
+
+- [ ] **Step 3: Get the full site list now that `harness-serve` compiles**
+
+Run: `grep -rn "Outcome::Stuck" crates examples --include='*.rs' | grep -v "crates/harness-loop/"`
+Expected: exactly these 17 lines (line numbers ±2):
+`crates/harness-cli/src/main.rs:535`, `:574`, `:817`, `:1166`; `crates/harness-serve/src/service.rs:472`; `examples/ai-note/src/server.rs:1346`, `:1632`; `examples/cap/src/bin/cap.rs:278`, `:368`; `examples/cap/src/bin/cap-tui.rs:294`; `examples/investor-bot/src/main.rs:597`, `:736`; `examples/personal-assistant/src/main.rs:887`, `:1001`; `examples/eval-bench/src/main.rs:145`; `examples/eval-bench/src/bench_suite.rs:735`; `examples/crate-keeper/src/main.rs:154`; `examples/deepseek-caps-e2e/src/main.rs:78`. Every one of these is a match that lists `Stuck` and therefore must now list `Cancelled`. If you find a line not in this list, it still gets the same treatment — report it in your summary.
+
+- [ ] **Step 4: `harness-cli` — four sites, each distinguishes outcomes, so each gets its own arm**
+
+(a) JSON mode. After the `Outcome::Stuck { … } => ( "stuck", … ),` arm (~line 535-548) add:
+
+```rust
+            Outcome::Cancelled {
+                last_text,
+                iters,
+                tools_called,
+                usage,
+                ..
+            } => (
+                "cancelled",
+                last_text.clone(),
+                *iters,
+                *tools_called,
+                usage.input_tokens,
+                usage.output_tokens,
+            ),
+```
+
+(b) Human mode. After the `Outcome::Stuck { last_text, iters, reason, .. } => { eprintln!("(stuck after {iters} iters: {reason})"); … }` arm (~line 574-584) add:
+
+```rust
+            Outcome::Cancelled {
+                last_text, iters, ..
+            } => {
+                eprintln!("(cancelled after {iters} iters)");
+                if let Some(t) = last_text {
+                    println!("{}", t.trim());
+                }
+            }
+```
+
+(c) `harness code` REPL. After the `Ok(Outcome::Stuck { … }) => { eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m"); last_text.unwrap_or_default() }` arm (~line 817-825) add:
+
+```rust
+            Ok(Outcome::Cancelled {
+                last_text, iters, ..
+            }) => {
+                eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
+                last_text.unwrap_or_default()
+            }
+```
+
+(d) Replay summary. After the `Outcome::Stuck { iters, reason, .. } => { println!("  outcome:       Stuck after {iters} iter(s): {reason}"); }` arm (~line 1166-1168) add:
+
+```rust
+        Outcome::Cancelled { iters, .. } => {
+            println!("  outcome:       Cancelled after {iters} iter(s)");
+        }
+```
+
+- [ ] **Step 5: `ai-note` — two sites, both carry a `warning` string the UI shows, so each gets its own**
+
+(a) Sync chat (~line 1331-1357). After the `Outcome::Stuck { iters, last_text, usage, .. } => ( last_text.unwrap_or_else(|| "(stuck)".into()), iters, false, usage, ),` arm and before the closing `};`, add:
+
+```rust
+        Outcome::Cancelled {
+            iters,
+            last_text,
+            usage,
+            ..
+        } => (
+            last_text.unwrap_or_else(|| "(cancelled)".into()),
+            iters,
+            false,
+            usage,
+        ),
+```
+
+(b) SSE chat (~line 1593-1658). After the `Ok(Outcome::Stuck { … }) => { … "warning":"stuck" … }` arm closes (~line 1653) and before `Err(e) => {`, add — it is the `Stuck` arm with the word changed:
+
+```rust
+            Ok(Outcome::Cancelled {
+                iters,
+                last_text,
+                usage,
+                ..
+            }) => {
+                let reply = last_text.unwrap_or_else(|| "(cancelled)".into());
+                if let Ok(db) = open_db_state(&s) {
+                    let _ = db.append_chat_message(&uid, &sid, "asst", &reply, Some(iters));
+                    let _ = db.insert_audit(
+                        Some(&uid),
+                        "chat_message",
+                        Some(&sid),
+                        Some(&json!({"iters": iters, "warning":"cancelled"}).to_string()),
+                        usage.input_tokens as i64,
+                        usage.output_tokens as i64,
+                    );
+                }
+                let _ = tx_done.send(
+                    json!({"type":"done","ok":false,"iters":iters,"reply":reply,"warning":"cancelled"}),
+                );
+            }
+```
+
+- [ ] **Step 6: `cap` and `cap-tui`**
+
+(a) `cap.rs` one-shot (~line 270-287) distinguishes with a coloured line, so after the `Outcome::Stuck { … } => { eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m"); last_text.clone().unwrap_or_default() }` arm add:
+
+```rust
+            Outcome::Cancelled {
+                last_text, iters, ..
+            } => {
+                eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
+                last_text.clone().unwrap_or_default()
+            }
+```
+
+(b) `cap.rs` REPL (~line 366-368) and (c) `cap-tui.rs` (~line 292-294) both fold `BudgetExhausted` and `Stuck` into one or-pattern. In **each**, replace
+
+```rust
+            Ok(Outcome::BudgetExhausted { last_text, .. })
+            | Ok(Outcome::Stuck { last_text, .. }) => last_text.unwrap_or_default(),
+```
+with
+```rust
+            Ok(Outcome::BudgetExhausted { last_text, .. })
+            | Ok(Outcome::Stuck { last_text, .. })
+            | Ok(Outcome::Cancelled { last_text, .. }) => last_text.unwrap_or_default(),
+```
+
+- [ ] **Step 7: `investor-bot` — two or-patterns that bind all four fields; fold**
+
+(a) ~line 590-603: the head currently reads
+```rust
+        Outcome::BudgetExhausted {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
+        }
+        | Outcome::Stuck {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
+        } => {
+```
+Insert a third alternative so it reads
+```rust
+        Outcome::BudgetExhausted {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
+        }
+        | Outcome::Stuck {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
+        }
+        | Outcome::Cancelled {
+            iters,
+            last_text,
+            tools_called,
+            usage,
+            ..
+        } => {
+```
+The body ("✗ stopped after {iters} iter(s), …") is accurate for a cancel and stays as is.
+
+(b) ~line 729-742: identical shape wrapped in `Ok(…)`. Insert `| Ok(Outcome::Cancelled { iters, last_text, tools_called, usage, .. })` as the third alternative, formatted like its neighbours.
+
+- [ ] **Step 8: `personal-assistant` — two or-patterns; fold**
+
+(a) ~line 884-889: replace
+```rust
+        Outcome::BudgetExhausted {
+            iters, last_text, ..
+        }
+        | Outcome::Stuck {
+            iters, last_text, ..
+        } => {
+```
+with
+```rust
+        Outcome::BudgetExhausted {
+            iters, last_text, ..
+        }
+        | Outcome::Stuck {
+            iters, last_text, ..
+        }
+        | Outcome::Cancelled {
+            iters, last_text, ..
+        } => {
+```
+(b) ~line 998-1003: same, with each alternative wrapped in `Ok(…)`.
+
+- [ ] **Step 9: `eval-bench` — the runner folds; the suite gets its own status**
+
+(a) `main.rs` ~line 139-150: add a third alternative to the or-pattern:
+```rust
+        | Outcome::Cancelled {
+            last_text,
+            iters,
+            usage,
+            ..
+        } => (last_text.clone().unwrap_or_default(), *iters, usage.clone()),
+```
+(i.e. insert `| Outcome::Cancelled { last_text, iters, usage, .. }` between the `Stuck` alternative and the `=>`, formatted like the others).
+
+(b) `bench_suite.rs`: this is a measurement tool, and a cancelled task is not a "wrong" one — the model never got to finish. After the `Ok(Ok(Outcome::Stuck { iters, usage, .. })) => { ("stuck", …) }` arm (~line 735-737) add:
+```rust
+        Ok(Ok(Outcome::Cancelled { iters, usage, .. })) => {
+            ("cancelled", iters, usage.input_tokens, usage.output_tokens)
+        }
+```
+and in the `let status = match (status_run, verified) { … }` block (~line 754-760), add a line **before** the final `(_, false) => "wrong",`:
+```rust
+        ("cancelled", false) => "cancelled",
+```
+
+- [ ] **Step 10: `crate-keeper`**
+
+After the `Outcome::Stuck { iters, reason, .. } => { println!("\n✗ stuck after {iters} iteration(s): {reason}"); std::process::exit(2); }` arm (~line 154-157) add:
+```rust
+        Outcome::Cancelled { iters, .. } => {
+            println!("\n✗ cancelled after {iters} iteration(s)");
+            std::process::exit(2);
+        }
+```
+
+- [ ] **Step 11: `deepseek-caps-e2e`**
+
+In `outcome_text` (~line 75-82), replace
+```rust
+        Outcome::BudgetExhausted { last_text, .. } | Outcome::Stuck { last_text, .. } => {
+            last_text.as_deref()
+        }
+```
+with
+```rust
+        Outcome::BudgetExhausted { last_text, .. }
+        | Outcome::Stuck { last_text, .. }
+        | Outcome::Cancelled { last_text, .. } => last_text.as_deref(),
+```
+
+- [ ] **Step 12: Verify the gate passes and nothing regressed**
+
+Run, in order:
+```bash
+cargo build --workspace --all-targets            # expected: clean, zero E0004
+cargo clippy --workspace --all-targets -- -D warnings   # expected: clean
+cargo fmt --all -- --check                       # expected: clean (run `cargo fmt --all` first if it reports your new arms)
+cargo test -p harness-rs-loop 2>&1 | grep -E "^test result|FAILED"   # expected: all ok, unchanged counts
+```
+Then `cargo test --workspace 2>&1 | grep -E "FAILED|^test result: FAILED"`. Expected: **only** the three pre-existing doctest failures in `harness-core/src/redact/mod.rs`, `harness-tools/src/datetime/mod.rs`, `harness-tools/src/browser/policy.rs` (they fail on `main` too and are being fixed separately). Anything else failing is yours.
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add crates/harness-serve/src/service.rs crates/harness-cli/src/main.rs examples/ai-note/src/server.rs examples/cap/src/bin/cap.rs examples/cap/src/bin/cap-tui.rs examples/investor-bot/src/main.rs examples/personal-assistant/src/main.rs examples/eval-bench/src/main.rs examples/eval-bench/src/bench_suite.rs examples/crate-keeper/src/main.rs examples/deepseek-caps-e2e/src/main.rs
+git commit -m "feat: every consumer of Outcome says \"cancelled\" rather than failing to build"
 ```
 
 ---
