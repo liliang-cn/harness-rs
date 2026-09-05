@@ -1327,8 +1327,14 @@ cargo test -p harness-rs-loop 2>&1 | grep -E "^test result|FAILED"    # untouche
 - [ ] **Step 12: Commit**
 
 ```bash
-git add crates/harness-context/Cargo.toml crates/harness-context/src/runtime.rs crates/harness-tools/src/agents.rs crates/harness-tools/src/shell/background.rs
+git add Cargo.lock crates/harness-context/Cargo.toml crates/harness-context/src/runtime.rs crates/harness-tools/src/agents.rs crates/harness-tools/src/shell/background.rs
 git commit -m "fix(context,tools): a dropped child process dies with its process group"
+```
+
+(`Cargo.lock` gains one edge — `libc` under `harness-rs-context` — and has to travel with the manifest change or a `--locked` build breaks. The first execution omitted it and it was folded in by amend before review.)
+
+```bash
+# (end of Step 12)
 ```
 
 ---
