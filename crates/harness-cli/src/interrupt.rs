@@ -3,10 +3,11 @@
 //! A shell tool's child runs in its own process group so a cancelled run can
 //! kill everything it started — which also means a terminal Ctrl-C no longer
 //! reaches that child by group propagation. If the harness simply died on
-//! SIGINT, the child would be orphaned: the failure cancellation exists to
-//! prevent, moved from Esc to Ctrl-C. So the CLI takes SIGINT itself and turns
-//! it into a cancel of whatever run is in flight; the loop unwinds, drops the
-//! tool, and the group dies with it.
+//! SIGINT, the child would be orphaned — exactly the failure that run
+//! cancellation exists to prevent, only now triggered by Ctrl-C instead of by
+//! dropping the run. So the CLI takes SIGINT itself and turns it into a cancel
+//! of whatever run is in flight; the loop unwinds, drops the tool, and the
+//! group dies with it.
 
 use harness_loop::CancellationToken;
 use std::sync::{Arc, Mutex};
@@ -40,7 +41,8 @@ impl Current {
     /// One Ctrl-C. Cancels the armed run if there is one and says whether
     /// there was; the caller decides what an idle Ctrl-C means.
     pub fn interrupt(&self) -> bool {
-        match self.0.lock().unwrap().take() {
+        let taken = self.0.lock().unwrap().take();
+        match taken {
             Some(token) => {
                 token.cancel();
                 true
@@ -51,23 +53,39 @@ impl Current {
 }
 
 /// Watch for Ctrl-C for the life of the process. Each one cancels the armed
-/// run; one that finds nothing armed calls `on_idle`. The CLI passes an exit
-/// with status 130 — the shell's own code for "interrupted" — so a Ctrl-C at
-/// an idle prompt still quits, and a second Ctrl-C during a cancel that is
-/// slow to unwind still ends the process.
+/// run and calls `on_cancel`; one that finds nothing armed calls `on_idle`.
+/// The CLI passes an exit with status 130 — 128 + SIGINT, the shell's own code
+/// for "interrupted" — so a Ctrl-C at an idle prompt quits, and a second
+/// Ctrl-C during a cancel that is slow to unwind forces the process down.
+///
+/// That forced exit skips destructors, so a child process still unwinding at
+/// that moment is orphaned in its own group — the deliberate price of an
+/// escape hatch, which is why `on_cancel` tells the user the first press was
+/// heard.
 ///
 /// Installing the handler replaces SIGINT's default disposition for the whole
 /// process, which is why `on_idle` has to exist: without it, an idle Ctrl-C
 /// would be swallowed.
-pub fn watch(current: Current, on_idle: impl Fn() + Send + 'static) -> tokio::task::JoinHandle<()> {
+///
+/// The watcher only makes progress because the runtime is multi-threaded: the
+/// REPL prompt blocks a worker in `read_line`, so on a `current_thread`
+/// runtime a Ctrl-C at the prompt would be dead.
+pub fn watch(
+    current: Current,
+    on_cancel: impl Fn() + Send + 'static,
+    on_idle: impl Fn() + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            if tokio::signal::ctrl_c().await.is_err() {
+            if let Err(e) = tokio::signal::ctrl_c().await {
                 // No signal support on this platform/terminal: leave the
                 // default disposition in place rather than pretend.
+                tracing::warn!(error = %e, "ctrl-c handler unavailable; SIGINT keeps its default disposition");
                 return;
             }
-            if !current.interrupt() {
+            if current.interrupt() {
+                on_cancel();
+            } else {
                 on_idle();
             }
         }
@@ -108,5 +126,18 @@ mod tests {
             !token.is_cancelled(),
             "the finished turn's token is untouched"
         );
+    }
+
+    // The watcher holds a clone; the run holds the original. They must see
+    // the same slot or Ctrl-C cancels nothing.
+    #[test]
+    fn a_clone_shares_the_slot() {
+        let current = Current::new();
+        let watcher = current.clone();
+        let token = current.arm();
+
+        assert!(watcher.interrupt(), "the clone sees the armed run");
+        assert!(token.is_cancelled());
+        assert!(!current.interrupt(), "and the original sees it was taken");
     }
 }

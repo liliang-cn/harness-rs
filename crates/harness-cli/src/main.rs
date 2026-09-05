@@ -457,7 +457,11 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     // tool is dropped and the child processes it started die with their
     // group. A second Ctrl-C, or one after the run has ended, exits.
     let current = interrupt::Current::new();
-    let _watcher = interrupt::watch(current.clone(), || std::process::exit(130));
+    let _watcher = interrupt::watch(
+        current.clone(),
+        || eprintln!("\n^C — cancelling; Ctrl-C again to force quit"),
+        || std::process::exit(130),
+    );
 
     let mut model = OpenAiCompat::with_key(base_url, model_id, key);
     if let Some(w) = opts.context_window {
@@ -509,6 +513,11 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         .run_with_max_iters(task, &mut world, opts.max_iters)
         .await
         .map_err(|e| anyhow::anyhow!("agent run failed: {e}"))?;
+    current.disarm();
+
+    // A Ctrl-C from here on means "quit", not "cancel"; the exit code below
+    // reports that the run the user interrupted did not succeed.
+    let cancelled = matches!(outcome, Outcome::Cancelled { .. });
 
     if opts.json {
         // Best-effort structured dump of the outcome.
@@ -614,6 +623,12 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
                 }
             }
         }
+    }
+
+    if cancelled {
+        // A run the user interrupted did not succeed; say so the way the
+        // shell would have had we let SIGINT kill us: 128 + SIGINT.
+        std::process::exit(130);
     }
     Ok(())
 }
@@ -809,10 +824,14 @@ async fn run_code(
     // a cancelled token stays cancelled and would poison every later turn.
     // Ctrl-C at the prompt, with nothing armed, quits like any other REPL.
     let current = interrupt::Current::new();
-    let _watcher = interrupt::watch(current.clone(), || {
-        println!();
-        std::process::exit(130)
-    });
+    let _watcher = interrupt::watch(
+        current.clone(),
+        || eprintln!("\n\x1b[33m^C — cancelling; Ctrl-C again to force quit\x1b[0m"),
+        || {
+            println!();
+            std::process::exit(130)
+        },
+    );
 
     let mut seed: Vec<Turn> = Vec::new();
     let stdin = std::io::stdin();
