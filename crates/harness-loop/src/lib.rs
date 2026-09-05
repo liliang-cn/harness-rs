@@ -1635,7 +1635,12 @@ impl<M: Model> AgentLoop<M> {
                             (action.call_id, r)
                         }
                     });
-                    for (id, r) in futures::future::join_all(futs).await {
+                    let results = tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => Vec::new(),
+                        rs = futures::future::join_all(futs) => rs,
+                    };
+                    for (id, r) in results {
                         prefetched.insert(id, r);
                     }
                 }
@@ -1687,6 +1692,18 @@ impl<M: Model> AgentLoop<M> {
                     self.dispatch_bounded(&action, world).await
                 };
                 tools_called += 1;
+
+                if self.cancel.is_cancelled() {
+                    tracing::info!(iter, "run cancelled during tool dispatch");
+                    self.hooks.fire(&Event::Cancelled, world);
+                    self.hooks.fire(&Event::SessionEnd, world);
+                    return Ok(Outcome::Cancelled {
+                        iters: iter + 1,
+                        last_text,
+                        tools_called,
+                        usage: total_usage,
+                    });
+                }
 
                 // Decide the final payload *before* announcing the result, so
                 // hooks, telemetry and the context all describe the same thing:
@@ -2118,32 +2135,49 @@ impl<M: Model> AgentLoop<M> {
     /// always produces a result turn.
     async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult {
         let fut = self.tools.dispatch(action, world);
-        let dispatched = match self.tool_timeout {
-            Some(deadline) => match tokio::time::timeout(deadline, fut).await {
-                Ok(r) => r,
-                Err(_) => {
-                    tracing::warn!(
-                        target: "harness.telemetry",
-                        event = "tool.deadline",
-                        "gen_ai.tool.name" = %action.tool,
-                        seconds = deadline.as_secs(),
-                    );
-                    return ToolResult {
-                        ok: false,
-                        content: serde_json::json!({
-                            "error": format!(
-                                "tool call exceeded its {}s deadline and was cancelled; \
-                                 the operation may be too broad — narrow it or try a \
-                                 different approach",
-                                deadline.as_secs()
-                            ),
-                            "timeout": true,
-                        }),
-                        trace: None,
-                    };
-                }
-            },
-            None => fut.await,
+        let bounded = async {
+            match self.tool_timeout {
+                Some(deadline) => match tokio::time::timeout(deadline, fut).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        tracing::warn!(
+                            target: "harness.telemetry",
+                            event = "tool.deadline",
+                            "gen_ai.tool.name" = %action.tool,
+                            seconds = deadline.as_secs(),
+                        );
+                        return Ok(ToolResult {
+                            ok: false,
+                            content: serde_json::json!({
+                                "error": format!(
+                                    "tool call exceeded its {}s deadline and was cancelled; \
+                                     the operation may be too broad — narrow it or try a \
+                                     different approach",
+                                    deadline.as_secs()
+                                ),
+                                "timeout": true,
+                            }),
+                            trace: None,
+                        });
+                    }
+                },
+                None => fut.await,
+            }
+        };
+        // `biased` so that a token already cancelled wins even when the tool
+        // future is also ready — the caller said stop, and a result produced
+        // after that would be work the run is about to throw away anyway.
+        let dispatched = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => {
+                tracing::info!("gen_ai.tool.name" = %action.tool, "tool call dropped: run cancelled");
+                return ToolResult {
+                    ok: false,
+                    content: serde_json::json!({"error": "run cancelled", "cancelled": true}),
+                    trace: None,
+                };
+            }
+            r = bounded => r,
         };
         dispatched.unwrap_or_else(|e| ToolResult {
             ok: false,
