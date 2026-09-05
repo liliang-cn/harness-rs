@@ -549,3 +549,53 @@ async fn streamed_partial_text_survives_a_cancel() {
         other => panic!("expected Cancelled, got {other:?}"),
     }
 }
+
+// ------------------------------------------------------------------
+// 6. Cancelled fires once, and SessionEnd follows it
+// ------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+struct EventLog(Arc<Mutex<Vec<&'static str>>>);
+impl Hook for EventLog {
+    fn name(&self) -> &str {
+        "event-log"
+    }
+    fn matches(&self, ev: &Event<'_>) -> bool {
+        matches!(
+            ev,
+            Event::Cancelled | Event::SessionEnd | Event::Stop | Event::Error { .. }
+        )
+    }
+    fn fire(&self, ev: &Event<'_>, _w: &mut World) -> HookOutcome {
+        self.0.lock().unwrap().push(ev.name());
+        HookOutcome::Allow
+    }
+}
+
+#[tokio::test]
+async fn cancelled_fires_once_then_session_end() {
+    let (_td, mut world) = tmp_workspace();
+    let model = MockModel::new()
+        .script(MockResponse::tool_call("slow", json!({})))
+        .script(MockResponse::text("unreachable"));
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let entered = Arc::new(Notify::new());
+    let token = CancellationToken::new();
+    cancel_on_entry(entered.clone(), token.clone());
+
+    let _ = AgentLoop::new(model)
+        .with_tool(Arc::new(SlowTool::new(
+            "slow",
+            ToolRisk::Idempotent,
+            entered,
+        )))
+        .with_hook(Arc::new(EventLog(log.clone())))
+        .with_cancellation(token)
+        .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+        .await
+        .unwrap();
+
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen, vec!["Cancelled", "SessionEnd"], "got {seen:?}");
+}
