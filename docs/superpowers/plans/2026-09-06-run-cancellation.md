@@ -408,6 +408,14 @@ Run: `grep -rn "Outcome::Stuck" crates examples --include='*.rs' | grep -v "crat
 Expected: exactly these 18 lines (line numbers ±2):
 `crates/harness-cli/src/main.rs:535`, `:574`, `:817`, `:1166`; `crates/harness-serve/src/service.rs:472`; `examples/ai-note/src/server.rs:1346`, `:1632`; `examples/cap/src/bin/cap.rs:278`, `:368`; `examples/cap/src/bin/cap-tui.rs:294`; `examples/investor-bot/src/main.rs:597`, `:736`; `examples/personal-assistant/src/main.rs:887`, `:1001`; `examples/eval-bench/src/main.rs:145`; `examples/eval-bench/src/bench_suite.rs:735`; `examples/crate-keeper/src/main.rs:154`; `examples/deepseek-caps-e2e/src/main.rs:78`. Every one of these is a match that lists `Stuck` and therefore must now list `Cancelled`. If you find a line not in this list, it still gets the same treatment — report it in your summary.
 
+**This grep is blind to wildcard matches.** A `match outcome { Done {..} => …, BudgetExhausted {..} => …, _ => … }` compiles fine with the new variant and silently routes a cancel through `_`. Code review of Task 2 found exactly one such site in the workspace, `crates/harness-loop/src/receipt.rs`, where the wildcard zeroed a cancelled run's *signed* accounting; it is fixed in Task 2's fix commit. To confirm there are no others, also run:
+
+```bash
+grep -rln "Outcome::" crates examples --include='*.rs' | xargs grep -ln "_ =>" | xargs grep -n "match .*outcome\|match outcome\|match &outcome\|match result"
+```
+
+and inspect each hit: any `match` whose scrutinee is an `Outcome` (or `Result<Outcome, _>`) and whose arms include `_ =>` gets an explicit `Cancelled` arm (and `Stuck`, if that is also falling through). The known non-hits, so you don't re-investigate them: `crates/harness-loop/src/loop_engine/engine.rs` (a `RoundOutcome`, different type), `crates/harness-models/src/openai_compat.rs` (doc comment), `crates/harness-mcp-client/tests/in_loop.rs` (`matches!`).
+
 - [ ] **Step 4: `harness-cli` — four sites, each distinguishes outcomes, so each gets its own arm**
 
 (a) JSON mode. After the `Outcome::Stuck { … } => ( "stuck", … ),` arm (~line 535-548) add:
@@ -793,9 +801,46 @@ async fn cancellation_does_not_force_a_final_synthesis() {
     // answer; a cancel is the user saying stop, and stop means stop.
     assert_eq!(agent.model.call_count(), 1);
 }
+
+// ------------------------------------------------------------------
+// 5. The partial text survives a cancel
+// ------------------------------------------------------------------
+
+/// `Cancelled` carries `last_text` because the user who pressed Esc still
+/// wants what was done. No other test destructures it — they all write
+/// `..` — so nothing else would notice if the field were always `None`.
+#[tokio::test]
+async fn partial_text_survives_a_cancel() {
+    let (_td, mut world) = tmp_workspace();
+    // Text and a tool call in the same turn: the loop records the text,
+    // then dispatches the (slow) tool, during which the cancel lands.
+    let model = MockModel::new()
+        .script(MockResponse::tool_call("slow", json!({})).with_text("so far so good"))
+        .script(MockResponse::text("unreachable"));
+    let token = CancellationToken::new();
+    let fire = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        fire.cancel();
+    });
+
+    let outcome = AgentLoop::new(model)
+        .with_tool(Arc::new(SlowTool::new()))
+        .with_cancellation(token)
+        .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+        .await
+        .unwrap();
+
+    match outcome {
+        Outcome::Cancelled { last_text, .. } => {
+            assert_eq!(last_text.as_deref(), Some("so far so good"));
+        }
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+}
 ```
 
-`async-trait` is already in `[dev-dependencies]` of `crates/harness-loop/Cargo.toml` (line 73); nothing to add.
+`async-trait` is already in `[dev-dependencies]` of `crates/harness-loop/Cargo.toml` (line 73); nothing to add. `MockResponse::with_text` exists (`crates/harness-models/src/mock.rs:81`).
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -914,7 +959,7 @@ An empty `prefetched` on cancel is safe: the sequential loop that follows re-dis
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 4 passed`, and the slow-tool test finishes in well under a second.
+Expected: `test result: ok. 5 passed`, and the slow-tool tests finish in well under a second.
 
 - [ ] **Step 7: Run the whole loop crate**
 
@@ -1098,7 +1143,7 @@ If `HarnessError::Model` is not the variant the existing `?` on `self.model.comp
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 5 passed`, the mid-stream test finishing in well under a second.
+Expected: `test result: ok. 6 passed`, the mid-stream test finishing in well under a second.
 
 - [ ] **Step 5: Run the whole loop crate**
 
@@ -1366,7 +1411,7 @@ In `crates/harness-loop/src/telemetry.rs`, inside `fn fire`'s `match ev`, immedi
 - [ ] **Step 11: Run the tests to verify they pass**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 8 passed`.
+Expected: `test result: ok. 9 passed`.
 
 - [ ] **Step 12: Run the whole loop crate**
 
@@ -1392,6 +1437,15 @@ git commit -m "feat(loop): a cancel reaches the broadcast feed and the run trace
 Open `CHANGELOG.md`. There is **no** `## Unreleased` section yet — the file goes straight from its intro paragraph to `## 0.0.62` (line 6). Insert the following directly above the `## 0.0.62` line, leaving one blank line after the intro paragraph and one before `## 0.0.62`:
 
 ```markdown
+### Breaking
+
+- **`Outcome` gained a `Cancelled` variant.** `Outcome` is not `#[non_exhaustive]`
+  at the enum level (only its variants are), so every exhaustive `match` on it
+  needs a new arm. Give a cancel its own arm rather than a wildcard — a UI that
+  says "stuck" for a run the user stopped is lying, and a `_ =>` will swallow
+  the *next* variant too. Under Cargo's `0.0.x` rules every release is already
+  incompatible, so pinned consumers are unaffected until they bump.
+
 ### Added
 
 - **Run-level cancellation.** `AgentLoop::with_cancellation(CancellationToken)`
@@ -1424,6 +1478,8 @@ cargo test --workspace
 ```
 
 All three must be clean before `superpowers:finishing-a-development-branch`.
+
+**Do not merge this branch with Tasks 3 or 4 unlanded.** The rustdoc on `AgentLoop::cancel` (written in Task 2) states the token is "raced against the model step and every tool dispatch" — that is true only once Tasks 3 and 4 exist. Landing Task 2 alone would ship documentation promising mid-tool cancellation the code does not deliver.
 
 ---
 
