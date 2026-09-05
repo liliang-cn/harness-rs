@@ -3,6 +3,60 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Breaking
+
+- **`Outcome` gained a `Cancelled` variant.** `Outcome` is not `#[non_exhaustive]`
+  at the enum level (only its variants are), so every exhaustive `match` on it
+  needs a new arm. Give a cancel its own arm rather than a wildcard — a UI that
+  says "stuck" for a run the user stopped is lying, and a `_ =>` will swallow
+  the *next* variant too. Under Cargo's `0.0.x` rules every release is already
+  incompatible, so pinned consumers are unaffected until they bump.
+
+### Changed
+
+- **A shell tool's child no longer inherits the harness's stdin.** `TokioRunner::exec`
+  now spawns with `stdin(null)`. tokio's `Command::output` — unlike std's —
+  leaves stdin inheriting the parent's, so a tool's child could read the
+  user's keystrokes out from under the `harness code` REPL, or hang on
+  `git commit` waiting for an editor. Nothing a tool runs should read a
+  terminal; `run_agent` had already closed stdin for the same reason.
+- **A shell tool's child runs in its own process group and dies with it.**
+  `TokioRunner::exec` spawns through `GroupKill::spawn`, which sets
+  `process_group(0)` and `kill_on_drop`, and arms a guard that `SIGKILL`s the
+  group when the exec future is dropped — a cancelled run, a tool deadline.
+  Before, dropping the future orphaned the child: Esc during `cargo test`
+  reported `Cancelled` while the toolchain kept running. The guard is
+  disarmed when the child exits on its own, so a deliberately detached
+  grandchild (`nohup server &`) still survives. Consequence: a terminal
+  Ctrl-C no longer reaches the child by group propagation — the CLI now
+  handles Ctrl-C itself by cancelling the run (see below).
+
+### Added
+
+- **Ctrl-C cancels the run in `harness-cli`.** `harness run` and the
+  `harness code` REPL install a `tokio::signal::ctrl_c` handler that cancels
+  the loop's token instead of letting the process die. The run returns
+  `Outcome::Cancelled` with its partial work, in-flight tools and model calls
+  are dropped, and child processes die with their group. The first press
+  prints `^C — cancelling`; a second press, or one at an idle prompt, exits
+  130 — that forced exit skips destructors, so a child still unwinding at
+  that instant is orphaned, the deliberate price of an escape hatch. An
+  interrupted `harness run` exits 130 rather than 0, so `harness run … &&
+  next` does not proceed. The REPL arms a fresh token per turn, because a
+  cancelled token stays cancelled.
+- **Run-level cancellation.** `AgentLoop::with_cancellation(CancellationToken)`
+  stops a run from outside. The token is checked every iteration and raced
+  against the model step and every tool dispatch, so a cancel drops the
+  in-flight HTTP request, SSE stream or tool future instead of awaiting it.
+  The run returns `Outcome::Cancelled { iters, last_text, tools_called, usage }`
+  — an outcome, not an error, because the partial work is still the caller's —
+  and makes no further model call, not even the forced final synthesis the
+  other early exits perform. Fires the new `Event::Cancelled` (the 30th
+  lifecycle event) followed by `SessionEnd`. A `Session` inherits its loop's
+  token. Default is a token nobody holds, so existing callers are unchanged.
+
 ## 0.0.62
 
 ### Changed
