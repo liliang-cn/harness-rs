@@ -811,6 +811,10 @@ impl<M: Model> AgentLoop<M> {
     /// token.cancel();
     /// ```
     ///
+    /// The field is public, so the simplest per-turn form is to assign
+    /// `loop_.cancel = fresh_token` before each run, which is what
+    /// `harness code` does.
+    ///
     /// Cloning a `CancellationToken` shares it, so keep one and pass a clone.
     pub fn with_cancellation(mut self, token: CancellationToken) -> Self {
         self.cancel = token;
