@@ -258,7 +258,7 @@ async fn cancellation_does_not_force_a_final_synthesis() {
 // 5. The partial text survives a cancel
 // ------------------------------------------------------------------
 
-/// `Cancelled` carries `last_text` because the user who pressed Esc still
+/// `Cancelled` carries `last_text` because the user who pressed Ctrl-C still
 /// wants what was done. No other test destructures it — they all write
 /// `..` — so nothing else would notice if the field were always `None`.
 #[tokio::test]
@@ -851,4 +851,133 @@ async fn a_denied_call_from_an_earlier_run_is_not_billed_to_a_cancel() {
         "the cancel counts its own dispatch and nothing leaked from run 1:\n{}",
         ends[1]
     );
+}
+
+// ------------------------------------------------------------------
+// 10. A cancel during the forced final synthesis
+// ------------------------------------------------------------------
+
+/// A minimal tool that returns at once. The budget-exhaustion path needs a
+/// tool the model can keep reaching for without the run taking ten seconds
+/// per iteration, which is the one thing `SlowTool` cannot do.
+struct FastTool(ToolSchema);
+impl FastTool {
+    fn new(name: &str) -> Self {
+        Self(ToolSchema {
+            name: name.into(),
+            description: "returns immediately".into(),
+            input: json!({"type": "object", "properties": {}}),
+        })
+    }
+}
+#[async_trait]
+impl harness_core::Tool for FastTool {
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+    fn schema(&self) -> &ToolSchema {
+        &self.0
+    }
+    fn risk(&self) -> ToolRisk {
+        ToolRisk::Idempotent
+    }
+    async fn invoke(
+        &self,
+        _args: serde_json::Value,
+        _world: &mut World,
+    ) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult {
+            ok: true,
+            content: json!("done"),
+            trace: None,
+        })
+    }
+}
+
+/// Answers `budget` times with a tool call, then — on the call that *is* the
+/// forced final synthesis — announces its entry and takes ten seconds before
+/// producing the sentinel text. Mirrors `SlowCompleteModel`, but only the
+/// synthesis call is slow: the iterations before it have to run at full speed
+/// or the budget is never reached.
+struct SlowSynthesisModel {
+    inner: MockModel,
+    budget: u32,
+    calls: AtomicU32,
+    entered: Arc<Notify>,
+}
+#[async_trait]
+impl Model for SlowSynthesisModel {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= self.budget {
+            self.entered.notify_one();
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+        self.inner.complete(ctx).await
+    }
+    fn info(&self) -> ModelInfo {
+        self.inner.info()
+    }
+}
+
+/// The budget-exhausted exit calls the model one more time with the tools
+/// stripped, and that call is made *after* the loop's last cancel check. Left
+/// unraced it is a full model call the person who pressed Ctrl-C already paid
+/// to stop — and the run then reports `BudgetExhausted`, carrying synthesis
+/// text, contradicting every promise `Outcome::Cancelled` makes.
+#[tokio::test]
+async fn a_cancel_during_the_forced_synthesis_returns_cancelled() {
+    let (_td, mut world) = tmp_workspace();
+    const BUDGET: u32 = 3;
+    // Distinct args per round so the stuck detector (byte-identical
+    // consecutive rounds) has nothing to fire on; the run must end on the
+    // budget, not on `Stuck`.
+    let mut inner = MockModel::new();
+    for n in 0..BUDGET {
+        inner =
+            inner.script(MockResponse::tool_call("fast", json!({ "n": n })).with_text("partial"));
+    }
+    // What the synthesis would say if the cancel did not stop it.
+    let inner = inner.script(MockResponse::text("SYNTHESISED"));
+
+    let entered = Arc::new(Notify::new());
+    let token = CancellationToken::new();
+    cancel_on_entry(entered.clone(), token.clone());
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let agent = AgentLoop::new(SlowSynthesisModel {
+        inner,
+        budget: BUDGET,
+        calls: AtomicU32::new(0),
+        entered,
+    })
+    .with_tool(Arc::new(FastTool::new("fast")))
+    .with_hook(Arc::new(EventLog(log.clone())))
+    .with_cancellation(token);
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(30),
+        agent.run_with_max_iters(task("burn the budget"), &mut world, BUDGET),
+    )
+    .await
+    .expect("the run must not hang")
+    .unwrap();
+
+    match outcome {
+        Outcome::Cancelled {
+            last_text,
+            tools_called,
+            ..
+        } => {
+            assert_eq!(tools_called, BUDGET, "one dispatch per iteration");
+            let text = last_text.unwrap_or_default();
+            assert!(
+                !text.contains("SYNTHESISED"),
+                "the synthesis must not have been allowed to land: {text:?}"
+            );
+        }
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen, vec!["Cancelled", "SessionEnd"], "got {seen:?}");
 }
