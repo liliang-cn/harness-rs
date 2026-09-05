@@ -1970,8 +1970,8 @@ mod interrupt;
 
 - [ ] **Step 4: Run to verify they fail**
 
-Run: `cargo test -p harness-rs-cli --lib interrupt::`
-Expected: compile error — `cannot find type `Current` in module `super``. (If the CLI has no `[lib]` and `--lib` is rejected, use `cargo test -p harness-rs-cli --bin harness interrupt::`.)
+Run: `cargo test -p harness-rs-cli --bin harness interrupt::`
+Expected: compile error — `cannot find type `Current` in module `super``. (The crate has no `[lib]` — its `Cargo.toml` declares only the `harness` binary — so `--bin harness` is the target; `--lib` would be rejected.)
 
 - [ ] **Step 5: Implement the policy**
 
