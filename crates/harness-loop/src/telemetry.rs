@@ -309,6 +309,45 @@ impl Hook for TelemetryHook {
                     ratio = *ratio,
                 );
             }),
+            Event::Cancelled => {
+                // A cancelled dispatch fired PreToolUse but will never fire
+                // PostToolUse: the loop returns before it. Settle its entry
+                // here, for two reasons. `run.end` must agree with
+                // `Outcome::Cancelled.tools_called`, which counts that dispatch;
+                // and `tool_starts` must not grow by one per cancel across a
+                // long `Session` that reuses this hook.
+                let dangling: Vec<Instant> = self
+                    .tool_starts
+                    .lock()
+                    .unwrap()
+                    .drain()
+                    .map(|(_, started)| started)
+                    .collect();
+                // The same for a model call cut off between PreModel and
+                // PostModel: the wait was real and belongs in `model_ms`, so
+                // `duration_ms` does not exceed `model_ms + tool_ms` by an
+                // unexplained gap; the call itself never completed, so
+                // `model_calls` is left alone. Clearing the two fields is
+                // hygiene — the next PreModel would overwrite them anyway.
+                let cut_off_model = self.model_start.lock().unwrap().take();
+                *self.awaiting_first_token.lock().unwrap() = false;
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    for started in dangling {
+                        t.tool_calls += 1;
+                        t.tool_ms += started.elapsed().as_millis() as u64;
+                    }
+                    if let Some(started) = cut_off_model {
+                        t.model_ms += started.elapsed().as_millis() as u64;
+                    }
+                }
+                self.in_run(|| {
+                    // Warn, not info: a cancel is the person deciding the run was
+                    // not worth finishing, which is worth seeing in a trace that
+                    // would otherwise look like any other run.end.
+                    tracing::warn!(target: "harness.telemetry", event = "run.cancelled");
+                });
+            }
             Event::SessionEnd => {
                 let t = std::mem::take(&mut *self.totals.lock().unwrap());
                 self.in_run(|| {
