@@ -554,6 +554,12 @@ pub enum Outcome {
     /// `Stuck` does, because the user who pressed Esc still wants what was
     /// done. The loop makes **no** further model call after this — not even
     /// the forced final synthesis the other early exits perform.
+    ///
+    /// A tool that was mid-flight when the token fired may still finish its
+    /// side effects — a file write on a blocking thread completes, a child
+    /// process keeps running unless its runner kills it on drop — but its
+    /// result is discarded before it reaches history, so nothing here records
+    /// that it happened.
     #[non_exhaustive]
     Cancelled {
         /// Iterations completed before the cancel. `0` means the token was
@@ -2128,11 +2134,17 @@ impl<M: Model> AgentLoop<M> {
         })
     }
 
-    /// Best-effort append to the recall store. Never fails the turn.
-    /// One tool call, under the per-call deadline. A timeout becomes an error
-    /// *result* — the model sees it and routes around it — never a hung run.
-    /// Errors are folded the same way: the loop's contract is that a tool call
-    /// always produces a result turn.
+    /// One tool call, under the per-call deadline and the run's cancellation
+    /// token. A timeout becomes an error *result* — the model sees it and routes
+    /// around it — never a hung run. A cancel drops the tool's future unpolled
+    /// and returns a result the loop discards before it reaches history, so the
+    /// model never sees that one at all. Errors are folded the same way: the
+    /// loop's contract is that a tool call always produces a result turn.
+    ///
+    /// Dropping the future stops *this* side of the work. What it stops on the
+    /// other side depends on the tool: an HTTP request aborts, a `spawn_blocking`
+    /// file write runs to completion, and a child process is only killed if its
+    /// runner asked for `kill_on_drop`.
     async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult {
         let fut = self.tools.dispatch(action, world);
         let bounded = async {
@@ -2146,7 +2158,7 @@ impl<M: Model> AgentLoop<M> {
                             "gen_ai.tool.name" = %action.tool,
                             seconds = deadline.as_secs(),
                         );
-                        return Ok(ToolResult {
+                        Ok(ToolResult {
                             ok: false,
                             content: serde_json::json!({
                                 "error": format!(
@@ -2158,7 +2170,7 @@ impl<M: Model> AgentLoop<M> {
                                 "timeout": true,
                             }),
                             trace: None,
-                        });
+                        })
                     }
                 },
                 None => fut.await,
