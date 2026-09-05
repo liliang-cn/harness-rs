@@ -21,7 +21,7 @@
 //! Every job has a scope, chosen at spawn:
 //!
 //! - **`run`** (default): dies when this agent run ends. [`JobReaperHook`]
-//!   listens for `SessionEnd` (fired on Done / Stuck / BudgetExhausted alike)
+//!   listens for `SessionEnd` (fired on Done / Stuck / BudgetExhausted / Cancelled alike)
 //!   and reaps; `kill_on_drop` backstops hard-error paths. "Start server →
 //!   curl it → forget to kill" leaks nothing.
 //! - **`session`**: survives across turns of the same conversation, so the
@@ -751,7 +751,8 @@ impl Tool for ShellJobKill {
 }
 
 /// Hook: when the run ends (any normal outcome — `SessionEnd` fires on Done,
-/// Stuck and BudgetExhausted), reap this run's `run`-scoped jobs.
+/// Stuck, BudgetExhausted and Cancelled alike), reap this run's `run`-scoped
+/// jobs.
 pub struct JobReaperHook {
     table: Arc<JobTable>,
 }
