@@ -142,6 +142,9 @@ fn project(ev: &Event<'_>) -> Option<Value> {
         }),
         Event::SessionStart { source } => json!({ "source": source }),
         Event::SessionEnd => json!({}),
+        // No fields: the outcome carries the partial work, the feed only
+        // needs to know the run was ended from outside rather than finished.
+        Event::Cancelled => json!({}),
         Event::TaskCompleted => json!({}),
         Event::SubagentStart { name } => json!({ "name": name }),
         Event::SubagentReport { status } => json!({ "status": status }),

@@ -599,3 +599,144 @@ async fn cancelled_fires_once_then_session_end() {
     let seen = log.lock().unwrap().clone();
     assert_eq!(seen, vec!["Cancelled", "SessionEnd"], "got {seen:?}");
 }
+
+// ------------------------------------------------------------------
+// 7. A cancel reaches the broadcast feed
+// ------------------------------------------------------------------
+
+use harness_loop::hooks::broadcast::BroadcastHook;
+
+/// The SSE feed is how a UI watches a run. Before this, `project()` had no
+/// arm for `Cancelled`, so a client saw the stream stop with no reason —
+/// the exact failure the event's own doc comment warns against.
+#[tokio::test]
+async fn a_cancel_reaches_the_broadcast_feed() {
+    let (_td, mut world) = tmp_workspace();
+    let model = MockModel::new()
+        .script(MockResponse::tool_call("slow", json!({})))
+        .script(MockResponse::text("unreachable"));
+    // Subscribe before the hook is handed to the loop: `subscribe` takes
+    // `&self`, and the receiver outlives the hook independently.
+    let hook = BroadcastHook::new(64);
+    let mut rx = hook.subscribe();
+    let entered = Arc::new(Notify::new());
+    let token = CancellationToken::new();
+    cancel_on_entry(entered.clone(), token.clone());
+
+    let _ = AgentLoop::new(model)
+        .with_tool(Arc::new(SlowTool::new(
+            "slow",
+            ToolRisk::Idempotent,
+            entered,
+        )))
+        .with_hook(Arc::new(hook))
+        .with_cancellation(token)
+        .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+        .await
+        .unwrap();
+
+    // Drain what the feed carried. `try_recv` returns `Err(Empty)` once the
+    // buffer is exhausted, which ends the loop.
+    let mut names = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        names.push(ev.event);
+    }
+    let cancelled = names.iter().position(|n| *n == "Cancelled");
+    let ended = names.iter().position(|n| *n == "SessionEnd");
+    assert!(
+        cancelled.is_some(),
+        "Cancelled never reached the feed: {names:?}"
+    );
+    assert!(
+        ended.is_some(),
+        "SessionEnd never reached the feed: {names:?}"
+    );
+    assert!(
+        cancelled < ended,
+        "Cancelled must precede SessionEnd on the feed: {names:?}"
+    );
+}
+
+// ------------------------------------------------------------------
+// 8. A cancel is recorded on the run trace
+// ------------------------------------------------------------------
+
+use std::io::Write;
+use tracing_subscriber::fmt::MakeWriter;
+
+/// A `tracing` writer that appends everything into a shared buffer.
+/// (Copied from tests/telemetry.rs — test crates cannot share fixtures.)
+#[derive(Clone)]
+struct BufWriter(Arc<Mutex<Vec<u8>>>);
+impl Write for BufWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> MakeWriter<'a> for BufWriter {
+    type Writer = BufWriter;
+    fn make_writer(&'a self) -> BufWriter {
+        self.clone()
+    }
+}
+
+/// `SessionEnd` writes `run.end` however the run ended, so without its own
+/// line a cancelled run's trace reads exactly like a finished one.
+#[tokio::test]
+async fn a_cancel_is_recorded_on_the_run_trace() {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_max_level(tracing::Level::DEBUG)
+        .without_time()
+        .with_ansi(false)
+        .finish();
+
+    let output = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (_td, mut world) = tmp_workspace();
+        let model = MockModel::new()
+            .script(MockResponse::tool_call("slow", json!({})))
+            .script(MockResponse::text("unreachable"));
+        let entered = Arc::new(Notify::new());
+        let token = CancellationToken::new();
+        cancel_on_entry(entered.clone(), token.clone());
+
+        let _ = AgentLoop::new(model)
+            .with_tool(Arc::new(SlowTool::new(
+                "slow",
+                ToolRisk::Idempotent,
+                entered,
+            )))
+            .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
+            .with_cancellation(token)
+            .run_with_max_iters(task("call the slow tool"), &mut world, 5)
+            .await
+            .unwrap();
+
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    };
+
+    assert!(
+        output.contains("run.cancelled"),
+        "missing run.cancelled:\n{output}"
+    );
+    assert!(
+        output.contains("run.end"),
+        "run.end must still close the trace:\n{output}"
+    );
+    let cancelled = output.find("run.cancelled").unwrap();
+    let ended = output.find("run.end").unwrap();
+    assert!(
+        cancelled < ended,
+        "run.cancelled must be recorded before run.end:\n{output}"
+    );
+    assert!(
+        output.contains("tool_calls=1"),
+        "run.end must count the cancelled dispatch, as Outcome::Cancelled does:\n{output}"
+    );
+}
