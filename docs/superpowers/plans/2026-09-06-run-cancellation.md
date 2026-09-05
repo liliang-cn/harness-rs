@@ -1582,9 +1582,13 @@ Expected: green. `tests/session_replay.rs` and `tests/telemetry.rs` hook `PreMod
 - [ ] **Step 6: Commit**
 
 ```bash
+cargo fmt --all && cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 git add crates/harness-loop/src/lib.rs crates/harness-loop/tests/cancellation.rs
 git commit -m "feat(loop): a cancel drops the in-flight model request or stream"
 ```
+
+**Executed as `0505d83`; review fixes in the commit after it.** Code review verified the wire-level claim against the real adapters — no `tokio::spawn` in any production path of `harness-models`, `with_retry` is a plain loop so a drop during back-off leaves nothing running, `bytes_stream()` is owned by the `BoxStream` so dropping it closes the body — and found one **plan gap**: `complete_via_stream` accumulated streamed text in a local, so a cancel mid-stream dropped the chunks the user had already watched arrive, `Outcome::Cancelled.last_text` carried the *previous* turn's text, `Session::turn` recorded an empty assistant message, and a comment in `harness-serve` ("no token was emitted, so a rerun won't duplicate") became false. Task 3 had established partial-work-survives for tools; the fix threads a `&mut String` sink from the call site through `model_step` into `complete_via_stream`, promotes it to `last_text` on cancel, and adds `streamed_partial_text_survives_a_cancel`. A second, pre-existing defect made common by cancellation: `openai_compat`'s `translate_turn` pushed an assistant message with no content and no tool calls — a bare `{"role":"assistant"}` that OpenAI-shaped endpoints reject, which the Anthropic and Gemini adapters already skip — guarded, with `an_empty_assistant_turn_is_not_sent`. Telemetry's `model_start`/`awaiting_first_token` are the same dangling-state class as `tool_starts`; Task 5's `Cancelled` arm now settles them too.
 
 ---
 
@@ -1875,7 +1879,7 @@ Also extend the telemetry test's assertions (Step 8's `a_cancel_is_recorded_on_t
 - [ ] **Step 11: Run the tests to verify they pass**
 
 Run: `cargo test -p harness-rs-loop --test cancellation`
-Expected: `test result: ok. 11 passed` (8 after Task 4, plus the event-order, broadcast and telemetry tests here).
+Expected: `test result: ok. 12 passed` (9 after Task 4's fix round, plus the event-order, broadcast and telemetry tests here).
 
 - [ ] **Step 12: Run the whole loop crate**
 
