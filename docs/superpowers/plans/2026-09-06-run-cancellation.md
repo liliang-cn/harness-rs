@@ -2136,6 +2136,8 @@ git commit -m "feat(cli): Ctrl-C cancels the run instead of killing the harness"
 ```
 (add `Cargo.lock` if the `signal` feature changed it.)
 
+**Executed as `17204d1`; review fixes in `7a15850`.** Spec review passed first time (the disarm is unconditionally reached in the REPL — the `Err` arm is inside the `match outcome` that follows it). Code review found five things worth fixing, all of them gaps in the plan above rather than in the implementation: (1) an interrupted `harness run` fell through to `Ok(())` and **exited 0**, so `harness run … && next` proceeded after a Ctrl-C — now `exit(130)` after the output (Rust's `process::exit` flushes stdout via its at-exit cleanup, verified empirically, so piped `--json` is not truncated); (2) the first Ctrl-C printed nothing, which at the REPL's blocking `[y/N]` approval read looks like nothing happened — `watch` now takes `on_cancel` as well as `on_idle`, and both call sites print `^C — cancelling; Ctrl-C again to force quit` to stderr with a leading newline so it does not glue to streamed text; (3) `run_agent` armed once and never disarmed, so a Ctrl-C during output printing was eaten — disarmed after the run returns; (4) the second-Ctrl-C escape hatch is a `process::exit` that skips `GroupKill::drop`, so a child still unwinding at that instant is orphaned — the exact failure this branch exists to fix, now stated as the deliberate price in `watch`'s doc together with the multi-thread-runtime dependency (the REPL prompt blocks a worker in `read_line`); (5) nothing tested that a cloned `Current` shares the slot, which is the whole design — a fourth test, shown red against a deep-copying manual `Clone`. Minors folded in: `cancel()` runs after the guard drops; a failed handler install logs a `tracing::warn!`; the `with_cancellation` doc names direct `loop_.cancel = token` assignment as the simplest per-turn form. No manual Ctrl-C smoke was possible (no model credentials in the worktree); `watch`'s untested surface is one `if`. Two things deliberately left as follow-ups below: the approval prompt's blocking read does not itself observe cancellation, and `harness replay` builds a loop with no watcher.
+
 ---
 
 ### Task 6: Changelog
@@ -2182,7 +2184,13 @@ Open `CHANGELOG.md`. There is **no** `## Unreleased` section yet — the file go
   `harness code` REPL install a `tokio::signal::ctrl_c` handler that cancels
   the loop's token instead of letting the process die. The run returns
   `Outcome::Cancelled` with its partial work, in-flight tools and model calls
-  are dropped, and child processes die with their group.
+  are dropped, and child processes die with their group. The first press
+  prints `^C — cancelling`; a second press, or one at an idle prompt, exits
+  130 — that forced exit skips destructors, so a child still unwinding at
+  that instant is orphaned, the deliberate price of an escape hatch. An
+  interrupted `harness run` exits 130 rather than 0, so `harness run … &&
+  next` does not proceed. The REPL arms a fresh token per turn, because a
+  cancelled token stays cancelled.
 - **Run-level cancellation.** `AgentLoop::with_cancellation(CancellationToken)`
   stops a run from outside. The token is checked every iteration and raced
   against the model step and every tool dispatch, so a cancel drops the
@@ -2228,6 +2236,10 @@ All of that must hold before `superpowers:finishing-a-development-branch`.
 - **`ContainerSandbox` weakens the group-kill guarantee** (`crates/harness-loop/src/sandbox.rs` ~291): every `runner.exec` there goes through `docker exec`, so `GroupKill` kills the host-side client and the process inside the container survives — `docker exec` propagates no signal. Pre-existing (nothing killed it before either); the `GroupKill` doc now says so. A real fix is `docker kill`/`docker exec … kill` on drop inside that backend.
 - **A `Detached` background job dropped inside its spawn grace window is orphaned unrecorded** (`background.rs:190, 210-240`: `kill_on_drop(scope != Detached)`, and the job is inserted into the `JobTable` only after the grace `timeout(GRACE_MS, child.wait())`). A cancel landing in that window leaves a running detached child with no table entry for `shell_job_kill`, and two `pump` tasks writing its log forever. Narrow, `Detached`-only, pre-existing on the deadline path.
 - **`bench_suite` credits a cancelled-but-verified trial as `resolved`** (status map puts `(_, true) => "resolved"` first). Pre-existing semantics shared with `timeout`/`error`, and unreachable today (nothing in eval-bench cancels). Revisit if the bench ever cancels on its own timeout instead of dropping the future.
+
+- **The REPL's approval prompt does not observe cancellation** (`ReplHook::fire`, `crates/harness-cli/src/main.rs` ~670: a synchronous `stdin().read_line` on the loop's task). A Ctrl-C there cancels the armed token and prints `^C — cancelling`, but the read keeps blocking (Rust retries on `EINTR`) until the user types a line; whatever they answer, the loop's next check then returns `Cancelled`. Legible, but one keystroke late. Fix is for the hook to race the read against the token — which means the hook needs the token, or the prompt needs to move off the loop's task.
+- **`harness replay` builds a loop with no Ctrl-C watcher** (`main.rs` ~1175, `ShellRead` model). Ctrl-C there still kills the harness and, since Task 3b, orphans any child group. Low impact — replay is deterministic and short — but it is the same hole; wire it or say why not when that subcommand is next touched.
+- **`run_agent` skips `disarm()` on the `?` error path** (`main.rs` ~512-516): a Ctrl-C in the microseconds between the error propagating and the process exiting is reported as a cancel rather than quitting. Cosmetic; disarm before matching the `Result` if it ever matters.
 
 **Do not merge this branch with Tasks 3 or 4 unlanded.** The rustdoc on `AgentLoop::cancel` (written in Task 2) states the token is "raced against the model step and every tool dispatch" — that is true only once Tasks 3 and 4 exist. Landing Task 2 alone would ship documentation promising mid-tool cancellation the code does not deliver.
 
