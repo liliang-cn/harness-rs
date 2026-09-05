@@ -266,20 +266,22 @@ pub async fn run_agent(
     let child = cmd
         .spawn()
         .map_err(|e| ToolError::Exec(format!("could not start {}: {e}", agent.program)))?;
+    // Armed for the whole tree the agent starts; disarmed only if the agent
+    // exits on its own. Both a timeout and a dropped future (a cancelled
+    // run) take the group down through the guard's `Drop`.
     #[cfg(unix)]
-    let pid = child.id();
+    let guard = harness_context::GroupKill::arm(&child);
 
     let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(r) => r.map_err(|e| ToolError::Exec(format!("{} failed: {e}", agent.name)))?,
-        Err(_) => {
+        Ok(r) => {
+            let out = r.map_err(|e| ToolError::Exec(format!("{} failed: {e}", agent.name)))?;
             #[cfg(unix)]
-            if let Some(pid) = pid {
-                // The child itself is already being dropped; the group is what
-                // the compilers and servers it started are in.
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
-                }
-            }
+            guard.disarm();
+            out
+        }
+        Err(_) => {
+            // The child is dropped with the timed-out future; the guard is
+            // dropped at this return and takes the rest of the group with it.
             return Ok(AgentRun {
                 ok: false,
                 answer: String::new(),
@@ -677,6 +679,67 @@ mod tests {
         .unwrap();
         assert!(run.timed_out);
         assert!(!run.ok);
+    }
+
+    // A cancelled run drops `run_agent`'s future mid-flight. That has to
+    // reach the agent's whole process tree the same way the timeout does, or
+    // the compilers it started keep running under a run that says it stopped.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dropped_run_kills_the_agents_process_group() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "harness-agent-drop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let agent = ExternalAgent {
+            name: "forker".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(), "{prompt}".into()],
+            about: String::new(),
+            verdict: Verdict::ExitCode,
+        };
+        let prompt = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        let handle = tokio::spawn(async move {
+            run_agent(
+                &agent,
+                &prompt,
+                &std::env::temp_dir(),
+                Duration::from_secs(30),
+            )
+            .await
+        });
+
+        let grandchild: i32 = loop {
+            if let Some(p) = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                break p;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+        assert!(
+            alive(grandchild),
+            "grandchild should be running before the drop"
+        );
+
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while alive(grandchild) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            !alive(grandchild),
+            "the grandchild survived the drop: only the direct child was killed"
+        );
     }
 
     #[test]

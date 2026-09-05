@@ -2208,6 +2208,7 @@ dependencies = [
  "async-trait",
  "harness-rs-core",
  "inventory",
+ "libc",
  "once_cell",
  "regex",
  "serde",

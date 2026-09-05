@@ -24,6 +24,9 @@ harness-core = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 tokio        = { workspace = true }
+# Process-group kill on drop (src/runtime.rs `GroupKill`). Unix only in
+# practice; the crate compiles without it elsewhere via cfg(unix).
+libc         = { workspace = true }
 async-trait  = { workspace = true }
 tracing      = { workspace = true }
 regex        = { workspace = true }
