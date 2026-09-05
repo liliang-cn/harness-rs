@@ -1868,13 +1868,17 @@ In `crates/harness-loop/src/telemetry.rs`, inside `fn fire`'s `match ev`, immedi
 Also extend the telemetry test's assertions (Step 8's `a_cancel_is_recorded_on_the_run_trace`) with one more line after the existing three, so the settlement is proven rather than assumed:
 
 ```rust
+    let end = output
+        .lines()
+        .find(|l| l.contains("run.end"))
+        .expect("run.end line");
     assert!(
-        output.contains("tool_calls=1"),
+        end.contains("tool_calls=1"),
         "run.end must count the cancelled dispatch, as Outcome::Cancelled does:\n{output}"
     );
 ```
 
-(`run.end` is emitted via `tracing::info!(… tool_calls = t.tool_calls …)`, which the fmt subscriber renders as `tool_calls=1`.)
+(`run.end` is emitted via `tracing::info!(… tool_calls = t.tool_calls …)`, which the fmt subscriber renders as `tool_calls=1`. **Scope the check to that line**: `model.complete` renders its own `tool_calls=<n>` field — the number of calls the model *requested* — and with one scripted tool call the whole capture contains `tool_calls=1` whether or not the `Cancelled` arm exists. The first execution asserted on the whole output and passed for the wrong reason; code review caught it.)
 
 - [ ] **Step 11: Run the tests to verify they pass**
 
@@ -2215,6 +2219,8 @@ All three must be clean before `superpowers:finishing-a-development-branch`.
 - **`harness-cli`'s JSON `"outcome"` string is an undocumented public contract.** A table test over `Outcome → kind` would pin the four strings; it needs the tuple `match` in `main.rs` (~506-560) extracted into a testable `fn`. Reasonable follow-up, not a blocker.
 - **A nested `Subagent` does not inherit the parent's token.** `Subagent::new` builds a fresh `AgentLoop` with a fresh, never-cancelled token. The only place a subagent is started *inside* a run is a tool (`examples/cap/src/tools/task.rs:90`), and tools receive `&mut World`, not the loop — so there is no path to hand them the parent's token without putting one on `World`, which is a `harness-core` change. What happens today on a parent cancel: `dispatch_bounded` drops the `task` tool's future, so the nested loop simply stops being polled — the work stops — but the nested run's `SessionEnd` never fires, so its `JobReaperHook` never reaps background jobs it started. Decision for this branch: drop is the mechanism, documented on `dispatch_bounded`. Revisit with a `cancel` field on `World` (or a `child_token()` handed through `SubagentSpec`) when a real consumer needs nested cleanup; the other four `Subagent::new` sites (`learning` review, `loop_engine` maker/checker, `scheduler`, `orchestrator`) run outside or after a loop iteration and are not affected.
 - **`background.rs` still says `SessionEnd` fires "on Done / Stuck / BudgetExhausted alike"** (`crates/harness-tools/src/shell/background.rs:24` and `:753`) — now also on `Cancelled`, and that is load-bearing: `JobReaperHook` matches only `SessionEnd`, so the cancel exit firing it is what reaps background jobs on Esc. Two comment lines; fold into Task 3b since it opens that crate.
+- **A hook-denied tool call has no terminal event.** The loop fires `PreToolUse`, a hook answers `Deny`, and the loop pushes a synthetic turn and `continue`s — `PostToolUse` never fires. `TelemetryHook`'s `tool_starts` therefore keeps one entry per denial for the hook's lifetime (pre-existing), and after Task 5 a deny-then-cancel run's `Cancelled` arm drains those leaked entries as if they were dispatches, so `run.end`'s `tool_calls` exceeds `Outcome::Cancelled.tools_called` by the number of denials. Task 5's fix round bounds the leak to one run by clearing the per-call maps at `SessionStart`; the full fix is a terminal event on the deny path in `lib.rs` (a `PostToolUse` carrying the denial, or a dedicated `ToolDenied`), which is a lifecycle-event design decision for its own task.
+- **`Event::Cancelled` carries no fields, so the SSE feed learns only that the run was cancelled.** `iters`/`tools_called`/`last_text` reach the server in the `Outcome` and stop there; a client watching `BroadcastHook`'s feed gets `Cancelled` with `{}`. Task 1 made it a unit variant by file convention. Carrying the counts means changing the variant's shape (or firing a second event with them) — decide when a UI actually needs it; today `harness-serve` can join the outcome to the feed itself.
 - **`ContainerSandbox` weakens the group-kill guarantee** (`crates/harness-loop/src/sandbox.rs` ~291): every `runner.exec` there goes through `docker exec`, so `GroupKill` kills the host-side client and the process inside the container survives — `docker exec` propagates no signal. Pre-existing (nothing killed it before either); the `GroupKill` doc now says so. A real fix is `docker kill`/`docker exec … kill` on drop inside that backend.
 - **A `Detached` background job dropped inside its spawn grace window is orphaned unrecorded** (`background.rs:190, 210-240`: `kill_on_drop(scope != Detached)`, and the job is inserted into the `JobTable` only after the grace `timeout(GRACE_MS, child.wait())`). A cancel landing in that window leaves a running detached child with no table entry for `shell_job_kill`, and two `pump` tasks writing its log forever. Narrow, `Detached`-only, pre-existing on the deadline path.
 - **`bench_suite` credits a cancelled-but-verified trial as `resolved`** (status map puts `(_, true) => "resolved"` first). Pre-existing semantics shared with `timeout`/`error`, and unreachable today (nothing in eval-bench cancels). Revisit if the bench ever cancels on its own timeout instead of dropping the future.
