@@ -1832,11 +1832,22 @@ In `crates/harness-loop/src/telemetry.rs`, inside `fn fire`'s `match ev`, immedi
                     .drain()
                     .map(|(_, started)| started)
                     .collect();
+                // The same for a model call cut off between PreModel and
+                // PostModel: the wait was real and belongs in `model_ms`, so
+                // `duration_ms` does not exceed `model_ms + tool_ms` by an
+                // unexplained gap; the call itself never completed, so
+                // `model_calls` is left alone. Clearing the two fields is
+                // hygiene — the next PreModel would overwrite them anyway.
+                let cut_off_model = self.model_start.lock().unwrap().take();
+                *self.awaiting_first_token.lock().unwrap() = false;
                 {
                     let mut t = self.totals.lock().unwrap();
                     for started in dangling {
                         t.tool_calls += 1;
                         t.tool_ms += started.elapsed().as_millis() as u64;
+                    }
+                    if let Some(started) = cut_off_model {
+                        t.model_ms += started.elapsed().as_millis() as u64;
                     }
                 }
                 self.in_run(|| {
@@ -2195,7 +2206,7 @@ All three must be clean before `superpowers:finishing-a-development-branch`.
 
 ## Follow-ups found in review, deliberately out of scope for this branch
 
-- **`harness-serve` retries a run whose answer is blank** (`crates/harness-serve/src/service.rs` ~312-320 and ~392-401): `answer_of(&outcome)` empty → `warn!("empty answer — retrying once")` → re-run the agent. A cancel at iteration 0 has `last_text: None`, so it takes this path. Harmless today only because the token is loop-scoped: the retry hits the same cancelled token and returns immediately. If `harness-serve` ever gives each request its own token, "user cancels" becomes "server starts a fresh run". When that wiring is done: skip the retry on `matches!(outcome, Outcome::Cancelled { .. })`.
+- **`harness-serve` retries a run whose answer is blank** (`crates/harness-serve/src/service.rs` ~312-320 and ~392-401): `answer_of(&outcome)` empty → `warn!("empty answer — retrying once")` → re-run the agent. A cancel before any token arrived has `last_text: None`, so it takes this path. Harmless today only because the token is loop-scoped: the retry hits the same cancelled token and returns immediately. If `harness-serve` ever gives each request its own token, "user cancels" becomes "server starts a fresh run". When that wiring is done: skip the retry on `matches!(outcome, Outcome::Cancelled { .. })`. Note also the comment at ~390 — "no token has been emitted into the stream either, so the re-run won't duplicate content" — is now only true for a cancel *before* the first chunk; after Task 4's fix a mid-stream cancel puts the streamed text in `last_text`, so `answer_of` is non-empty and the retry is not taken, but the comment's reasoning should be rewritten when that code is next touched.
 - **`ai-note`'s frontend has no case for `warning: "cancelled"`** (`examples/ai-note/user-ui/src/components/chat/chat-sheet.tsx` ~252 handles only `budget_exhausted`; `"stuck"` has never had a case either). Nothing breaks — the string is passed through opaquely — but a cancelled turn shows no toast. Belongs with whatever adds a cancel button to that UI.
 - **`harness-cli`'s JSON `"outcome"` string is an undocumented public contract.** A table test over `Outcome → kind` would pin the four strings; it needs the tuple `match` in `main.rs` (~506-560) extracted into a testable `fn`. Reasonable follow-up, not a blocker.
 - **A nested `Subagent` does not inherit the parent's token.** `Subagent::new` builds a fresh `AgentLoop` with a fresh, never-cancelled token. The only place a subagent is started *inside* a run is a tool (`examples/cap/src/tools/task.rs:90`), and tools receive `&mut World`, not the loop — so there is no path to hand them the parent's token without putting one on `World`, which is a `harness-core` change. What happens today on a parent cancel: `dispatch_bounded` drops the `task` tool's future, so the nested loop simply stops being polled — the work stops — but the nested run's `SessionEnd` never fires, so its `JobReaperHook` never reaps background jobs it started. Decision for this branch: drop is the mechanism, documented on `dispatch_bounded`. Revisit with a `cancel` field on `World` (or a `child_token()` handed through `SubagentSpec`) when a real consumer needs nested cleanup; the other four `Subagent::new` sites (`learning` review, `loop_engine` maker/checker, `scheduler`, `orchestrator`) run outside or after a loop iteration and are not affected.
