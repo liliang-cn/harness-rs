@@ -886,13 +886,24 @@ async fn run_once(
         }
         | Outcome::Stuck {
             iters, last_text, ..
-        }
-        | Outcome::Cancelled {
-            iters, last_text, ..
         } => {
             eprintln!("✗ stopped after {iters} iteration(s)");
             if let Some(t) = last_text {
                 eprintln!("\n— forced-synthesis answer (tool-less) —\n{t}");
+            }
+            if let Some(s) = &synth_handle {
+                s.flush_pending().await;
+            }
+            std::process::exit(2);
+        }
+        Outcome::Cancelled {
+            iters, last_text, ..
+        } => {
+            eprintln!("✗ cancelled after {iters} iteration(s)");
+            // Not a synthesis: a cancelled run never gets a tool-less final
+            // turn, so this is whatever the model had said when it was stopped.
+            if let Some(t) = last_text {
+                eprintln!("\n— last assistant message before cancelling —\n{t}");
             }
             if let Some(s) = &synth_handle {
                 s.flush_pending().await;
@@ -1003,13 +1014,18 @@ async fn run_repl(
             })
             | Ok(Outcome::Stuck {
                 iters, last_text, ..
-            })
-            | Ok(Outcome::Cancelled {
-                iters, last_text, ..
             }) => {
                 eprintln!("\nasst> ✗ stopped after {iters} iterations.");
                 if let Some(t) = last_text {
                     println!("\nasst (forced-synthesis)> {t}");
+                }
+            }
+            Ok(Outcome::Cancelled {
+                iters, last_text, ..
+            }) => {
+                eprintln!("\nasst> ✗ cancelled after {iters} iterations.");
+                if let Some(t) = last_text {
+                    println!("\nasst (partial)> {t}");
                 }
             }
             Err(e) => eprintln!("\nasst> ✗ error: {e:#}"),

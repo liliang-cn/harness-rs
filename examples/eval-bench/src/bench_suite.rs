@@ -576,7 +576,7 @@ impl Compactor for NoopCompactor {
 struct Row {
     id: &'static str,
     resolved: bool,
-    status: &'static str, // "resolved" | "wrong" | "timeout" | "error"
+    status: &'static str, // "resolved" | "wrong" | "timeout" | "error" | "stuck" | "cancelled"
     iters: u32,
     tool_calls: usize,
     in_tok: u32,
