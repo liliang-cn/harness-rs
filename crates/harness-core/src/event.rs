@@ -4,7 +4,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// All 29 lifecycle events the framework emits (DESIGN.md §10).
+/// All 30 lifecycle events the framework emits (DESIGN.md §10).
 ///
 /// Lifetimes are intentionally borrowed: hooks must not own these references
 /// past the call.
@@ -146,6 +146,11 @@ pub enum Event<'a> {
     Error {
         message: &'a str,
     },
+    /// The run was stopped from outside through the loop's
+    /// `CancellationToken`, before the model reached a natural end. Fires
+    /// once, then `SessionEnd`. Distinct from `Stop` (the run finished) and
+    /// `Error` (something broke): the work was fine, the caller ended it.
+    Cancelled,
     Stop,
     Heartbeat {
         iter: u32,
@@ -221,9 +226,23 @@ impl<'a> Event<'a> {
             Event::BudgetWarning { .. } => "BudgetWarning",
             Event::Notification { .. } => "Notification",
             Event::Error { .. } => "Error",
+            Event::Cancelled => "Cancelled",
             Event::Stop => "Stop",
             Event::Heartbeat { .. } => "Heartbeat",
             Event::Custom { .. } => "Custom",
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_event {
+    use super::Event;
+
+    // Cancellation is its own lifecycle event, not a `Stop` or an `Error`:
+    // a hook that pages on `Error` must not fire when a user pressed Esc, and
+    // a hook that bills on `Stop` must know this run did not finish.
+    #[test]
+    fn cancelled_is_a_named_lifecycle_event() {
+        assert_eq!(Event::Cancelled.name(), "Cancelled");
     }
 }
