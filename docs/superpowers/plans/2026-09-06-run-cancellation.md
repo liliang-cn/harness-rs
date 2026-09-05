@@ -36,7 +36,7 @@
 - `Tool` trait (`crates/harness-core/src/tool.rs:40`): `fn name(&self)->&str; fn schema(&self)->&ToolSchema; fn risk(&self)->ToolRisk; async fn invoke(&self, args: Value, world: &mut World)->Result<ToolResult,ToolError>`. `ToolSchema { name, description, input }`. `ToolRisk::{ReadOnly, Idempotent, Destructive, Network}`. `ToolResult { ok, content, trace }`.
 - `Hook` trait: `fn name(&self)->&str; fn matches(&self,&Event<'_>)->bool; fn fire(&self,&Event<'_>,&mut World)->HookOutcome` (`HookOutcome::Allow`).
 
-**Standing rule for every task — run `cargo fmt --all` before every commit, and confirm `cargo fmt --all -- --check` exits 0.** CI (`.github/workflows/ci.yml`) enforces it. The code blocks in this plan were written by hand and are *not* guaranteed rustfmt-clean; copy them verbatim as instructed, then let rustfmt reflow them. Task 2's first commit went red on exactly this and needed a follow-up.
+**Standing rule for every task — before every commit run `cargo fmt --all`, then confirm both `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` exit 0.** CI (`.github/workflows/ci.yml`, lines ~52 and ~64) enforces both. Task 3's first commit went clippy-red on a `return` the plan itself prescribed; `cargo test` green says nothing about clippy. The code blocks in this plan were written by hand and are *not* guaranteed rustfmt-clean; copy them verbatim as instructed, then let rustfmt reflow them. Task 2's first commit went red on exactly this and needed a follow-up.
 
 ---
 
@@ -49,6 +49,9 @@
 | `crates/harness-core/src/event.rs` | modify | add `Event::Cancelled`; fix the "29" doc; name mapping |
 | `crates/harness-loop/src/lib.rs` | modify | `cancel` field, `with_cancellation`, `Outcome::Cancelled`, the three check/race points, skip synthesis |
 | `crates/harness-loop/tests/cancellation.rs` | **create** | all behavioural tests for this feature |
+| `crates/harness-context/Cargo.toml`, `crates/harness-context/src/runtime.rs` | modify | `GroupKill` guard; `TokioRunner::exec` kills the child's process group on drop (Task 3b) |
+| `crates/harness-tools/src/agents.rs` | modify | `run_agent` uses the same guard on drop and timeout (Task 3b) |
+| `crates/harness-tools/src/shell/background.rs` | modify | two comments: `SessionEnd` also fires on `Cancelled` (Task 3b) |
 | `crates/harness-loop/src/hooks/broadcast.rs` | modify | project `Cancelled` onto the SSE feed (Task 5) |
 | `crates/harness-loop/src/telemetry.rs` | modify | record `run.cancelled` inside the run span (Task 5) |
 | `CHANGELOG.md` | modify | one entry under Unreleased |
@@ -899,7 +902,7 @@ Replace the whole body of `dispatch_bounded` with:
                             "gen_ai.tool.name" = %action.tool,
                             seconds = deadline.as_secs(),
                         );
-                        return Ok(ToolResult {
+                        Ok(ToolResult {
                             ok: false,
                             content: serde_json::json!({
                                 "error": format!(
@@ -911,7 +914,7 @@ Replace the whole body of `dispatch_bounded` with:
                                 "timeout": true,
                             }),
                             trace: None,
-                        });
+                        })
                     }
                 },
                 None => fut.await,
@@ -1003,8 +1006,329 @@ Expected: green. `tests/tool_result_cap.rs`, `tests/parallel_dispatch.rs` and `t
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/harness-loop/Cargo.toml crates/harness-loop/src/lib.rs crates/harness-loop/tests/cancellation.rs
+cargo fmt --all && cargo fmt --all -- --check
+git add crates/harness-loop/src/lib.rs crates/harness-loop/tests/cancellation.rs
 git commit -m "feat(loop): a cancel drops the in-flight tool instead of awaiting it"
+```
+
+**Executed as `d9b0dc1`; review fixes in the commit after it.** Code review found: (1) *plan defect* — Step 3's `return Ok(…)` sits in tail position of the `bounded` block and fails `clippy::needless_return` under `-D warnings`, so the first commit was CI-red (Step 3 above has since been corrected to a plain tail expression, and the standing rule now names clippy); (2) the three cancel tests fired the token from a 150 ms sleep — a two-sided race whose near side can lose to Task 2's top-of-iteration check on a loaded runner — replaced by `SlowTool` signalling entry through a `tokio::sync::Notify` and a `cancel_on_entry(entered, token)` helper, so every test cancels the instant the tool is provably mid-flight (`SlowTool::new(name, risk, entered)` is the signature every later task's test uses); (3) the prefetch cancel arm had no test — added `cancelling_during_the_parallel_prefetch_returns_promptly` with two `ToolRisk::ReadOnly` slow tools and a two-call `MockResponse::tool_calls`, asserting `Cancelled { iters: 1, tools_called: 1 }` in under 2 s; (4) the stale first line of `dispatch_bounded`'s doc ("Best-effort append to the recall store", a leftover from `recall_append`) replaced with a doc that names all three exits and the drop-semantics contract; (5) a paragraph on `Outcome::Cancelled` saying a mid-flight tool's side effects may still complete unrecorded. Two further findings became **Task 3b** (a child process is orphaned on drop) and a **Task 5 amendment** (telemetry's `tool_starts` leaks an entry per cancel and `run.end` disagrees with the outcome's `tools_called`).
+
+---
+
+### Task 3b: A dropped child process dies with its process group
+
+**Why this task exists.** Task 3 makes the loop *drop* a tool's future on cancel. For a shell tool that future is `TokioRunner::exec`, which awaits `tokio::process::Command::output()` with **no `kill_on_drop`** — so dropping it orphans the child, which runs to completion. `ShellRead` is `ToolRisk::ReadOnly` and permits `cargo build`/`test`/`clippy`, so a user pressing Esc during a parallel prefetch gets `Outcome::Cancelled` in microseconds while two toolchains keep running against the same target dir: cancellation that *appears* to work. This was pre-existing on the tool-deadline path; what Task 3 changes is that an everyday user action now hits it. `kill_on_drop(true)` alone is not enough — it reaches only the direct child, and `cargo` starts rustc and test binaries in the same group — so the fix is a process group plus a guard that signals the group on drop. `run_agent` in `harness-tools` already kills its group, but only on its timeout arm and inline; it moves to the same guard so drop and timeout share one mechanism.
+
+**Files:**
+- Modify: `crates/harness-context/Cargo.toml` — `[dependencies]`
+- Modify: `crates/harness-context/src/runtime.rs` — `TokioRunner::exec` (~26-44), new `GroupKill`, new test module
+- Modify: `crates/harness-tools/src/agents.rs` — `run_agent` (~245-293), new test in the existing `mod tests` (~659-680 has the timeout test to sit beside)
+- Modify: `crates/harness-tools/src/shell/background.rs` — two comments (~24, ~753)
+
+Package names: `crates/harness-context/` is `harness-rs-context`, `crates/harness-tools/` is `harness-rs-tools` (confirm with `grep '^name' crates/harness-context/Cargo.toml crates/harness-tools/Cargo.toml` before running the commands below). `harness-tools` already depends on `harness-context` and on `libc`; `harness-context` re-exports `runtime::*`, so the guard is reachable as `harness_context::GroupKill`.
+
+- [ ] **Step 1: Add the dependency**
+
+In `crates/harness-context/Cargo.toml`, inside `[dependencies]`, directly after the `tokio        = { workspace = true }` line, add:
+
+```toml
+# Process-group kill on drop (src/runtime.rs `GroupKill`). Unix only in
+# practice; the crate compiles without it elsewhere via cfg(unix).
+libc         = { workspace = true }
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Append to the very end of `crates/harness-context/src/runtime.rs`:
+
+```rust
+#[cfg(all(test, unix))]
+mod process_group_on_drop {
+    use super::TokioRunner;
+    use harness_core::ProcessRunner;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// Signal 0 probes without delivering; a pid that is dead and reaped fails it.
+    fn alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// `sh` is the direct child; the backgrounded `sleep` is its grandchild,
+    /// and `sh` writes the grandchild's pid to a file before waiting on it.
+    /// Dropping the exec future has to kill the grandchild as well —
+    /// `kill_on_drop` alone reaches `sh`, and the sleep would run on for
+    /// thirty seconds after the run reported itself cancelled.
+    #[tokio::test]
+    async fn dropping_an_exec_kills_the_whole_process_group() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "harness-group-kill-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        let runner = Arc::new(TokioRunner);
+        let handle = tokio::spawn({
+            let runner = runner.clone();
+            async move { runner.exec("sh", &["-c", script.as_str()], None).await }
+        });
+
+        // Wait until sh has started the grandchild and recorded its pid.
+        let grandchild: i32 = loop {
+            if let Some(p) = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                break p;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(alive(grandchild), "grandchild should be running before the drop");
+
+        // Dropping the future is exactly what a cancelled run does.
+        handle.abort();
+        let _ = handle.await;
+
+        // SIGKILL delivery and reaping are asynchronous; allow a moment.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while alive(grandchild) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            !alive(grandchild),
+            "the grandchild survived the drop: the process group was not killed"
+        );
+    }
+}
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `cargo test -p harness-rs-context --lib dropping_an_exec_kills_the_whole_process_group`
+Expected: FAIL with `the grandchild survived the drop` after ~2 s. (A stray `sleep 30` from this run lives on for half a minute and then exits by itself; that is the bug being demonstrated.)
+
+- [ ] **Step 4: The guard, and a runner that arms it**
+
+In `crates/harness-context/src/runtime.rs`, directly **above** `/// Subprocess runner backed by `tokio::process::Command`.`, add:
+
+```rust
+/// Kills a child's whole process group when dropped, unless disarmed.
+///
+/// `kill_on_drop` reaches only the direct child. A `cargo test` or an external
+/// agent starts compilers and test runners of its own, and those are what keep
+/// running when a run is cancelled mid-tool: the direct child dies, its group
+/// does not. The child is spawned as a group leader (`process_group(0)`), so
+/// signalling `-pid` reaches everything it started. Disarm on the normal exit
+/// path: a child that finished on its own may have deliberately left something
+/// behind, and the runner has no business killing that.
+#[cfg(unix)]
+pub struct GroupKill {
+    pid: Option<i32>,
+}
+
+#[cfg(unix)]
+impl GroupKill {
+    /// Arm for `child`, which must have been spawned with `process_group(0)`.
+    pub fn arm(child: &tokio::process::Child) -> Self {
+        Self {
+            pid: child.id().map(|p| p as i32),
+        }
+    }
+
+    /// The child exited on its own; leave whatever it left behind alone.
+    pub fn disarm(mut self) {
+        self.pid = None;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for GroupKill {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            // SAFETY: a plain signal to a process group this runner created.
+            // ESRCH (already gone) is the only expected failure and is fine.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+```
+
+Then replace the body of `TokioRunner::exec` (everything inside the `async fn exec(…) -> std::io::Result<ProcessOutput> { … }`) with:
+
+```rust
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
+        // What `Command::output` sets up implicitly, made explicit because the
+        // child is spawned by hand below to get its pid before it is awaited.
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            // Dropping this future — a cancelled run, a tool deadline — must
+            // stop the child, not orphan it into the background.
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        let child = cmd.spawn()?;
+        #[cfg(unix)]
+        let guard = GroupKill::arm(&child);
+        let out = child.wait_with_output().await?;
+        #[cfg(unix)]
+        guard.disarm();
+
+        Ok(ProcessOutput {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        })
+```
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `cargo test -p harness-rs-context --lib dropping_an_exec_kills_the_whole_process_group`
+Expected: PASS in well under a second. Then `cargo test -p harness-rs-context` — everything green (the crate's other tests use the runner for real commands; a child that exits normally is disarmed and its output is unchanged).
+
+- [ ] **Step 6: Write the failing test for `run_agent`'s drop path**
+
+In `crates/harness-tools/src/agents.rs`, inside the existing `#[cfg(test)] mod tests`, directly after the test `a_run_that_overruns_is_killed_and_says_so` (~line 661-680), add:
+
+```rust
+    // A cancelled run drops `run_agent`'s future mid-flight. That has to
+    // reach the agent's whole process tree the same way the timeout does, or
+    // the compilers it started keep running under a run that says it stopped.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dropped_run_kills_the_agents_process_group() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "harness-agent-drop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let agent = ExternalAgent {
+            name: "forker".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(), "{prompt}".into()],
+            about: String::new(),
+            verdict: Verdict::ExitCode,
+        };
+        let prompt = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        let handle = tokio::spawn(async move {
+            run_agent(&agent, &prompt, &std::env::temp_dir(), Duration::from_secs(30)).await
+        });
+
+        let grandchild: i32 = loop {
+            if let Some(p) = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                break p;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+        assert!(alive(grandchild), "grandchild should be running before the drop");
+
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while alive(grandchild) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            !alive(grandchild),
+            "the grandchild survived the drop: only the direct child was killed"
+        );
+    }
+```
+
+- [ ] **Step 7: Run it to verify it fails**
+
+Run: `cargo test -p harness-rs-tools --lib a_dropped_run_kills_the_agents_process_group`
+Expected: FAIL with `the grandchild survived the drop` — `kill_on_drop` killed `sh`, and the group kill lives only in the timeout arm, which a drop never reaches.
+
+- [ ] **Step 8: Move `run_agent`'s group kill into the guard**
+
+In `crates/harness-tools/src/agents.rs`, in `run_agent`:
+
+(a) Delete the two lines
+```rust
+    #[cfg(unix)]
+    let pid = child.id();
+```
+and in their place put
+```rust
+    // Armed for the whole tree the agent starts; disarmed only if the agent
+    // exits on its own. Both a timeout and a dropped future (a cancelled
+    // run) take the group down through the guard's `Drop`.
+    #[cfg(unix)]
+    let guard = harness_context::GroupKill::arm(&child);
+```
+
+(b) Replace the `let out = match tokio::time::timeout(timeout, child.wait_with_output()).await { … };` block — the whole `match`, including the timeout arm's inline `libc::kill` — with:
+
+```rust
+    let out = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(r) => {
+            let out = r.map_err(|e| ToolError::Exec(format!("{} failed: {e}", agent.name)))?;
+            #[cfg(unix)]
+            guard.disarm();
+            out
+        }
+        Err(_) => {
+            // The child is dropped with the timed-out future; the guard is
+            // dropped at this return and takes the rest of the group with it.
+            return Ok(AgentRun {
+                ok: false,
+                answer: String::new(),
+                stderr: String::new(),
+                exit_code: -1,
+                truncated: false,
+                seconds: started.elapsed().as_secs(),
+                timed_out: true,
+            });
+        }
+    };
+```
+
+If `libc` is no longer referenced anywhere else in `agents.rs` after this, leave the dependency in `Cargo.toml` (the test uses it) and let clippy tell you about any now-unused `use`.
+
+- [ ] **Step 9: Run both agent tests to verify they pass**
+
+Run: `cargo test -p harness-rs-tools --lib agents::`
+Expected: every test in the module passes, including `a_run_that_overruns_is_killed_and_says_so` (the timeout path now kills through the guard) and the new drop test.
+
+- [ ] **Step 10: Two comments in `background.rs`**
+
+`grep -n "BudgetExhausted alike" crates/harness-tools/src/shell/background.rs` finds two comment lines (~24 and ~753) saying `SessionEnd` fires "on Done / Stuck / BudgetExhausted alike". In both, change that phrase to `on Done / Stuck / BudgetExhausted / Cancelled alike`. This is load-bearing rather than cosmetic: `JobReaperHook` matches only `SessionEnd`, so the cancel exit firing it is what reaps background jobs on Esc.
+
+- [ ] **Step 11: Verify**
+
+```bash
+cargo fmt --all && cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p harness-rs-context -p harness-rs-tools 2>&1 | grep -E "^test result|FAILED"
+cargo test -p harness-rs-loop 2>&1 | grep -E "^test result|FAILED"    # untouched, still green
+```
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add crates/harness-context/Cargo.toml crates/harness-context/src/runtime.rs crates/harness-tools/src/agents.rs crates/harness-tools/src/shell/background.rs
+git commit -m "fix(context,tools): a dropped child process dies with its process group"
 ```
 
 ---
@@ -1012,7 +1336,7 @@ git commit -m "feat(loop): a cancel drops the in-flight tool instead of awaiting
 ### Task 4: A cancel mid-generation drops the request
 
 **Files:**
-- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1425) and `complete_via_stream` (~2003)
+- Modify: `crates/harness-loop/src/lib.rs` — the model call (~1435 after Task 3) and `complete_via_stream` (~2030 after Task 3)
 - Modify: `crates/harness-loop/tests/cancellation.rs`
 
 - [ ] **Step 1: Add a slow streaming model and the test**
@@ -1114,7 +1438,7 @@ Expected: FAIL — either `saw 50 of 50` (stream drained) or the elapsed asserti
 
 - [ ] **Step 3: Race the model step against the token**
 
-Replace the model call at ~line 1425:
+Replace the model call at ~line 1435:
 
 ```rust
             let out = if self.streaming {
@@ -1235,15 +1559,12 @@ async fn cancelled_fires_once_then_session_end() {
         .script(MockResponse::tool_call("slow", json!({})))
         .script(MockResponse::text("unreachable"));
     let log = Arc::new(Mutex::new(Vec::new()));
+    let entered = Arc::new(Notify::new());
     let token = CancellationToken::new();
-    let fire = token.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        fire.cancel();
-    });
+    cancel_on_entry(entered.clone(), token.clone());
 
     let _ = AgentLoop::new(model)
-        .with_tool(Arc::new(SlowTool::new()))
+        .with_tool(Arc::new(SlowTool::new("slow", ToolRisk::Idempotent, entered)))
         .with_hook(Arc::new(EventLog(log.clone())))
         .with_cancellation(token)
         .run_with_max_iters(task("call the slow tool"), &mut world, 5)
@@ -1293,15 +1614,12 @@ async fn a_cancel_reaches_the_broadcast_feed() {
     // `&self`, and the receiver outlives the hook independently.
     let hook = BroadcastHook::new(64);
     let mut rx = hook.subscribe();
+    let entered = Arc::new(Notify::new());
     let token = CancellationToken::new();
-    let fire = token.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        fire.cancel();
-    });
+    cancel_on_entry(entered.clone(), token.clone());
 
     let _ = AgentLoop::new(model)
-        .with_tool(Arc::new(SlowTool::new()))
+        .with_tool(Arc::new(SlowTool::new("slow", ToolRisk::Idempotent, entered)))
         .with_hook(Arc::new(hook))
         .with_cancellation(token)
         .run_with_max_iters(task("call the slow tool"), &mut world, 5)
@@ -1394,15 +1712,12 @@ async fn a_cancel_is_recorded_on_the_run_trace() {
         let model = MockModel::new()
             .script(MockResponse::tool_call("slow", json!({})))
             .script(MockResponse::text("unreachable"));
+        let entered = Arc::new(Notify::new());
         let token = CancellationToken::new();
-        let fire = token.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            fire.cancel();
-        });
+        cancel_on_entry(entered.clone(), token.clone());
 
         let _ = AgentLoop::new(model)
-            .with_tool(Arc::new(SlowTool::new()))
+            .with_tool(Arc::new(SlowTool::new("slow", ToolRisk::Idempotent, entered)))
             .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
             .with_cancellation(token)
             .run_with_max_iters(task("call the slow tool"), &mut world, 5)
@@ -1432,15 +1747,48 @@ Expected: FAIL with `missing run.cancelled:` followed by the captured output, wh
 In `crates/harness-loop/src/telemetry.rs`, inside `fn fire`'s `match ev`, immediately **before** the `Event::SessionEnd => {` arm (~line 312), add:
 
 ```rust
-            Event::Cancelled => self.in_run(|| {
-                // Warn, not info: a cancel is the person deciding the run was
-                // not worth finishing, which is worth seeing in a trace that
-                // would otherwise look like any other run.end.
-                tracing::warn!(target: "harness.telemetry", event = "run.cancelled");
-            }),
+            Event::Cancelled => {
+                // A cancelled dispatch fired PreToolUse but will never fire
+                // PostToolUse: the loop returns before it. Settle its entry
+                // here, for two reasons. `run.end` must agree with
+                // `Outcome::Cancelled.tools_called`, which counts that dispatch;
+                // and `tool_starts` must not grow by one per cancel across a
+                // long `Session` that reuses this hook.
+                let dangling: Vec<Instant> = self
+                    .tool_starts
+                    .lock()
+                    .unwrap()
+                    .drain()
+                    .map(|(_, started)| started)
+                    .collect();
+                {
+                    let mut t = self.totals.lock().unwrap();
+                    for started in dangling {
+                        t.tool_calls += 1;
+                        t.tool_ms += started.elapsed().as_millis() as u64;
+                    }
+                }
+                self.in_run(|| {
+                    // Warn, not info: a cancel is the person deciding the run was
+                    // not worth finishing, which is worth seeing in a trace that
+                    // would otherwise look like any other run.end.
+                    tracing::warn!(target: "harness.telemetry", event = "run.cancelled");
+                });
+            }
 ```
 
-`in_run` scopes the event to the run's span (if any), the same way `BudgetWarning` does two arms above.
+`in_run` scopes the event to the run's span (if any), the same way `BudgetWarning` does two arms above. The `tool_starts` drain answers a finding from Task 3's review: a cancel mid-tool leaves `PreToolUse`'s map entry dangling forever, and `run.end` under-reports `tool_calls` by one relative to the outcome.
+
+Also extend the telemetry test's assertions (Step 8's `a_cancel_is_recorded_on_the_run_trace`) with one more line after the existing three, so the settlement is proven rather than assumed:
+
+```rust
+    assert!(
+        output.contains("tool_calls=1"),
+        "run.end must count the cancelled dispatch, as Outcome::Cancelled does:\n{output}"
+    );
+```
+
+(`run.end` is emitted via `tracing::info!(… tool_calls = t.tool_calls …)`, which the fmt subscriber renders as `tool_calls=1`.)
 
 - [ ] **Step 11: Run the tests to verify they pass**
 
@@ -1518,6 +1866,9 @@ All three must be clean before `superpowers:finishing-a-development-branch`.
 - **`harness-serve` retries a run whose answer is blank** (`crates/harness-serve/src/service.rs` ~312-320 and ~392-401): `answer_of(&outcome)` empty → `warn!("empty answer — retrying once")` → re-run the agent. A cancel at iteration 0 has `last_text: None`, so it takes this path. Harmless today only because the token is loop-scoped: the retry hits the same cancelled token and returns immediately. If `harness-serve` ever gives each request its own token, "user cancels" becomes "server starts a fresh run". When that wiring is done: skip the retry on `matches!(outcome, Outcome::Cancelled { .. })`.
 - **`ai-note`'s frontend has no case for `warning: "cancelled"`** (`examples/ai-note/user-ui/src/components/chat/chat-sheet.tsx` ~252 handles only `budget_exhausted`; `"stuck"` has never had a case either). Nothing breaks — the string is passed through opaquely — but a cancelled turn shows no toast. Belongs with whatever adds a cancel button to that UI.
 - **`harness-cli`'s JSON `"outcome"` string is an undocumented public contract.** A table test over `Outcome → kind` would pin the four strings; it needs the tuple `match` in `main.rs` (~506-560) extracted into a testable `fn`. Reasonable follow-up, not a blocker.
+- **A nested `Subagent` does not inherit the parent's token.** `Subagent::new` builds a fresh `AgentLoop` with a fresh, never-cancelled token. The only place a subagent is started *inside* a run is a tool (`examples/cap/src/tools/task.rs:90`), and tools receive `&mut World`, not the loop — so there is no path to hand them the parent's token without putting one on `World`, which is a `harness-core` change. What happens today on a parent cancel: `dispatch_bounded` drops the `task` tool's future, so the nested loop simply stops being polled — the work stops — but the nested run's `SessionEnd` never fires, so its `JobReaperHook` never reaps background jobs it started. Decision for this branch: drop is the mechanism, documented on `dispatch_bounded`. Revisit with a `cancel` field on `World` (or a `child_token()` handed through `SubagentSpec`) when a real consumer needs nested cleanup; the other four `Subagent::new` sites (`learning` review, `loop_engine` maker/checker, `scheduler`, `orchestrator`) run outside or after a loop iteration and are not affected.
+- **`background.rs` still says `SessionEnd` fires "on Done / Stuck / BudgetExhausted alike"** (`crates/harness-tools/src/shell/background.rs:24` and `:753`) — now also on `Cancelled`, and that is load-bearing: `JobReaperHook` matches only `SessionEnd`, so the cancel exit firing it is what reaps background jobs on Esc. Two comment lines; fold into Task 3b since it opens that crate.
+- **A `Detached` background job dropped inside its spawn grace window is orphaned unrecorded** (`background.rs:190, 210-240`: `kill_on_drop(scope != Detached)`, and the job is inserted into the `JobTable` only after the grace `timeout(GRACE_MS, child.wait())`). A cancel landing in that window leaves a running detached child with no table entry for `shell_job_kill`, and two `pump` tasks writing its log forever. Narrow, `Detached`-only, pre-existing on the deadline path.
 - **`bench_suite` credits a cancelled-but-verified trial as `resolved`** (status map puts `(_, true) => "resolved"` first). Pre-existing semantics shared with `timeout`/`error`, and unreachable today (nothing in eval-bench cancels). Revisit if the bench ever cancels on its own timeout instead of dropping the future.
 
 **Do not merge this branch with Tasks 3 or 4 unlanded.** The rustdoc on `AgentLoop::cancel` (written in Task 2) states the token is "raced against the model step and every tool dispatch" — that is true only once Tasks 3 and 4 exist. Landing Task 2 alone would ship documentation promising mid-tool cancellation the code does not deliver.
