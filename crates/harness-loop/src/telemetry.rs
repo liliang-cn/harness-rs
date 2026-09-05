@@ -24,6 +24,7 @@
 //! agent_run (span, fields: source, gen_ai.operation.name=invoke_agent)
 //!   ├─ run.start
 //!   ├─ iter            (iter)
+//!   ├─ model.first_token (ttft_ms)
 //!   ├─ model.complete  (gen_ai.operation.name=chat,
 //!   │                   gen_ai.usage.input_tokens, gen_ai.usage.output_tokens,
 //!   │                   gen_ai.usage.cached_input_tokens,
@@ -35,6 +36,7 @@
 //!   ├─ sensor          (sensor, signals)
 //!   ├─ compact         (stage, tokens_before, tokens_after, tokens_saved)
 //!   ├─ budget.warning  (ratio)
+//!   ├─ run.cancelled   (warn: the caller stopped the run)
 //!   └─ run.end         (gen_ai.usage.*, total_tokens, model_calls, tool_calls,
 //!                       tool_failures, compactions, tokens_saved, duration_ms)
 //! ```
@@ -81,6 +83,11 @@ struct RunTotals {
     output_tokens: u64,
     cached_input_tokens: u64,
     cache_write_input_tokens: u64,
+    /// `model_calls` counts calls that *completed* — a cancelled one has no
+    /// usage to attribute, so it adds only its wait to `model_ms`. `tool_calls`
+    /// counts *dispatches*, including one cut short by a cancel, so it
+    /// reconciles with `Outcome::Cancelled.tools_called`, which is incremented
+    /// before the cancel check.
     model_calls: u64,
     tool_calls: u64,
     tool_failures: u64,
@@ -153,6 +160,13 @@ impl Hook for TelemetryHook {
                     started: Some(Instant::now()),
                     ..Default::default()
                 };
+                // Per-call state, too. A tool call a hook denied fired
+                // PreToolUse and never PostToolUse, so its entry would sit here
+                // for the hook's lifetime and a later cancel would count it as
+                // a dispatch of *that* run. Every run starts from a clean slate.
+                self.tool_starts.lock().unwrap().clear();
+                *self.model_start.lock().unwrap() = None;
+                *self.awaiting_first_token.lock().unwrap() = false;
             }
             Event::PreModel { .. } => {
                 *self.model_start.lock().unwrap() = Some(Instant::now());
