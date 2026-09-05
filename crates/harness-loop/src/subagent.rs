@@ -144,6 +144,29 @@ impl<M: Model> Subagent<M> {
                 iters,
                 usage,
             },
+            // Cancelled is an external stop, not the model looping or running
+            // out of budget — but it carries the same partial-work shape as
+            // `BudgetExhausted`, so it is judged the same way: text on hand
+            // means the work is reported, an empty hand means `Blocked`.
+            Outcome::Cancelled {
+                iters,
+                last_text,
+                usage,
+                ..
+            } => {
+                let empty_handed = last_text.as_deref().map(str::trim).unwrap_or("").is_empty();
+                SubagentReport {
+                    name,
+                    status: if empty_handed {
+                        SubagentStatus::Blocked
+                    } else {
+                        SubagentStatus::DoneWithConcerns
+                    },
+                    text: last_text,
+                    iters,
+                    usage,
+                }
+            }
         };
         tracing::info!(
             subagent = %report.name,
