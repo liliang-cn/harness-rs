@@ -1438,10 +1438,16 @@ impl<M: Model> AgentLoop<M> {
             }
 
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
-            let out = if self.streaming {
-                self.complete_via_stream(&ctx, world).await?
-            } else {
-                self.model.complete(&ctx).await?
+            let Some(out) = self.model_step(&ctx, world).await? else {
+                tracing::info!(iter, "run cancelled during model step");
+                self.hooks.fire(&Event::Cancelled, world);
+                self.hooks.fire(&Event::SessionEnd, world);
+                return Ok(Outcome::Cancelled {
+                    iters: iter + 1,
+                    last_text,
+                    tools_called,
+                    usage: total_usage,
+                });
             };
             self.hooks.fire(&Event::PostModel { out: &out }, world);
 
@@ -2022,6 +2028,34 @@ impl<M: Model> AgentLoop<M> {
             usage: total_usage,
             deadline_reached,
         })
+    }
+
+    /// One model call, racing the run's cancellation token.
+    ///
+    /// `None` means the token fired first. Dropping the un-awaited future is
+    /// what cancels the underlying HTTP request (reqwest aborts on drop) or
+    /// the SSE stream, so the model stops generating rather than finishing
+    /// into a void. `biased` so a token already cancelled wins a tie.
+    async fn model_step(
+        &self,
+        ctx: &Context,
+        world: &mut World,
+    ) -> Result<Option<ModelOutput>, HarnessError> {
+        if self.streaming {
+            tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => Ok(None),
+                r = self.complete_via_stream(ctx, world) => r.map(Some),
+            }
+        } else {
+            tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => Ok(None),
+                r = self.model.complete(ctx) => r
+                    .map(Some)
+                    .map_err(harness_core::HarnessError::Model),
+            }
+        }
     }
 
     /// Drive `Model::stream()` and assemble the result into a `ModelOutput`,
