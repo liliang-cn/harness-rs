@@ -4,7 +4,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// All 30 lifecycle events the framework emits (DESIGN.md §10).
+/// All lifecycle events the framework emits (DESIGN.md §10).
 ///
 /// Lifetimes are intentionally borrowed: hooks must not own these references
 /// past the call.
