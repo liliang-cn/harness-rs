@@ -104,4 +104,7 @@ pub use revise::{
 pub use skill_use::{SKILL_ACTIVATED_EVENT, SkillUseTrace};
 pub use store::{EXPERIENCE_TAG, ExperienceStore};
 pub use trace::ToolTrace;
-pub use transcript::{CapturedTurn, TranscriptRecorder, spawn_transcript_writer};
+pub use transcript::{
+    CapturedTurn, DEFAULT_MAX_CHARS, DEFAULT_TTL_DAYS, TranscriptRecorder, spawn_transcript_writer,
+    spawn_transcript_writer_with_ttl,
+};
