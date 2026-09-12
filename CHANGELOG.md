@@ -3,6 +3,27 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.65
+
+### Fixed
+
+- **The gRPC memory backend also discarded every TTL.** 0.0.64 fixed this on
+  the MCP path and left `CortexdbGrpcMemory` untouched. `SaveMemoryRequest`
+  carries `ttl_seconds`, but `write` built the request with
+  `..Default::default()`, sending `0` — which CortexDB reads as "retain
+  forever". So the same entry had two retentions depending on which transport
+  wrote it, and **0.0.64 did not fix TTLs for anyone using the `grpc`
+  feature.** Both paths now share one `ttl_seconds_from`.
+
+  If you set a TTL against the gRPC backend on 0.0.64 or earlier, it did
+  nothing. Those entries are still there.
+
+### Changed
+
+- **CI now builds and tests the `grpc` feature.** It is not a default feature,
+  so `cargo test --workspace` never compiled that backend — which is why the
+  TTL bug above survived a release that was specifically about TTLs.
+
 ## 0.0.64
 
 ### Fixed
