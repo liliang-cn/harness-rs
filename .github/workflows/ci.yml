@@ -40,6 +40,14 @@ jobs:
       - name: Test harness-mcp-client (test-server feature)
         run: cargo test -p harness-rs-mcp-client --features test-server
 
+      # The `grpc` feature's build script compiles CortexDB's protos with
+      # prost-build, which shells out to `protoc`. Neither runner image ships
+      # it, so this has to be installed before the step below.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # `grpc` is not a default feature, so the workspace run above never
       # compiles that backend — which is how it kept a TTL bug the MCP path
       # had already fixed. A backend nobody builds is a backend nobody tests.
