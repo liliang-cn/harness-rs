@@ -40,6 +40,12 @@ jobs:
       - name: Test harness-mcp-client (test-server feature)
         run: cargo test -p harness-rs-mcp-client --features test-server
 
+      # `grpc` is not a default feature, so the workspace run above never
+      # compiles that backend — which is how it kept a TTL bug the MCP path
+      # had already fixed. A backend nobody builds is a backend nobody tests.
+      - name: Test harness-cortexdb (grpc feature)
+        run: cargo test -p harness-rs-cortexdb --features grpc
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
