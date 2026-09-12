@@ -3,6 +3,45 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.64
+
+### Fixed
+
+- **The CortexDB memory backend silently discarded every TTL.**
+  `MemoryEntry::expires_ms` is documented as a contract — backends MUST filter
+  expired entries out of recall — but `harness-rs-cortexdb` never read the
+  field, so no `ttl_seconds` reached the server. Every caller's TTL became
+  "keep forever" and the write still reported success: `memory_save`'s
+  `ttl_days` argument and `harness-rs-loop`'s `memory_layer` ttl both landed as
+  permanent, while the SurrealDB backend honoured them. One entry, two
+  backends, two answers, no error either way. The seam now translates
+  `expires_ms` into `ttl_seconds`, flooring at one second because CortexDB
+  reads `0` as "retain forever" — the opposite of what an expired entry means.
+  An absent TTL stays absent rather than becoming `0`.
+
+  If you set a TTL against a CortexDB backend before this release, it did
+  nothing. Those entries are still there.
+
+### Changed
+
+- **`spawn_transcript_writer` now gives every captured turn a 30-day TTL**
+  ([`DEFAULT_TTL_DAYS`]). A transcript is a searchable copy of something the
+  app already stores authoritatively, so it is allowed to age out. Use
+  `spawn_transcript_writer_with_ttl(rx, memory, None)` to keep the old
+  forever-retention, and only against a backend something else prunes.
+- **`TranscriptRecorder` caps each turn at 2000 characters**
+  ([`DEFAULT_MAX_CHARS`], override with `with_max_chars`; `0` disables) and
+  **drops a turn byte-identical to the one immediately before it.** A tool
+  result is not a memory: a `read_file` of a 13 KB file was 13 KB of
+  transcript, and an agent re-listing one directory each iteration deposited
+  that listing once per iteration. Truncation counts characters, not bytes, so
+  a CJK transcript survives it. Only *consecutive* repeats are dropped — the
+  same command run again after other work is a real event.
+
+  Taken together with the TTL fix, this addresses a shared brain that had
+  reached roughly 70% raw tool-call echoes, 346 of them byte-identical to
+  another, of which six had ever been recalled.
+
 ## 0.0.63
 
 ### Breaking
