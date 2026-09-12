@@ -1,5 +1,11 @@
 //! Capture every conversation turn into a [`Memory`] as it happens.
 //!
+//! Turns are capped ([`DEFAULT_MAX_CHARS`]), consecutive verbatim repeats are
+//! dropped, and each entry carries a TTL ([`DEFAULT_TTL_DAYS`]). A transcript is
+//! a searchable copy of something the app already stores authoritatively, so it
+//! is allowed to age out — and a backend that ignores `expires_ms` will keep it
+//! forever, which is how a shared brain fills with `[list_dir]` echoes.
+//!
 //! Backend-agnostic: it writes `MemoryEntry`s, so it lands in *any* `Memory`
 //! (JSONL, SQLite recall, a CortexDB-backed brain, …). Pair with
 //! `harness-cortexdb` and turns flow into CortexDB; schedule
@@ -20,7 +26,9 @@
 //! ```
 
 use harness_core::{Event, Hook, HookOutcome, Memory, MemoryEntry, ModelOutput, World};
-use std::sync::Arc;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 /// One captured turn, ready to persist. `role` is `user | assistant | tool`.
@@ -37,7 +45,15 @@ pub struct CapturedTurn {
 pub struct TranscriptRecorder {
     tx: mpsc::UnboundedSender<CapturedTurn>,
     session: String,
+    /// Longest content kept per turn; longer is truncated with a marker.
+    max_chars: usize,
+    /// Hash of the last enqueued turn, to drop verbatim repeats.
+    last: Mutex<Option<u64>>,
 }
+
+/// Default per-turn cap. A tool result is not a memory: a `read_file` of a
+/// 13 KB file is 13 KB of transcript, and recall never wanted the tail of it.
+pub const DEFAULT_MAX_CHARS: usize = 2_000;
 
 impl TranscriptRecorder {
     /// Create a recorder for `session`, returning it plus the receiver its
@@ -48,9 +64,18 @@ impl TranscriptRecorder {
             Self {
                 tx,
                 session: session.into(),
+                max_chars: DEFAULT_MAX_CHARS,
+                last: Mutex::new(None),
             },
             rx,
         )
+    }
+
+    /// Override the per-turn character cap. `0` disables truncation — only do
+    /// that for a backend you are happy to grow without bound.
+    pub fn with_max_chars(mut self, max_chars: usize) -> Self {
+        self.max_chars = max_chars;
+        self
     }
 
     /// Record the user half-turn. The hook only sees the model's output and tool
@@ -64,12 +89,41 @@ impl TranscriptRecorder {
         if content.trim().is_empty() {
             return;
         }
+        let content = truncate(content, self.max_chars);
+
+        // An agent that lists the same directory on every iteration deposits
+        // the same turn on every iteration. Verbatim repeats carry no new
+        // information and crowd out real memories in recall, so drop a turn
+        // identical to the one before it. Only consecutive repeats: the same
+        // command run again after something else happened is a real event.
+        let mut h = DefaultHasher::new();
+        role.hash(&mut h);
+        content.hash(&mut h);
+        let digest = h.finish();
+        {
+            let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+            if *last == Some(digest) {
+                return;
+            }
+            *last = Some(digest);
+        }
+
         let _ = self.tx.send(CapturedTurn {
             session: self.session.clone(),
             role: role.into(),
             content,
         });
     }
+}
+
+/// Cut `s` to at most `max` characters, marking that it was cut. `max == 0`
+/// means no limit. Respects char boundaries, so it is safe on UTF-8.
+fn truncate(s: String, max: usize) -> String {
+    if max == 0 || s.chars().count() <= max {
+        return s;
+    }
+    let kept: String = s.chars().take(max).collect();
+    format!("{kept}… [{} chars truncated]", s.chars().count() - max)
 }
 
 /// Pull the assistant's text out of a model output — its `text`, or the
@@ -111,17 +165,36 @@ impl Hook for TranscriptRecorder {
 /// `spawn_transcript_writer(rx, Arc::new(RedactingMemory::new(cortex)))`
 /// (see `harness_context::RedactingMemory`).
 pub fn spawn_transcript_writer(
+    rx: mpsc::UnboundedReceiver<CapturedTurn>,
+    memory: Arc<dyn Memory>,
+) -> tokio::task::JoinHandle<()> {
+    spawn_transcript_writer_with_ttl(rx, memory, Some(DEFAULT_TTL_DAYS))
+}
+
+/// Default retention for a captured turn. A transcript is a *searchable copy* —
+/// the authoritative one lives in the app's own store — so it should age out.
+/// Without this every turn of every session accumulated forever: one shared
+/// brain reached 70% raw tool-call echoes, six of which had ever been recalled.
+pub const DEFAULT_TTL_DAYS: u32 = 30;
+
+/// As [`spawn_transcript_writer`], with an explicit retention. `None` keeps
+/// turns forever — choose it only when something else prunes the backend.
+pub fn spawn_transcript_writer_with_ttl(
     mut rx: mpsc::UnboundedReceiver<CapturedTurn>,
     memory: Arc<dyn Memory>,
+    ttl_days: Option<u32>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(turn) = rx.recv().await {
-            let entry = MemoryEntry::new(turn.content)
+            let mut entry = MemoryEntry::new(turn.content)
                 .with_source("transcript")
                 .with_tags([
                     format!("role:{}", turn.role),
                     format!("session:{}", turn.session),
                 ]);
+            if let Some(days) = ttl_days {
+                entry = entry.with_ttl_days(days);
+            }
             if let Err(e) = memory.write(entry).await {
                 tracing::warn!(error = %e, "transcript write failed");
             }
@@ -134,6 +207,101 @@ mod tests {
     use super::*;
     use harness_core::{Action, MemoryError, ToolResult};
     use std::sync::Mutex;
+
+    #[test]
+    fn a_long_tool_result_is_truncated_with_a_marker() {
+        let (rec, mut rx) = TranscriptRecorder::new("s");
+        rec.note_user("x".repeat(DEFAULT_MAX_CHARS + 500));
+        let turn = rx.try_recv().expect("one turn");
+        assert!(turn.content.chars().count() < DEFAULT_MAX_CHARS + 100);
+        assert!(
+            turn.content.contains("500 chars truncated"),
+            "{}",
+            turn.content
+        );
+    }
+
+    #[test]
+    fn truncation_respects_char_boundaries() {
+        // Byte slicing would panic here; a Chinese transcript is the common case.
+        let (rec, mut rx) = TranscriptRecorder::new("s");
+        let rec = rec.with_max_chars(3);
+        rec.note_user("你好世界啊");
+        let turn = rx.try_recv().expect("one turn");
+        assert!(turn.content.starts_with("你好世"));
+        assert!(turn.content.contains("2 chars truncated"));
+    }
+
+    #[test]
+    fn a_verbatim_repeat_of_the_previous_turn_is_dropped() {
+        // The shared brain grew 49 identical `[list_dir]` memories from one
+        // agent that re-listed the same directory every iteration.
+        let (rec, mut rx) = TranscriptRecorder::new("s");
+        rec.note_user("[list_dir] {\"path\":\".\"}");
+        rec.note_user("[list_dir] {\"path\":\".\"}");
+        rec.note_user("[list_dir] {\"path\":\".\"}");
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err(), "repeats must not be enqueued");
+    }
+
+    #[test]
+    fn a_repeat_after_something_else_is_kept() {
+        // Only *consecutive* repeats are noise. The same command run again
+        // after other work is a real event in the transcript.
+        let (rec, mut rx) = TranscriptRecorder::new("s");
+        rec.note_user("ls");
+        rec.note_user("cat x");
+        rec.note_user("ls");
+        assert_eq!(rx.try_recv().unwrap().content, "ls");
+        assert_eq!(rx.try_recv().unwrap().content, "cat x");
+        assert_eq!(rx.try_recv().unwrap().content, "ls");
+    }
+
+    #[test]
+    fn max_chars_zero_disables_truncation() {
+        let (rec, mut rx) = TranscriptRecorder::new("s");
+        let rec = rec.with_max_chars(0);
+        let long = "y".repeat(50_000);
+        rec.note_user(long.clone());
+        assert_eq!(rx.try_recv().unwrap().content, long);
+    }
+
+    #[tokio::test]
+    async fn written_turns_carry_a_ttl_by_default() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mem = Arc::new(CapMem::default());
+        let h = spawn_transcript_writer(rx, mem.clone());
+        tx.send(CapturedTurn {
+            session: "s".into(),
+            role: "tool".into(),
+            content: "[ls] {}".into(),
+        })
+        .unwrap();
+        drop(tx);
+        h.await.unwrap();
+        let got = mem.0.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].expires_ms.is_some(),
+            "a transcript turn must expire on its own"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_none_ttl_keeps_turns_forever() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mem = Arc::new(CapMem::default());
+        let h = spawn_transcript_writer_with_ttl(rx, mem.clone(), None);
+        tx.send(CapturedTurn {
+            session: "s".into(),
+            role: "tool".into(),
+            content: "[ls] {}".into(),
+        })
+        .unwrap();
+        drop(tx);
+        h.await.unwrap();
+        assert!(mem.0.lock().unwrap()[0].expires_ms.is_none());
+    }
 
     #[derive(Default)]
     struct CapMem(Mutex<Vec<MemoryEntry>>);
@@ -203,5 +371,19 @@ mod tests {
                 .iter()
                 .all(|e| e.tags.iter().any(|t| t == "session:sess-1"))
         );
+    }
+}
+
+#[cfg(test)]
+mod export_surface {
+    /// The two call sites in superleo reach these three through
+    /// `harness_loop::experience::…`; a re-export that stops being public is a
+    /// downstream break, not a local one, so pin the path here.
+    #[test]
+    fn superleo_facing_exports_resolve() {
+        let _: u32 = crate::experience::DEFAULT_TTL_DAYS;
+        let _ = crate::experience::spawn_transcript_writer_with_ttl;
+        let (_rec, _rx) = crate::experience::TranscriptRecorder::new("s");
+        let _: usize = crate::experience::DEFAULT_MAX_CHARS;
     }
 }

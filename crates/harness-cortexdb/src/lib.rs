@@ -367,6 +367,19 @@ fn build_save_args(
     if let Some(u) = user_id {
         args["user_id"] = json!(u);
     }
+    // `expires_ms` is an absolute instant; CortexDB wants a duration. Translate
+    // rather than drop: a dropped TTL is invisible — the write succeeds and the
+    // entry simply never expires, so the caller learns nothing until the brain
+    // is full of transcripts. Floor at 1s, because CortexDB reads `0` as
+    // "retain forever", which is the opposite of what an expired entry means.
+    if let Some(expires_ms) = entry.expires_ms {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let secs = (expires_ms - now_ms).div_euclid(1000).max(1);
+        args["ttl_seconds"] = json!(secs);
+    }
     args
 }
 
@@ -449,6 +462,42 @@ mod tests {
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0], "topic:deploy");
         assert_eq!(args["metadata"]["source"], "transcript");
+    }
+
+    #[test]
+    fn ttl_is_carried_to_the_server_as_seconds() {
+        // `MemoryEntry::expires_ms` is a contract: the doc on it says backends
+        // MUST filter expired entries out of recall. Dropping it here made every
+        // caller's TTL silently permanent — `memory_save`'s `ttl_days` argument
+        // and `memory_layer`'s ttl both landed as "keep forever" in CortexDB
+        // while the SurrealDB backend honoured them. Same entry, two answers.
+        let entry = MemoryEntry::new("ephemeral").with_ttl_days(7);
+        let args = build_save_args("m3", &entry, "session", "app", None);
+        let ttl = args["ttl_seconds"].as_i64().expect("ttl_seconds sent");
+        // 7 days, minus whatever the test itself took.
+        assert!(
+            (7 * 86_400 - 60..=7 * 86_400).contains(&ttl),
+            "expected ~7d in seconds, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn no_ttl_means_no_ttl_field() {
+        // Absent, not zero: CortexDB reads `ttl_seconds: 0` as "retain forever",
+        // so sending 0 would be right by accident. Say nothing instead.
+        let entry = MemoryEntry::new("durable fact");
+        let args = build_save_args("m4", &entry, "global", "app", None);
+        assert!(args.get("ttl_seconds").is_none());
+    }
+
+    #[test]
+    fn already_expired_entry_gets_the_shortest_ttl_not_a_negative_one() {
+        // A negative ttl_seconds is not in CortexDB's vocabulary; it would be
+        // rejected or, worse, read as unset. Floor at 1s so it dies on its own.
+        let mut entry = MemoryEntry::new("stale");
+        entry.expires_ms = Some(1); // 1970
+        let args = build_save_args("m5", &entry, "session", "app", None);
+        assert_eq!(args["ttl_seconds"], 1);
     }
 
     #[test]
