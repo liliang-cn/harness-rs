@@ -34,7 +34,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.63"
+version = "0.0.64"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
@@ -47,21 +47,21 @@ authors = ["liliang"]
 # internal — alias keys keep the in-source `use harness_core::*` style;
 # `package = ...` selects the on-crates.io name (`harness` is taken by an
 # unrelated benchmarking crate, so we publish as `harness-rs-*`).
-harness            = { package = "harness-rs",            path = "crates/harness",            version = "0.0.63" }
-harness-core       = { package = "harness-rs-core",       path = "crates/harness-core",       version = "0.0.63" }
-harness-macros     = { package = "harness-rs-macros",     path = "crates/harness-macros",     version = "0.0.63" }
-harness-context    = { package = "harness-rs-context",    path = "crates/harness-context",    version = "0.0.63" }
-harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.63" }
-harness-serve      = { package = "harness-rs-serve",      path = "crates/harness-serve",      version = "0.0.63" }
-harness-cortexdb   = { package = "harness-rs-cortexdb",     path = "crates/harness-cortexdb",     version = "0.0.63" }
-harness-mcp-client = { package = "harness-rs-mcp-client",   path = "crates/harness-mcp-client",   version = "0.0.63" }
-harness-tools      = { package = "harness-rs-tools",      path = "crates/harness-tools",      version = "0.0.63" }
-harness-tools-docs = { package = "harness-rs-tools-docs", path = "crates/harness-tools-docs", version = "0.0.63" }
-harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.63" }
-harness-tools-sql  = { package = "harness-rs-tools-sql",  path = "crates/harness-tools-sql",  version = "0.0.63" }
-harness-memory     = { package = "harness-rs-memory",     path = "crates/harness-memory",     version = "0.0.63" }
-harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.63" }
-harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.63" }
+harness            = { package = "harness-rs",            path = "crates/harness",            version = "0.0.64" }
+harness-core       = { package = "harness-rs-core",       path = "crates/harness-core",       version = "0.0.64" }
+harness-macros     = { package = "harness-rs-macros",     path = "crates/harness-macros",     version = "0.0.64" }
+harness-context    = { package = "harness-rs-context",    path = "crates/harness-context",    version = "0.0.64" }
+harness-loop       = { package = "harness-rs-loop",       path = "crates/harness-loop",       version = "0.0.64" }
+harness-serve      = { package = "harness-rs-serve",      path = "crates/harness-serve",      version = "0.0.64" }
+harness-cortexdb   = { package = "harness-rs-cortexdb",     path = "crates/harness-cortexdb",     version = "0.0.64" }
+harness-mcp-client = { package = "harness-rs-mcp-client",   path = "crates/harness-mcp-client",   version = "0.0.64" }
+harness-tools      = { package = "harness-rs-tools",      path = "crates/harness-tools",      version = "0.0.64" }
+harness-tools-docs = { package = "harness-rs-tools-docs", path = "crates/harness-tools-docs", version = "0.0.64" }
+harness-tools-web  = { package = "harness-rs-tools-web",  path = "crates/harness-tools-web",  version = "0.0.64" }
+harness-tools-sql  = { package = "harness-rs-tools-sql",  path = "crates/harness-tools-sql",  version = "0.0.64" }
+harness-memory     = { package = "harness-rs-memory",     path = "crates/harness-memory",     version = "0.0.64" }
+harness-models     = { package = "harness-rs-models",     path = "crates/harness-models",     version = "0.0.64" }
+harness-cli        = { package = "harness-rs-cli",        path = "crates/harness-cli",        version = "0.0.64" }
 
 # external
 async-trait = "0.1"
