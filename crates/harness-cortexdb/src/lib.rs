@@ -323,6 +323,24 @@ impl Memory for CortexdbMemory {
 /// CortexDB's first-class `role` / `session_id` columns (so a transcript can be
 /// queried and ordered by `session_id + role`, not just `json_extract` on
 /// metadata); all remaining tags + `source` go into `metadata`.
+/// Translate `MemoryEntry::expires_ms` — an absolute instant — into the
+/// duration CortexDB wants. `None` stays `None`: absent, not zero, because
+/// CortexDB reads `ttl_seconds: 0` as "retain forever", which is the opposite
+/// of what an expired entry means. An instant already past floors at one
+/// second so it dies on its own rather than being sent as a negative.
+///
+/// Both transports call this. They previously disagreed — the MCP path sent a
+/// TTL and the gRPC path left the field at its `Default`, i.e. permanent — so
+/// the same entry had two retentions depending on how it was written.
+pub(crate) fn ttl_seconds_from(expires_ms: Option<i64>) -> Option<i64> {
+    let expires_ms = expires_ms?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Some((expires_ms - now_ms).div_euclid(1000).max(1))
+}
+
 fn build_save_args(
     id: &str,
     entry: &MemoryEntry,
@@ -372,12 +390,7 @@ fn build_save_args(
     // entry simply never expires, so the caller learns nothing until the brain
     // is full of transcripts. Floor at 1s, because CortexDB reads `0` as
     // "retain forever", which is the opposite of what an expired entry means.
-    if let Some(expires_ms) = entry.expires_ms {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let secs = (expires_ms - now_ms).div_euclid(1000).max(1);
+    if let Some(secs) = ttl_seconds_from(entry.expires_ms) {
         args["ttl_seconds"] = json!(secs);
     }
     args

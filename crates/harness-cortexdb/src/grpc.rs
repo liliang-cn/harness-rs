@@ -281,21 +281,14 @@ impl Memory for CortexdbGrpcMemory {
         } else {
             entry.id.clone()
         };
-        let (role, session, tags) = split_tags(&entry.tags);
-        let req = SaveMemoryRequest {
-            memory_id: id,
-            user_id: self.user_id.clone().unwrap_or_default(),
-            // A per-entry `session:` tag wins; otherwise the configured default.
-            session_id: session
-                .or_else(|| self.session_id.clone())
-                .unwrap_or_default(),
-            scope: self.scope.clone(),
-            namespace: self.namespace.clone(),
-            role: role.unwrap_or_default(),
-            content: entry.content,
-            metadata: build_metadata(&tags, entry.source.as_deref()),
-            ..Default::default()
-        };
+        let req = build_save_request(
+            id,
+            entry,
+            &self.scope,
+            &self.namespace,
+            self.user_id.as_deref(),
+            self.session_id.as_deref(),
+        );
         self.client
             .clone()
             .save_memory(self.authed(req))
@@ -305,9 +298,84 @@ impl Memory for CortexdbGrpcMemory {
     }
 }
 
+/// Build the `SaveMemory` request. A free function so the mapping can be
+/// tested without a server, the way `build_save_args` is on the MCP path —
+/// the two transports must produce the same entry from the same input.
+fn build_save_request(
+    id: String,
+    entry: MemoryEntry,
+    scope: &str,
+    namespace: &str,
+    user_id: Option<&str>,
+    default_session: Option<&str>,
+) -> SaveMemoryRequest {
+    let (role, session, tags) = split_tags(&entry.tags);
+    SaveMemoryRequest {
+        memory_id: id,
+        user_id: user_id.unwrap_or_default().to_string(),
+        // A per-entry `session:` tag wins; otherwise the configured default.
+        session_id: session
+            .or_else(|| default_session.map(str::to_string))
+            .unwrap_or_default(),
+        scope: scope.to_string(),
+        namespace: namespace.to_string(),
+        role: role.unwrap_or_default(),
+        content: entry.content,
+        metadata: build_metadata(&tags, entry.source.as_deref()),
+        // Not left to `Default`: 0 means "retain forever" to CortexDB, so a
+        // defaulted field silently overrode whatever the caller asked for.
+        ttl_seconds: crate::ttl_seconds_from(entry.expires_ms).unwrap_or(0) as i32,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two transports must also agree on retention. `SaveMemoryRequest`
+    /// carries `ttl_seconds`, but this path built the request with
+    /// `..Default::default()`, which left it 0 — and CortexDB reads 0 as
+    /// "retain forever". So a TTL honoured over MCP was silently permanent
+    /// over gRPC: same brain, same entry, two answers.
+    #[test]
+    fn ttl_reaches_the_request_the_way_it_does_over_mcp() {
+        // Asserted on the request this path actually sends, not on the helper
+        // it calls — a test of the helper alone stayed green while `write`
+        // left the field at its Default, which is how this bug survived.
+        let entry = MemoryEntry::new("ephemeral").with_ttl_days(7);
+        let req = build_save_request("m1".into(), entry, "session", "app", None, None);
+        assert!(
+            (7 * 86_400 - 60..=7 * 86_400).contains(&req.ttl_seconds),
+            "expected ~7d in seconds, got {}",
+            req.ttl_seconds
+        );
+    }
+
+    #[test]
+    fn no_ttl_sends_zero_which_the_server_reads_as_forever() {
+        // 0 is the only thing an int32 field can carry for "unset", and
+        // CortexDB reads it as retain-forever. That is correct for an entry
+        // with no expiry — but it means the field cannot distinguish "no TTL"
+        // from "TTL of zero", so callers must not send a zero-length TTL.
+        let req = build_save_request(
+            "m2".into(),
+            MemoryEntry::new("durable"),
+            "global",
+            "app",
+            None,
+            None,
+        );
+        assert_eq!(req.ttl_seconds, 0);
+    }
+
+    #[test]
+    fn an_already_expired_entry_gets_the_shortest_ttl_not_a_negative_one() {
+        let mut entry = MemoryEntry::new("stale");
+        entry.expires_ms = Some(1); // 1970
+        let req = build_save_request("m3".into(), entry, "session", "app", None, None);
+        assert_eq!(req.ttl_seconds, 1);
+    }
 
     /// The two transports must agree on what a tag means, or an entry written
     /// over gRPC reads back differently over MCP — same brain, two dialects.
