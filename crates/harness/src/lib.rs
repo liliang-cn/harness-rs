@@ -77,7 +77,7 @@
 //! - [`harness_macros`] — `#[skill]` / `#[tool]` / `#[guide]` / `#[sensor]` /
 //!   `#[hook]` proc-macros.
 //! - `harness_loop` — `AgentLoop` ReAct executor with auto-fix sensors.
-//! - `harness_loop::hooks` — `HookBus` over 27 lifecycle events.
+//! - `harness_loop::hooks` — `HookBus` over the lifecycle events.
 //! - `harness_loop::blueprint` — hybrid deterministic + agent state machine.
 //! - `harness_loop::compactor` — five-stage progressive context compaction.
 //! - `harness_loop::sandbox` — `WorktreeSandbox`, `ContainerSandbox`, and the

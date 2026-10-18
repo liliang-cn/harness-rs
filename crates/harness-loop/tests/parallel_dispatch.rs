@@ -129,3 +129,118 @@ async fn read_only_calls_dispatch_concurrently() {
         other => panic!("expected Done, got {other:?}"),
     }
 }
+
+/// Every `ToolTimed` the loop fires, as `(call_id, started_ms, finished_ms)`.
+struct TimingWitness(std::sync::Mutex<Vec<(String, i64, i64)>>);
+impl harness_core::Hook for TimingWitness {
+    fn name(&self) -> &str {
+        "timing-witness"
+    }
+    fn matches(&self, ev: &harness_core::Event<'_>) -> bool {
+        matches!(ev, harness_core::Event::ToolTimed { .. })
+    }
+    fn fire(&self, ev: &harness_core::Event<'_>, _w: &mut World) -> harness_core::HookOutcome {
+        if let harness_core::Event::ToolTimed {
+            action,
+            started_ms,
+            finished_ms,
+        } = ev
+        {
+            self.0
+                .lock()
+                .unwrap()
+                .push((action.call_id.clone(), *started_ms, *finished_ms));
+        }
+        harness_core::HookOutcome::Allow
+    }
+}
+
+/// Parallel calls are dispatched before their `PreToolUse` fires, so the gap
+/// between `PreToolUse` and `PostToolUse` says nothing about how long they ran.
+/// `ToolTimed` carries when each one really ran: about 150ms each, overlapping.
+#[tokio::test]
+async fn each_call_reports_when_it_really_ran() {
+    let mut world = harness_context::default_world(".");
+    let witness = Arc::new(TimingWitness(Default::default()));
+    AgentLoop::new(ThreeReads {
+        turn: AtomicU32::new(0),
+    })
+    .with_tool(Arc::new(SlowRead::new()))
+    .with_hook(witness.clone())
+    .run_with_max_iters(
+        harness_core::Task {
+            description: "go".into(),
+            source: None,
+            deadline: None,
+        },
+        &mut world,
+        4,
+    )
+    .await
+    .unwrap();
+
+    let timed = witness.0.lock().unwrap().clone();
+    assert_eq!(timed.len(), 3, "{timed:?}");
+    for (id, start, end) in &timed {
+        assert!(end - start >= 140, "{id} ran {}ms, not ~150", end - start);
+    }
+    let latest_start = timed.iter().map(|t| t.1).max().unwrap();
+    let earliest_end = timed.iter().map(|t| t.2).min().unwrap();
+    assert!(
+        latest_start < earliest_end,
+        "the three calls overlap in time: {timed:?}"
+    );
+}
+
+/// `TelemetryHook`'s per-call duration and the run's `tool_ms` come from the
+/// same timing, so three parallel 150ms reads cost ~450ms of tool time, not ~0.
+#[tokio::test]
+async fn telemetry_times_parallel_calls_by_when_they_ran() {
+    use std::io::Write;
+    #[derive(Clone)]
+    struct Buf(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf(Default::default());
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    {
+        let _g = tracing::subscriber::set_default(subscriber);
+        let mut world = harness_context::default_world(".");
+        AgentLoop::new(ThreeReads {
+            turn: AtomicU32::new(0),
+        })
+        .with_tool(Arc::new(SlowRead::new()))
+        .with_hook(Arc::new(harness_loop::TelemetryHook::new()))
+        .run_with_max_iters(
+            harness_core::Task {
+                description: "go".into(),
+                source: None,
+                deadline: None,
+            },
+            &mut world,
+            4,
+        )
+        .await
+        .unwrap();
+    }
+    let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    let tool_ms: u64 = out
+        .split("tool_ms=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no tool_ms in run.end:\n{out}"));
+    assert!(tool_ms >= 420, "tool_ms={tool_ms}, expected ~450:\n{out}");
+}

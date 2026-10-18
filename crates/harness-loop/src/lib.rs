@@ -48,6 +48,7 @@ pub use tokio_util::sync::CancellationToken;
 pub mod replay;
 pub mod subagent;
 pub mod telemetry;
+pub mod timeline;
 
 pub use learning::*;
 pub use memory_layer::*;
@@ -107,6 +108,14 @@ fn finish_chat(
         }
     };
     meters::model_call(info, started.elapsed(), end);
+}
+
+/// A tool call's result and when it ran, by the World clock — the figures
+/// behind [`Event::ToolTimed`].
+struct Dispatched {
+    result: ToolResult,
+    started_ms: i64,
+    finished_ms: i64,
 }
 
 /// The span one model call runs in. Named `chat {model}` for OTLP backends,
@@ -1741,7 +1750,7 @@ impl<M: Model> AgentLoop<M> {
             // still a cost the detector does not need to pay.
             let mut round_results: Vec<u64> = Vec::new();
 
-            let mut prefetched: HashMap<String, ToolResult> = HashMap::new();
+            let mut prefetched: HashMap<String, Dispatched> = HashMap::new();
             {
                 let lead: Vec<&_> = out
                     .tool_calls
@@ -1814,7 +1823,11 @@ impl<M: Model> AgentLoop<M> {
 
                 // Use the concurrently-prefetched result if we have one;
                 // otherwise dispatch now.
-                let result = if let Some(r) = prefetched.remove(&action.call_id) {
+                let Dispatched {
+                    result,
+                    started_ms,
+                    finished_ms,
+                } = if let Some(r) = prefetched.remove(&action.call_id) {
                     r
                 } else {
                     self.dispatch_bounded(&action, world).await
@@ -1841,6 +1854,14 @@ impl<M: Model> AgentLoop<M> {
                     content: self.shape_result(&action, &result, &mut answered, &world.repo.root),
                     ..result
                 };
+                self.hooks.fire(
+                    &Event::ToolTimed {
+                        action: &action,
+                        started_ms,
+                        finished_ms,
+                    },
+                    world,
+                );
                 self.hooks.fire(
                     &Event::PostToolUse {
                         action: &action,
@@ -2355,7 +2376,7 @@ impl<M: Model> AgentLoop<M> {
     ///
     /// Runs in an `execute_tool` span, so parallel calls show up as overlapping
     /// bars in a trace and a failed one is marked as an error.
-    async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult {
+    async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> Dispatched {
         let span = tracing::info_span!(
             target: "harness.telemetry",
             "execute_tool",
@@ -2367,11 +2388,14 @@ impl<M: Model> AgentLoop<M> {
             "gen_ai.tool.call.id" = %action.call_id,
             ok = Empty,
         );
+        let clock = world.clock.clone();
+        let started_ms = clock.now_ms();
         let started = std::time::Instant::now();
         let r = self
             .dispatch_bounded_in_span(action, world)
             .instrument(span.clone())
             .await;
+        let finished_ms = clock.now_ms();
         meters::tool_call(&action.tool, r.ok, started.elapsed());
         span.record("ok", r.ok);
         if !r.ok {
@@ -2380,7 +2404,11 @@ impl<M: Model> AgentLoop<M> {
                 span.record("otel.status_message", msg);
             }
         }
-        r
+        Dispatched {
+            result: r,
+            started_ms,
+            finished_ms,
+        }
     }
 
     async fn dispatch_bounded_in_span(&self, action: &Action, world: &mut World) -> ToolResult {

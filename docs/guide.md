@@ -141,6 +141,7 @@ recorder — or `harness_serve::prometheus::install()` and merge
 harness run "…" --workspace ./ws --write --record run.jsonl   # capture live
 harness replay run.jsonl --workspace ./ws                      # re-run offline, no LLM
 harness trace  run.jsonl --verbose                             # inspect the timeline
+harness trace  run.jsonl --html run.html                       # …or as an HTML timeline
 ```
 
 `replay` drives the loop from the recorded model outputs (a `MockModel`) and

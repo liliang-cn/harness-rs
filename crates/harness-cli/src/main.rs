@@ -50,6 +50,11 @@ enum Cmd {
         /// tool result preview, and failure reasons (errors / hint / message).
         #[arg(long, short)]
         verbose: bool,
+        /// Write the run as a self-contained HTML timeline to this path
+        /// instead of printing it: every model and tool call as a bar, parallel
+        /// calls overlapping, a click for details.
+        #[arg(long, value_name = "PATH")]
+        html: Option<PathBuf>,
     },
     /// Deterministically re-execute a recorded session log (from
     /// `SessionRecorder`) offline — no LLM calls. The recorded model outputs
@@ -376,8 +381,14 @@ async fn main() -> anyhow::Result<()> {
         } => scaffold_new_project(name, path, workspace, local),
         Cmd::Trace {
             file,
+            html: Some(out),
+            ..
+        } => write_session_timeline(file, out),
+        Cmd::Trace {
+            file,
             summary,
             verbose,
+            html: None,
         } => print_session_trace(file, summary, verbose),
         Cmd::Replay {
             file,
@@ -1150,6 +1161,19 @@ fn print_session_trace(file: PathBuf, summary_only: bool, verbose: bool) -> anyh
         stats.input_tokens, stats.output_tokens
     );
     println!("  duration:      {} ms", stats.duration_ms);
+    Ok(())
+}
+
+fn write_session_timeline(file: PathBuf, out: PathBuf) -> anyhow::Result<()> {
+    let events = harness_loop::read_session(&file)
+        .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
+    let title = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.display().to_string());
+    std::fs::write(&out, harness_loop::timeline::render_html(&events, &title))
+        .map_err(|e| anyhow::anyhow!("write {}: {e}", out.display()))?;
+    println!("{}", out.display());
     Ok(())
 }
 

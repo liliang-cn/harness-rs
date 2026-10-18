@@ -21,6 +21,7 @@ use std::sync::Mutex;
 /// through serde without lifetime gymnastics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SessionEvent {
     Start {
         ts_ms: i64,
@@ -43,6 +44,15 @@ pub enum SessionEvent {
         ts_ms: i64,
         call_id: String,
         result: ToolResult,
+    },
+    /// When the call really ran ([`Event::ToolTimed`]). For parallel calls the
+    /// `PreTool` / `PostTool` stamps are both taken after the work is done;
+    /// this is the interval to draw. Absent from logs recorded before 0.0.66.
+    ToolTimed {
+        ts_ms: i64,
+        call_id: String,
+        started_ms: i64,
+        finished_ms: i64,
     },
     Sensor {
         ts_ms: i64,
@@ -147,6 +157,16 @@ impl Hook for SessionRecorder {
                 ts_ms: ts,
                 call_id: action.call_id.clone(),
                 result: (*result).clone(),
+            }),
+            Event::ToolTimed {
+                action,
+                started_ms,
+                finished_ms,
+            } => Some(SessionEvent::ToolTimed {
+                ts_ms: ts,
+                call_id: action.call_id.clone(),
+                started_ms: *started_ms,
+                finished_ms: *finished_ms,
             }),
             Event::PostSensor { sensor, signals } => Some(SessionEvent::Sensor {
                 ts_ms: ts,
@@ -263,6 +283,7 @@ impl SessionStats {
                 | SessionEvent::PostModel { ts_ms, .. }
                 | SessionEvent::PreTool { ts_ms, .. }
                 | SessionEvent::PostTool { ts_ms, .. }
+                | SessionEvent::ToolTimed { ts_ms, .. }
                 | SessionEvent::Sensor { ts_ms, .. }
                 | SessionEvent::PreCompact { ts_ms, .. }
                 | SessionEvent::PostCompact { ts_ms, .. }
@@ -347,6 +368,12 @@ pub fn format_event_verbose(e: &SessionEvent) -> String {
                 }
             )
         }
+        SessionEvent::ToolTimed {
+            call_id,
+            started_ms,
+            finished_ms,
+            ..
+        } => format!("  ⏱ tool {call_id} ran {}ms", finished_ms - started_ms),
         SessionEvent::Sensor { id, signals, .. } => {
             format!("  ⚑ sensor {id}: {signals} signal(s)")
         }
@@ -459,6 +486,12 @@ pub fn format_event_short(e: &SessionEvent) -> String {
         } => {
             format!("  ← tool {} ok={}", call_id, result.ok)
         }
+        SessionEvent::ToolTimed {
+            call_id,
+            started_ms,
+            finished_ms,
+            ..
+        } => format!("  ⏱ tool {call_id} ran {}ms", finished_ms - started_ms),
         SessionEvent::Sensor { id, signals, .. } => format!("  ⚑ sensor {id}: {signals} signal(s)"),
         SessionEvent::PreCompact { stage, .. } => format!("  ⇩ pre-compact {stage:?}"),
         SessionEvent::PostCompact { stage, .. } => format!("  ⇧ post-compact {stage:?}"),
