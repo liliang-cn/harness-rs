@@ -28,3 +28,8 @@ anyhow         = { workspace = true }
 tracing        = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono         = { workspace = true }
+
+[features]
+# Export each run's trace over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is set
+# (gRPC, e.g. http://localhost:4317; service name from OTEL_SERVICE_NAME).
+otel = ["harness-loop/otel"]

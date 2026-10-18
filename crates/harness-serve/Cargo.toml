@@ -51,6 +51,11 @@ cors = ["http", "dep:tower-http"]
 # Expose `grpc::service()` — a tonic Chat service (unary Say + server-streaming
 # SayStream). Requires `protoc` at build time.
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
+# Re-enable `harness-rs-loop/otel`, so a server binary can ship its traces over
+# OTLP with `harness_loop::otel::init_tracing_with_otlp` without depending on
+# the loop crate just to flip a feature.
+otel = ["harness-loop/otel"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }
