@@ -281,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
     // subscriber is built, or the flag would need a second process to take.
     let cli = Cli::parse();
     // Held for the life of the process: dropping it flushes the OTLP exporter.
+    #[cfg_attr(not(feature = "otel"), allow(clippy::let_unit_value))]
     let _otel = tracing_subscriber_init(matches!(
         cli.cmd,
         Cmd::Run {

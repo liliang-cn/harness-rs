@@ -42,6 +42,8 @@ pub mod auth;
 pub mod grpc;
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "prometheus")]
+pub mod prometheus;
 pub mod service;
 pub mod session;
 

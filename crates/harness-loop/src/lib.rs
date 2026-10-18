@@ -30,6 +30,7 @@ pub mod acceptance;
 pub mod goal;
 pub mod learning;
 pub mod memory_layer;
+pub mod meters;
 #[cfg(feature = "otel")]
 pub mod otel;
 pub mod profile_guide;
@@ -72,19 +73,61 @@ use std::time::Duration;
 use tracing::Instrument;
 use tracing::field::Empty;
 
-/// What a finished model call put on its `chat` span.
-fn record_chat(span: &tracing::Span, out: &ModelOutput) {
-    span.record("gen_ai.usage.input_tokens", out.usage.input_tokens)
-        .record("gen_ai.usage.output_tokens", out.usage.output_tokens)
-        .record(
-            "gen_ai.usage.cached_input_tokens",
-            out.usage.cached_input_tokens,
-        )
-        .record(
-            "gen_ai.response.finish_reasons",
-            format!("{:?}", out.stop_reason),
-        )
-        .record("tool_calls", out.tool_calls.len());
+/// What a finished model call leaves behind: fields on its `chat` span, and
+/// its duration and tokens as metrics.
+fn finish_chat(
+    span: &tracing::Span,
+    info: &harness_core::ModelInfo,
+    started: std::time::Instant,
+    result: Option<Result<&ModelOutput, String>>,
+) {
+    let end = match &result {
+        Some(Ok(out)) => {
+            span.record("gen_ai.usage.input_tokens", out.usage.input_tokens)
+                .record("gen_ai.usage.output_tokens", out.usage.output_tokens)
+                .record(
+                    "gen_ai.usage.cached_input_tokens",
+                    out.usage.cached_input_tokens,
+                )
+                .record(
+                    "gen_ai.response.finish_reasons",
+                    format!("{:?}", out.stop_reason),
+                )
+                .record("tool_calls", out.tool_calls.len());
+            meters::ModelCallEnd::Done(&out.usage)
+        }
+        Some(Err(e)) => {
+            span.record("otel.status_code", "error")
+                .record("otel.status_message", e.as_str());
+            meters::ModelCallEnd::Failed
+        }
+        None => {
+            span.record("otel.status_message", "cancelled");
+            meters::ModelCallEnd::Cancelled
+        }
+    };
+    meters::model_call(info, started.elapsed(), end);
+}
+
+/// The span one model call runs in. Named `chat {model}` for OTLP backends,
+/// which group by span name; fields per the GenAI conventions.
+fn chat_span(info: &harness_core::ModelInfo) -> tracing::Span {
+    tracing::info_span!(
+        target: "harness.telemetry",
+        "chat",
+        "otel.name" = %format!("chat {}", info.model),
+        "otel.kind" = "client",
+        "otel.status_code" = Empty,
+        "otel.status_message" = Empty,
+        "gen_ai.operation.name" = "chat",
+        "gen_ai.provider.name" = %info.provider,
+        "gen_ai.request.model" = %info.model,
+        "gen_ai.usage.input_tokens" = Empty,
+        "gen_ai.usage.output_tokens" = Empty,
+        "gen_ai.usage.cached_input_tokens" = Empty,
+        "gen_ai.response.finish_reasons" = Empty,
+        tool_calls = Empty,
+    )
 }
 
 /// Governs the loop's stuck-detector. When the model repeats the *same* tool
@@ -1240,17 +1283,21 @@ impl<M: Model> AgentLoop<M> {
             "otel.status_code" = Empty,
             "otel.status_message" = Empty,
         );
+        let started = std::time::Instant::now();
         let r = self.run_in_span(ctx, world).instrument(span.clone()).await;
-        match &r {
-            Ok(Outcome::Done { .. }) => span.record("outcome", "done"),
-            Ok(Outcome::BudgetExhausted { .. }) => span.record("outcome", "budget_exhausted"),
-            Ok(Outcome::Stuck { .. }) => span.record("outcome", "stuck"),
-            Ok(Outcome::Cancelled { .. }) => span.record("outcome", "cancelled"),
-            Err(e) => span
-                .record("outcome", "error")
-                .record("otel.status_code", "error")
-                .record("otel.status_message", e.to_string()),
+        let outcome = match &r {
+            Ok(Outcome::Done { .. }) => "done",
+            Ok(Outcome::BudgetExhausted { .. }) => "budget_exhausted",
+            Ok(Outcome::Stuck { .. }) => "stuck",
+            Ok(Outcome::Cancelled { .. }) => "cancelled",
+            Err(e) => {
+                span.record("otel.status_code", "error")
+                    .record("otel.status_message", e.to_string());
+                "error"
+            }
         };
+        span.record("outcome", outcome);
+        meters::run(outcome, started.elapsed());
         r
     }
 
@@ -1475,6 +1522,7 @@ impl<M: Model> AgentLoop<M> {
                         turns_after = ctx.history.len(),
                         "compacted context"
                     );
+                    meters::compaction(stage, before, budget.used);
                     self.hooks.fire(
                         &Event::PostCompact {
                             stage,
@@ -2143,7 +2191,9 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         partial: &mut String,
     ) -> Result<Option<ModelOutput>, HarnessError> {
-        let span = self.chat_span();
+        let info = self.model.info();
+        let span = chat_span(&info);
+        let started = std::time::Instant::now();
         let r = async {
             if self.streaming {
                 tokio::select! {
@@ -2163,39 +2213,13 @@ impl<M: Model> AgentLoop<M> {
         }
         .instrument(span.clone())
         .await;
-        match &r {
-            Ok(Some(out)) => record_chat(&span, out),
-            Ok(None) => {
-                span.record("otel.status_message", "cancelled");
-            }
-            Err(e) => {
-                span.record("otel.status_code", "error")
-                    .record("otel.status_message", e.to_string());
-            }
-        }
+        let end = match &r {
+            Ok(Some(out)) => Some(Ok(out)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e.to_string())),
+        };
+        finish_chat(&span, &info, started, end);
         r
-    }
-
-    /// The span one model call runs in. Named `chat {model}` for OTLP
-    /// backends, which group by span name; fields per the GenAI conventions.
-    fn chat_span(&self) -> tracing::Span {
-        let info = self.model.info();
-        tracing::info_span!(
-            target: "harness.telemetry",
-            "chat",
-            "otel.name" = %format!("chat {}", info.model),
-            "otel.kind" = "client",
-            "otel.status_code" = Empty,
-            "otel.status_message" = Empty,
-            "gen_ai.operation.name" = "chat",
-            "gen_ai.provider.name" = %info.provider,
-            "gen_ai.request.model" = %info.model,
-            "gen_ai.usage.input_tokens" = Empty,
-            "gen_ai.usage.output_tokens" = Empty,
-            "gen_ai.usage.cached_input_tokens" = Empty,
-            "gen_ai.response.finish_reasons" = Empty,
-            tool_calls = Empty,
-        )
     }
 
     /// Drive `Model::stream()` and assemble the result into a `ModelOutput`,
@@ -2343,10 +2367,12 @@ impl<M: Model> AgentLoop<M> {
             "gen_ai.tool.call.id" = %action.call_id,
             ok = Empty,
         );
+        let started = std::time::Instant::now();
         let r = self
             .dispatch_bounded_in_span(action, world)
             .instrument(span.clone())
             .await;
+        meters::tool_call(&action.tool, r.ok, started.elapsed());
         span.record("ok", r.ok);
         if !r.ok {
             span.record("otel.status_code", "error");
@@ -2579,22 +2605,22 @@ impl<M: Model> AgentLoop<M> {
         // `biased` with the token first means an already-cancelled token wins
         // the race outright, so no separate `is_cancelled()` pre-check is
         // needed here — the select is the check.
-        let span = self.chat_span();
+        let info = self.model.info();
+        let span = chat_span(&info);
+        let started = std::time::Instant::now();
         let result = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => None,
             r = self.model.complete(ctx).instrument(span.clone()) => Some(r),
         };
-        match &result {
-            Some(Ok(out)) => record_chat(&span, out),
-            Some(Err(e)) => {
-                span.record("otel.status_code", "error")
-                    .record("otel.status_message", e.to_string());
-            }
-            None => {
-                span.record("otel.status_message", "cancelled");
-            }
-        }
+        finish_chat(
+            &span,
+            &info,
+            started,
+            result
+                .as_ref()
+                .map(|r| r.as_ref().map_err(|e| e.to_string())),
+        );
         ctx.tools = saved_tools;
 
         let Some(result) = result else {

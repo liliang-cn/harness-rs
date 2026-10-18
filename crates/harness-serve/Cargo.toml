@@ -33,6 +33,9 @@ futures         = { workspace = true }
 axum = { version = "0.8", optional = true }
 # Optional CORS layer for the HTTP transport (feature `cors`).
 tower-http = { version = "0.6", features = ["cors"], optional = true }
+# Optional Prometheus exporter for the loop's metrics (feature `prometheus`).
+# Without the default http-listener: `/metrics` is served by our own axum router.
+metrics-exporter-prometheus = { version = "0.18", default-features = false, optional = true }
 # Optional gRPC transport.
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
@@ -55,7 +58,12 @@ grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
 # OTLP with `harness_loop::otel::init_tracing_with_otlp` without depending on
 # the loop crate just to flip a feature.
 otel = ["harness-loop/otel"]
+# Expose `prometheus::install()` + `prometheus::router()` — the loop's metrics
+# (`harness_loop::meters`) as `GET /metrics` in the Prometheus text format.
+prometheus = ["http", "dep:metrics-exporter-prometheus"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
+metrics = "0.24"
+tower = { version = "0.5", features = ["util"] }

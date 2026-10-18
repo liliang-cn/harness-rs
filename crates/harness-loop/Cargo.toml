@@ -39,6 +39,9 @@ futures           = { workspace = true }
 # pins for its audit hash chain; not a workspace entry because only these two
 # crates hash anything.
 sha2              = "0.10"
+# Metrics facade (src/meters.rs): the loop records, the binary installs an
+# exporter. No recorder, no cost — same contract as `tracing`.
+metrics           = "0.24"
 
 # OTLP export (feature `otel`) — optional, single-crate blast radius. The library
 # instruments with plain `tracing`; these turn spans into OpenTelemetry only when
@@ -78,6 +81,8 @@ tokio             = { workspace = true, features = ["macros", "rt-multi-thread"]
 tracing-subscriber = { workspace = true }
 # `tests/otel_export.rs`: catch the exported spans in memory instead of a collector.
 opentelemetry_sdk  = { version = "0.32", features = ["testing"] }
+# `tests/metrics.rs`: an in-memory recorder to read the metrics back.
+metrics-util       = { version = "0.20", default-features = false, features = ["debugging"] }
 
 [[bench]]
 name = "seal_cost"
