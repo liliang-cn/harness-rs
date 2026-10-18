@@ -45,9 +45,9 @@ impl Drop for OtelGuard {
 
 /// Build an OTLP-backed tracer provider exporting to `endpoint` (gRPC, e.g.
 /// `http://localhost:4317`), tagging spans with `service.name = service_name`.
-/// Returns the OpenTelemetry tracer plus a guard that flushes on drop. Use this
-/// when you compose your own subscriber; otherwise reach for
-/// [`init_tracing_with_otlp`].
+/// Returns the OpenTelemetry tracer plus a guard that flushes on drop. Most
+/// callers want [`otlp_layer`] or [`init_tracing_with_otlp`] instead; if you
+/// build the layer yourself, filter it as [`telemetry_layer`] does.
 pub fn otlp_tracer(
     service_name: impl Into<String>,
     endpoint: impl Into<String>,
@@ -68,23 +68,64 @@ pub fn otlp_tracer(
     Ok((tracer, OtelGuard { provider }))
 }
 
-/// One-call setup: install a global `tracing` subscriber that both prints to
-/// stderr (`fmt`, filtered by `RUST_LOG`) and exports every span over OTLP.
-/// Returns a guard that flushes the pipeline on drop — bind it in `main` for the
-/// program's lifetime.
+/// The OpenTelemetry layer for `tracer`, filtered to the agent's telemetry
+/// (target `harness.telemetry`, level `info`): the run, model-call and tool-call
+/// spans, and the events inside them.
 ///
-/// For custom subscriber composition, use [`otlp_tracer`] and add your own
-/// [`tracing_opentelemetry::OpenTelemetryLayer`].
+/// The filter is per layer and does not read `RUST_LOG`, on purpose. A global
+/// `EnvFilter` would apply to this layer too, and with `RUST_LOG` unset it lets
+/// only `ERROR` through, which exports nothing at all: the collector stays
+/// empty and no error says why. Logs and traces are different audiences — put
+/// `RUST_LOG` on your `fmt` layer and this beside it.
+pub fn telemetry_layer<S>(
+    tracer: opentelemetry_sdk::trace::Tracer,
+) -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::Layer as _;
+    tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("harness.telemetry", tracing::Level::INFO),
+        )
+}
+
+/// [`otlp_tracer`] + [`telemetry_layer`]: the layer to add to your own
+/// subscriber, and the guard to hold for the program's lifetime.
+pub fn otlp_layer<S>(
+    service_name: impl Into<String>,
+    endpoint: impl Into<String>,
+) -> Result<(impl tracing_subscriber::Layer<S>, OtelGuard), BoxError>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    let (tracer, guard) = otlp_tracer(service_name, endpoint)?;
+    Ok((telemetry_layer(tracer), guard))
+}
+
+/// One-call setup: install a global `tracing` subscriber that prints logs to
+/// stderr (`fmt`, filtered by `RUST_LOG`, `warn` when unset) and exports the
+/// agent's telemetry over OTLP. Returns a guard that flushes the pipeline on
+/// drop — bind it in `main` for the program's lifetime.
+///
+/// For custom subscriber composition, use [`otlp_layer`].
 pub fn init_tracing_with_otlp(
     service_name: impl Into<String>,
     endpoint: impl Into<String>,
 ) -> Result<OtelGuard, BoxError> {
-    let (tracer, guard) = otlp_tracer(service_name, endpoint)?;
-    let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+    use tracing_subscriber::Layer as _;
+    let (otel, guard) = otlp_layer(service_name, endpoint)?;
+    let logs = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        );
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .with(otel_layer)
+        .with(logs)
+        .with(otel)
         .try_init()?;
     Ok(guard)
 }

@@ -76,6 +76,8 @@ async-trait       = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
+# `tests/otel_export.rs`: catch the exported spans in memory instead of a collector.
+opentelemetry_sdk  = { version = "0.32", features = ["testing"] }
 
 [[bench]]
 name = "seal_cost"

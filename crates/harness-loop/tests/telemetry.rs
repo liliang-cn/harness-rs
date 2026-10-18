@@ -301,3 +301,197 @@ async fn streaming_reports_time_to_first_token() {
         "TTFT ({ttft}ms) must be shorter than the whole run ({total}ms)"
     );
 }
+
+/// What a trace backend sees: span names, who their parent is, and the fields
+/// recorded on them. A `fmt` writer flattens all of this into text, which is
+/// why the waterfall bug below went unnoticed.
+#[derive(Debug, Clone)]
+struct SeenSpan {
+    name: String,
+    parent: Option<String>,
+    fields: std::collections::HashMap<String, String>,
+    closed: bool,
+}
+
+#[derive(Clone, Default)]
+struct SpanCapture(Arc<Mutex<std::collections::HashMap<u64, SeenSpan>>>);
+
+struct FieldVisitor<'a>(&'a mut std::collections::HashMap<String, String>);
+impl tracing::field::Visit for FieldVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(
+            field.name().to_string(),
+            format!("{value:?}").trim_matches('"').to_string(),
+        );
+    }
+}
+
+impl<S> tracing_subscriber::Layer<S> for SpanCapture
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let parent = ctx
+            .span(id)
+            .and_then(|s| s.parent())
+            .map(|p| p.name().to_string());
+        let mut fields = std::collections::HashMap::new();
+        attrs.record(&mut FieldVisitor(&mut fields));
+        self.0.lock().unwrap().insert(
+            id.into_u64(),
+            SeenSpan {
+                name: attrs.metadata().name().to_string(),
+                parent,
+                fields,
+                closed: false,
+            },
+        );
+    }
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if let Some(s) = self.0.lock().unwrap().get_mut(&id.into_u64()) {
+            values.record(&mut FieldVisitor(&mut s.fields));
+        }
+    }
+    fn on_close(&self, id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(s) = self.0.lock().unwrap().get_mut(&id.into_u64()) {
+            s.closed = true;
+        }
+    }
+}
+
+/// Model and tool calls must be child spans of the run, one per call, so a
+/// trace backend draws a waterfall. As events on a single run span they were
+/// invisible as durations, and two parallel reads looked like zero-length dots.
+#[tokio::test]
+async fn model_and_tool_calls_are_child_spans_of_the_run() {
+    use tracing_subscriber::prelude::*;
+    let capture = SpanCapture::default();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let ws = std::env::temp_dir().join(format!("telem-spans-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("a.txt"), "a").unwrap();
+        std::fs::write(ws.join("b.txt"), "b").unwrap();
+        let mut world = default_world(&ws);
+
+        // Two read-only calls in one turn: the loop dispatches them in parallel.
+        let model = MockModel::new()
+            .script(
+                MockResponse::tool_calls(vec![
+                    ("read_file".into(), json!({"path": "a.txt"})),
+                    ("read_file".into(), json!({"path": "b.txt"})),
+                ])
+                .with_usage(100, 20),
+            )
+            .script(MockResponse::text("done").with_usage(50, 10));
+
+        // No TelemetryHook: the spans come from the loop itself, so a host
+        // that only installs an OTLP layer still gets the waterfall.
+        AgentLoop::new(model)
+            .with_tool(Arc::new(ReadFile))
+            .run(task("read two files"), &mut world)
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    let spans: Vec<SeenSpan> = capture.0.lock().unwrap().values().cloned().collect();
+    let runs: Vec<_> = spans.iter().filter(|s| s.name == "agent_run").collect();
+    assert_eq!(runs.len(), 1, "one run span:\n{spans:#?}");
+    assert_eq!(runs[0].parent, None, "the run is the root:\n{spans:#?}");
+
+    let chats: Vec<_> = spans.iter().filter(|s| s.name == "chat").collect();
+    assert_eq!(chats.len(), 2, "one span per model call:\n{spans:#?}");
+    for c in &chats {
+        assert_eq!(c.parent.as_deref(), Some("agent_run"));
+        assert!(c.fields.contains_key("gen_ai.usage.input_tokens"), "{c:#?}");
+    }
+
+    let tools: Vec<_> = spans.iter().filter(|s| s.name == "execute_tool").collect();
+    assert_eq!(tools.len(), 2, "one span per tool call:\n{spans:#?}");
+    let mut ids: Vec<_> = tools
+        .iter()
+        .map(|t| {
+            t.fields
+                .get("gen_ai.tool.call.id")
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    ids.dedup();
+    assert_eq!(ids.len(), 2, "each parallel call has its own span: {ids:?}");
+    for t in &tools {
+        assert_eq!(t.parent.as_deref(), Some("agent_run"));
+        assert_eq!(
+            t.fields.get("gen_ai.tool.name").map(String::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            t.fields.get("otel.name").map(String::as_str),
+            Some("execute_tool read_file")
+        );
+        assert_eq!(
+            t.fields.get("ok").map(String::as_str),
+            Some("true"),
+            "{t:#?}"
+        );
+    }
+    assert!(
+        spans.iter().all(|s| s.closed),
+        "every span is closed:\n{spans:#?}"
+    );
+}
+
+/// A failed tool call marks its span as an error, which is what turns it red
+/// in Jaeger / Tempo / Langfuse.
+#[tokio::test]
+async fn a_failed_tool_call_marks_its_span_as_error() {
+    use tracing_subscriber::prelude::*;
+    let capture = SpanCapture::default();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let ws = std::env::temp_dir().join(format!("telem-err-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+        let mut world = default_world(&ws);
+        let model = MockModel::new()
+            .script(MockResponse::tool_call(
+                "read_file",
+                json!({"path": "missing.txt"}),
+            ))
+            .script(MockResponse::text("done"));
+        AgentLoop::new(model)
+            .with_tool(Arc::new(ReadFile))
+            .run(task("read a missing file"), &mut world)
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+    let spans: Vec<SeenSpan> = capture.0.lock().unwrap().values().cloned().collect();
+    let tool = spans
+        .iter()
+        .find(|s| s.name == "execute_tool")
+        .expect("tool span");
+    assert_eq!(
+        tool.fields.get("ok").map(String::as_str),
+        Some("false"),
+        "{tool:#?}"
+    );
+    assert_eq!(
+        tool.fields.get("otel.status_code").map(String::as_str),
+        Some("error"),
+        "{tool:#?}"
+    );
+}

@@ -11,12 +11,6 @@ pub use audit::{
     JsonlAuditSink, REQUEST_KEY, SESSION_KEY, new_request_id, verify_chain,
 };
 
-#[cfg(feature = "otel")]
-pub mod otel;
-
-#[cfg(feature = "otel")]
-pub use otel::OtelHook;
-
 use harness_core::{Event, Hook, HookOutcome, World, iter_macro_hooks};
 use std::sync::Arc;
 

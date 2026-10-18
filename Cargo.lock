@@ -2371,6 +2371,7 @@ dependencies = [
  "tonic-build",
  "tower-http 0.6.10",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3927,6 +3928,7 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.4",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

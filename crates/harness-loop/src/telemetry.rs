@@ -18,27 +18,37 @@
 //! (`input_tokens`, `tool`, …) are kept alongside as aliases for existing
 //! consumers.
 //!
-//! Span/event shape (target `harness.telemetry`):
+//! The spans come from [`AgentLoop`](crate::AgentLoop) itself — it knows when
+//! a call really starts and ends, which a hook does not (parallel read-only
+//! tools are dispatched before their `PreToolUse` fires). This hook adds the
+//! events and the run totals. Span/event shape (target `harness.telemetry`):
 //!
 //! ```text
-//! agent_run (span, fields: source, gen_ai.operation.name=invoke_agent)
-//!   ├─ run.start
-//!   ├─ iter            (iter)
-//!   ├─ model.first_token (ttft_ms)
-//!   ├─ model.complete  (gen_ai.operation.name=chat,
-//!   │                   gen_ai.usage.input_tokens, gen_ai.usage.output_tokens,
-//!   │                   gen_ai.usage.cached_input_tokens,
-//!   │                   gen_ai.response.finish_reasons
-//!   │                   + aliases: input_tokens, output_tokens,
-//!   │                     cached_input_tokens, tool_calls, stop)
-//!   ├─ tool.call       (gen_ai.operation.name=execute_tool, gen_ai.tool.name,
-//!   │                   ok, duration_ms + alias: tool)
-//!   ├─ sensor          (sensor, signals)
-//!   ├─ compact         (stage, tokens_before, tokens_after, tokens_saved)
-//!   ├─ budget.warning  (ratio)
-//!   ├─ run.cancelled   (warn: the caller stopped the run)
-//!   └─ run.end         (gen_ai.usage.*, total_tokens, model_calls, tool_calls,
-//!                       tool_failures, compactions, tokens_saved, duration_ms)
+//! agent_run (span, from the loop: gen_ai.operation.name=invoke_agent,
+//! │          gen_ai.request.model, gen_ai.provider.name, outcome)
+//!   ├─ run.start         (source)
+//!   ├─ iter              (iter)
+//!   ├─ chat              (span, from the loop, one per model call:
+//!   │   │                 otel.name="chat {model}", gen_ai.usage.*,
+//!   │   │                 gen_ai.response.finish_reasons, tool_calls)
+//!   │   └─ model.first_token (ttft_ms)
+//!   ├─ model.complete    (gen_ai.operation.name=chat,
+//!   │                     gen_ai.usage.input_tokens, gen_ai.usage.output_tokens,
+//!   │                     gen_ai.usage.cached_input_tokens,
+//!   │                     gen_ai.response.finish_reasons
+//!   │                     + aliases: input_tokens, output_tokens,
+//!   │                       cached_input_tokens, tool_calls, stop)
+//!   ├─ execute_tool      (span, from the loop, one per tool call:
+//!   │                     otel.name="execute_tool {tool}", gen_ai.tool.name,
+//!   │                     gen_ai.tool.call.id, ok, otel.status_code=error on failure)
+//!   ├─ tool.call         (gen_ai.operation.name=execute_tool, gen_ai.tool.name,
+//!   │                     ok, duration_ms + alias: tool)
+//!   ├─ sensor            (sensor, signals)
+//!   ├─ compact           (stage, tokens_before, tokens_after, tokens_saved)
+//!   ├─ budget.warning    (ratio)
+//!   ├─ run.cancelled     (warn: the caller stopped the run)
+//!   └─ run.end           (gen_ai.usage.*, total_tokens, model_calls, tool_calls,
+//!                         tool_failures, compactions, tokens_saved, duration_ms)
 //! ```
 //!
 //! To export over OTLP, enable the crate's `otel` feature and call
@@ -58,9 +68,6 @@ use std::time::Instant;
 /// sensor, compaction, and budget warning. See the module docs for the OTLP
 /// bridge.
 pub struct TelemetryHook {
-    /// The current run's span. Events are recorded inside it so an OTLP exporter
-    /// nests them under one trace.
-    run: Mutex<Option<tracing::Span>>,
     /// `call_id -> dispatch start`, so `tool.call` can report a duration.
     tool_starts: Mutex<HashMap<String, Instant>>,
     /// When the current model call was handed off, so the run summary can say
@@ -110,21 +117,10 @@ struct RunTotals {
 impl TelemetryHook {
     pub fn new() -> Self {
         Self {
-            run: Mutex::new(None),
             tool_starts: Mutex::new(HashMap::new()),
             model_start: Mutex::new(None),
             awaiting_first_token: Mutex::new(false),
             totals: Mutex::new(RunTotals::default()),
-        }
-    }
-
-    /// Run `f` inside the current run span (if any), so its events attach to the
-    /// run's trace. Falls back to the ambient subscriber if no run is active.
-    fn in_run<F: FnOnce()>(&self, f: F) {
-        let guard = self.run.lock().unwrap();
-        match &*guard {
-            Some(span) => span.in_scope(f),
-            None => f(),
         }
     }
 }
@@ -146,16 +142,11 @@ impl Hook for TelemetryHook {
     fn fire(&self, ev: &Event<'_>, _world: &mut World) -> HookOutcome {
         match ev {
             Event::SessionStart { source } => {
-                let span = tracing::info_span!(
+                tracing::info!(
                     target: "harness.telemetry",
-                    "agent_run",
-                    "gen_ai.operation.name" = "invoke_agent",
-                    source = format!("{source:?}")
+                    event = "run.start",
+                    source = format!("{source:?}"),
                 );
-                span.in_scope(|| {
-                    tracing::info!(target: "harness.telemetry", event = "run.start");
-                });
-                *self.run.lock().unwrap() = Some(span);
                 *self.totals.lock().unwrap() = RunTotals {
                     started: Some(Instant::now()),
                     ..Default::default()
@@ -194,18 +185,18 @@ impl Hook for TelemetryHook {
                         t.first_token_ms = ttft;
                     }
                 }
-                self.in_run(|| {
+                {
                     tracing::info!(
                         target: "harness.telemetry",
                         event = "model.first_token",
                         ttft_ms = ttft,
                     );
-                });
+                };
             }
-            Event::Heartbeat { iter } => self.in_run(|| {
+            Event::Heartbeat { iter } => {
                 tracing::info!(target: "harness.telemetry", event = "iter", iter = *iter);
-            }),
-            Event::PostModel { out } => self.in_run(|| {
+            }
+            Event::PostModel { out } => {
                 let waited = self
                     .model_start
                     .lock()
@@ -242,7 +233,7 @@ impl Hook for TelemetryHook {
                     stop = %stop,
                     duration_ms = waited,
                 );
-            }),
+            }
             Event::PreToolUse { action } => {
                 self.tool_starts
                     .lock()
@@ -273,7 +264,7 @@ impl Hook for TelemetryHook {
                         t.tool_failures += 1;
                     }
                 }
-                self.in_run(|| {
+                {
                     tracing::info!(
                         target: "harness.telemetry",
                         event = "tool.call",
@@ -283,21 +274,21 @@ impl Hook for TelemetryHook {
                         duration_ms,
                         tool = %action.tool, // alias
                     );
-                });
+                };
             }
-            Event::PostSensor { sensor, signals } => self.in_run(|| {
+            Event::PostSensor { sensor, signals } => {
                 tracing::debug!(
                     target: "harness.telemetry",
                     event = "sensor",
                     sensor = %sensor,
                     signals = signals.len(),
                 );
-            }),
+            }
             Event::PostCompact {
                 stage,
                 before,
                 after,
-            } => self.in_run(|| {
+            } => {
                 let saved = before.saturating_sub(*after);
                 {
                     let mut t = self.totals.lock().unwrap();
@@ -315,14 +306,14 @@ impl Hook for TelemetryHook {
                     tokens_after = *after,
                     tokens_saved = saved,
                 );
-            }),
-            Event::BudgetWarning { ratio } => self.in_run(|| {
+            }
+            Event::BudgetWarning { ratio } => {
                 tracing::warn!(
                     target: "harness.telemetry",
                     event = "budget.warning",
                     ratio = *ratio,
                 );
-            }),
+            }
             Event::Cancelled => {
                 // A cancelled dispatch fired PreToolUse but will never fire
                 // PostToolUse: the loop returns before it. Settle its entry
@@ -355,16 +346,16 @@ impl Hook for TelemetryHook {
                         t.model_ms += started.elapsed().as_millis() as u64;
                     }
                 }
-                self.in_run(|| {
+                {
                     // Warn, not info: a cancel is the person deciding the run was
                     // not worth finishing, which is worth seeing in a trace that
                     // would otherwise look like any other run.end.
                     tracing::warn!(target: "harness.telemetry", event = "run.cancelled");
-                });
+                };
             }
             Event::SessionEnd => {
                 let t = std::mem::take(&mut *self.totals.lock().unwrap());
-                self.in_run(|| {
+                {
                     // One line with the whole bill. Per-turn events answer "what
                     // happened"; this answers "what did it cost", which is the
                     // question asked after every run and previously required
@@ -388,8 +379,7 @@ impl Hook for TelemetryHook {
                         first_token_ms = t.first_token_ms,
                         duration_ms = t.started.map(|s| s.elapsed().as_millis() as u64).unwrap_or(0),
                     );
-                });
-                *self.run.lock().unwrap() = None;
+                };
             }
             _ => {}
         }

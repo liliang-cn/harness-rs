@@ -69,6 +69,23 @@ use harness_core::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument;
+use tracing::field::Empty;
+
+/// What a finished model call put on its `chat` span.
+fn record_chat(span: &tracing::Span, out: &ModelOutput) {
+    span.record("gen_ai.usage.input_tokens", out.usage.input_tokens)
+        .record("gen_ai.usage.output_tokens", out.usage.output_tokens)
+        .record(
+            "gen_ai.usage.cached_input_tokens",
+            out.usage.cached_input_tokens,
+        )
+        .record(
+            "gen_ai.response.finish_reasons",
+            format!("{:?}", out.stop_reason),
+        )
+        .record("tool_calls", out.tool_calls.len());
+}
 
 /// Governs the loop's stuck-detector. When the model repeats the *same* tool
 /// call (name + args) round after round without making progress, the loop first
@@ -1199,7 +1216,45 @@ impl<M: Model> AgentLoop<M> {
     /// `run*` methods unless you need to inject a non-standard `Context`
     /// (e.g. `run_with_response_format` does to apply a one-off
     /// `ResponseFormat` without mutating `self`).
+    ///
+    /// The run executes inside an `agent_run` span, and every model call and
+    /// tool call inside a child span of it (`chat`, `execute_tool`). The loop
+    /// owns these rather than a hook, because only the loop knows when a call
+    /// really starts and ends: read-only tools are dispatched in parallel
+    /// *before* their `PreToolUse` fires, so a hook timing them would see a
+    /// zero-length call. Spans cost nothing without a subscriber; with an OTLP
+    /// layer (feature `otel`) they are the trace waterfall.
     async fn run_built_context(
+        &self,
+        ctx: Context,
+        world: &mut World,
+    ) -> Result<Outcome, HarnessError> {
+        let info = self.model.info();
+        let span = tracing::info_span!(
+            target: "harness.telemetry",
+            "agent_run",
+            "gen_ai.operation.name" = "invoke_agent",
+            "gen_ai.provider.name" = %info.provider,
+            "gen_ai.request.model" = %info.model,
+            outcome = Empty,
+            "otel.status_code" = Empty,
+            "otel.status_message" = Empty,
+        );
+        let r = self.run_in_span(ctx, world).instrument(span.clone()).await;
+        match &r {
+            Ok(Outcome::Done { .. }) => span.record("outcome", "done"),
+            Ok(Outcome::BudgetExhausted { .. }) => span.record("outcome", "budget_exhausted"),
+            Ok(Outcome::Stuck { .. }) => span.record("outcome", "stuck"),
+            Ok(Outcome::Cancelled { .. }) => span.record("outcome", "cancelled"),
+            Err(e) => span
+                .record("outcome", "error")
+                .record("otel.status_code", "error")
+                .record("otel.status_message", e.to_string()),
+        };
+        r
+    }
+
+    async fn run_in_span(
         &self,
         mut ctx: Context,
         world: &mut World,
@@ -2088,21 +2143,59 @@ impl<M: Model> AgentLoop<M> {
         world: &mut World,
         partial: &mut String,
     ) -> Result<Option<ModelOutput>, HarnessError> {
-        if self.streaming {
-            tokio::select! {
-                biased;
-                _ = self.cancel.cancelled() => Ok(None),
-                r = self.complete_via_stream(ctx, world, partial) => r.map(Some),
-            }
-        } else {
-            tokio::select! {
-                biased;
-                _ = self.cancel.cancelled() => Ok(None),
-                r = self.model.complete(ctx) => r
-                    .map(Some)
-                    .map_err(harness_core::HarnessError::Model),
+        let span = self.chat_span();
+        let r = async {
+            if self.streaming {
+                tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => Ok(None),
+                    r = self.complete_via_stream(ctx, world, partial) => r.map(Some),
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => Ok(None),
+                    r = self.model.complete(ctx) => r
+                        .map(Some)
+                        .map_err(harness_core::HarnessError::Model),
+                }
             }
         }
+        .instrument(span.clone())
+        .await;
+        match &r {
+            Ok(Some(out)) => record_chat(&span, out),
+            Ok(None) => {
+                span.record("otel.status_message", "cancelled");
+            }
+            Err(e) => {
+                span.record("otel.status_code", "error")
+                    .record("otel.status_message", e.to_string());
+            }
+        }
+        r
+    }
+
+    /// The span one model call runs in. Named `chat {model}` for OTLP
+    /// backends, which group by span name; fields per the GenAI conventions.
+    fn chat_span(&self) -> tracing::Span {
+        let info = self.model.info();
+        tracing::info_span!(
+            target: "harness.telemetry",
+            "chat",
+            "otel.name" = %format!("chat {}", info.model),
+            "otel.kind" = "client",
+            "otel.status_code" = Empty,
+            "otel.status_message" = Empty,
+            "gen_ai.operation.name" = "chat",
+            "gen_ai.provider.name" = %info.provider,
+            "gen_ai.request.model" = %info.model,
+            "gen_ai.usage.input_tokens" = Empty,
+            "gen_ai.usage.output_tokens" = Empty,
+            "gen_ai.usage.cached_input_tokens" = Empty,
+            "gen_ai.response.finish_reasons" = Empty,
+            tool_calls = Empty,
+        )
     }
 
     /// Drive `Model::stream()` and assemble the result into a `ModelOutput`,
@@ -2235,7 +2328,36 @@ impl<M: Model> AgentLoop<M> {
     /// other side depends on the tool: an HTTP request aborts, a `spawn_blocking`
     /// file write runs to completion, and a child process is only killed if its
     /// runner asked for `kill_on_drop`.
+    ///
+    /// Runs in an `execute_tool` span, so parallel calls show up as overlapping
+    /// bars in a trace and a failed one is marked as an error.
     async fn dispatch_bounded(&self, action: &Action, world: &mut World) -> ToolResult {
+        let span = tracing::info_span!(
+            target: "harness.telemetry",
+            "execute_tool",
+            "otel.name" = %format!("execute_tool {}", action.tool),
+            "otel.status_code" = Empty,
+            "otel.status_message" = Empty,
+            "gen_ai.operation.name" = "execute_tool",
+            "gen_ai.tool.name" = %action.tool,
+            "gen_ai.tool.call.id" = %action.call_id,
+            ok = Empty,
+        );
+        let r = self
+            .dispatch_bounded_in_span(action, world)
+            .instrument(span.clone())
+            .await;
+        span.record("ok", r.ok);
+        if !r.ok {
+            span.record("otel.status_code", "error");
+            if let Some(msg) = r.content.get("error").and_then(|v| v.as_str()) {
+                span.record("otel.status_message", msg);
+            }
+        }
+        r
+    }
+
+    async fn dispatch_bounded_in_span(&self, action: &Action, world: &mut World) -> ToolResult {
         let fut = self.tools.dispatch(action, world);
         let bounded = async {
             match self.tool_timeout {
@@ -2457,11 +2579,22 @@ impl<M: Model> AgentLoop<M> {
         // `biased` with the token first means an already-cancelled token wins
         // the race outright, so no separate `is_cancelled()` pre-check is
         // needed here — the select is the check.
+        let span = self.chat_span();
         let result = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => None,
-            r = self.model.complete(ctx) => Some(r),
+            r = self.model.complete(ctx).instrument(span.clone()) => Some(r),
         };
+        match &result {
+            Some(Ok(out)) => record_chat(&span, out),
+            Some(Err(e)) => {
+                span.record("otel.status_code", "error")
+                    .record("otel.status_message", e.to_string());
+            }
+            None => {
+                span.record("otel.status_message", "cancelled");
+            }
+        }
         ctx.tools = saved_tools;
 
         let Some(result) = result else {

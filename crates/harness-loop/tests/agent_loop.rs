@@ -406,7 +406,7 @@ async fn budget_exhausted_forces_final_synthesis_into_last_text() {
 
     // Hook that counts BudgetWarning events with their ratio. The forced
     // synthesis pass MUST fire this exactly once with ratio == 1.0, otherwise
-    // downstream observers (LiveProgressHook, SessionRecorder, OtelHook)
+    // downstream observers (LiveProgressHook, SessionRecorder, TelemetryHook)
     // wouldn't be able to label the synthesis pass.
     struct BudgetWarnings(Arc<Mutex<Vec<f32>>>);
     impl harness_core::Hook for BudgetWarnings {
