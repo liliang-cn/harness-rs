@@ -3,6 +3,67 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Changed
+
+- **A trace is now a waterfall.** `AgentLoop` opens the spans itself: one
+  `agent_run` per run, and under it one `chat` span per model call and one
+  `execute_tool` span per tool call. Each has its real duration, GenAI
+  convention fields, and `otel.status_code=error` when it fails. Before this,
+  model and tool calls were events on a single run span, so an OTLP backend
+  showed one bar with dots on it. The spans had to move out of the hook
+  because read-only tools are dispatched in parallel *before* their
+  `PreToolUse` fires, and a hook timing them sees zero-length calls.
+  `TelemetryHook` keeps its events and `run.end` totals and emits them into
+  the loop's span. It no longer opens a span of its own.
+- **`ChatService` attaches a `TelemetryHook` to every request** and runs it in
+  a `chat_request` span carrying `request_id` and `session.id`, so a trace,
+  an audit record and a replay recording share one id. The actor is
+  deliberately left off the trace: traces often go to third-party backends,
+  and the request id already resolves to the caller in the audit trail. Opt
+  out with `without_telemetry()`.
+
+### Added
+
+- **Metrics** (`harness_loop::meters`), recorded through the `metrics`
+  facade:
+  - `gen_ai.client.operation.duration` and `gen_ai.client.token.usage`
+    (OpenTelemetry GenAI conventions);
+  - `harness.tool.duration` by tool and `ok`;
+  - `harness.run.duration` by outcome;
+  - `harness.compaction.tokens_saved` by stage.
+
+  Labels are bounded: model, provider, tool, outcome, stage. With no recorder
+  installed, recording costs nothing.
+- **`harness-rs-serve` feature `prometheus`**: `prometheus::install()` and
+  `prometheus::router()` serve `GET /metrics`. Durations are histograms with
+  fixed buckets rather than the exporter's default summaries, so they can be
+  aggregated across replicas.
+- **`otel` feature on `harness-rs-serve` and `harness-rs-cli`.** The CLI
+  exports each run over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **`otel::otlp_layer` / `otel::telemetry_layer`**, for composing the OTLP
+  layer into your own subscriber.
+
+### Fixed
+
+- **`init_tracing_with_otlp` exported nothing unless `RUST_LOG` was set.** It
+  filtered every layer with `EnvFilter::from_default_env()`, which lets only
+  `ERROR` through when the variable is unset, and the agent's spans are
+  `INFO`. The collector stayed empty and no error said why. The OTLP layer now
+  has its own filter (`harness.telemetry=info`). `RUST_LOG` only governs the
+  stderr logs, where it defaults to `warn`.
+
+### Removed
+
+- **`hooks::OtelHook`** (feature `otel`). It duplicated the `tracing` path and
+  had two bugs of its own:
+  - its spans were never parented, so every model and tool call became a
+    separate root trace;
+  - it had one in-flight tool slot, so parallel calls overwrote each other.
+
+  Use the loop's spans with `otel::init_tracing_with_otlp`.
+
 ## 0.0.65
 
 ### Fixed
