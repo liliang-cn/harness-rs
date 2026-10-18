@@ -21,11 +21,12 @@ use harness_core::{DynModel, Event, Hook, HookOutcome, Model, Task, Tool, World}
 use harness_loop::hooks::{
     ACTOR_KEY, AuditHook, AuditSink, REQUEST_KEY, SESSION_KEY, new_request_id,
 };
-use harness_loop::{AgentLoop, Outcome, SessionRecorder};
+use harness_loop::{AgentLoop, Outcome, SessionRecorder, TelemetryHook};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::Instrument;
 
 /// Builds a fresh [`Redactor`] per request (the type isn't `Clone`, and the
 /// audit hook is per-request).
@@ -92,6 +93,7 @@ pub struct ChatService {
     max_iters: u32,
     model_roles: Vec<(String, Arc<dyn Model>)>,
     hooks: Vec<Arc<dyn Hook>>,
+    telemetry: bool,
 }
 
 impl ChatService {
@@ -120,6 +122,7 @@ impl ChatService {
             max_iters: harness_core::Policy::default().max_iters,
             model_roles: Vec::new(),
             hooks: Vec::new(),
+            telemetry: true,
         }
     }
 
@@ -167,6 +170,18 @@ impl ChatService {
     /// that can be slow belongs behind a channel.
     pub fn with_hook(mut self, hook: Arc<dyn Hook>) -> Self {
         self.hooks.push(hook);
+        self
+    }
+
+    /// Stop attaching a [`TelemetryHook`] to each request.
+    ///
+    /// It is on by default: every served turn emits the run's events and its
+    /// token/latency totals (target `harness.telemetry`), inside a
+    /// `chat_request` span that carries the request id. They cost nothing until
+    /// a subscriber enables that target, so turn this off only if the host
+    /// enables `info` everywhere and does not want a line per model call.
+    pub fn without_telemetry(mut self) -> Self {
+        self.telemetry = false;
         self
     }
 
@@ -228,6 +243,21 @@ impl ChatService {
         metadata
     }
 
+    /// The span a served turn runs in; the loop's `agent_run` is its child.
+    ///
+    /// It carries the request and session ids and not the actor: the request id
+    /// already resolves to the caller in the audit trail, which can redact, while
+    /// a trace is often shipped to a third-party backend that cannot.
+    fn request_span(session_id: &str, request_id: &str, streaming: bool) -> tracing::Span {
+        tracing::info_span!(
+            target: "harness.telemetry",
+            "chat_request",
+            request_id = %request_id,
+            "session.id" = %session_id,
+            streaming,
+        )
+    }
+
     /// A per-request loop: shared model + tools, a fresh audit hook, and (if
     /// enabled) a replay recorder for this exact request. The caller adds
     /// streaming / a forward hook on top.
@@ -244,6 +274,12 @@ impl ChatService {
         }
         for hook in &self.hooks {
             agent = agent.with_hook(hook.clone());
+        }
+        // Per request, not shared: the hook keeps the run's running totals, and
+        // two concurrent requests through one instance would add into each
+        // other's bill.
+        if self.telemetry {
+            agent = agent.with_hook(Arc::new(TelemetryHook::new()));
         }
         if let Some(sink) = &self.audit {
             let mut hook = AuditHook::new(sink.clone());
@@ -296,28 +332,33 @@ impl ChatService {
             deadline: None,
         };
 
-        let outcome = agent
-            .run_with_seed_and_metadata(
-                task.clone(),
-                seed.clone(),
-                metadata.clone(),
-                &mut world,
-                self.max_iters,
-            )
-            .await
-            .map_err(|e| ServeError::Agent(e.to_string()))?;
-
-        // 模型偶尔在工具循环后返回空(网关抖动/提前收尾)。空答案对用户就是白屏,
-        // 重跑一次比把空白交出去好;仍为空才如实返回。
-        let mut answer = answer_of(&outcome);
-        if answer.trim().is_empty() {
-            tracing::warn!(target: "harness.serve", %request_id, "empty answer — retrying once");
-            let retry = agent
-                .run_with_seed_and_metadata(task, seed, metadata, &mut world, self.max_iters)
+        let answer = async {
+            let outcome = agent
+                .run_with_seed_and_metadata(
+                    task.clone(),
+                    seed.clone(),
+                    metadata.clone(),
+                    &mut world,
+                    self.max_iters,
+                )
                 .await
                 .map_err(|e| ServeError::Agent(e.to_string()))?;
-            answer = answer_of(&retry);
+
+            // 模型偶尔在工具循环后返回空(网关抖动/提前收尾)。空答案对用户就是白屏,
+            // 重跑一次比把空白交出去好;仍为空才如实返回。
+            let mut answer = answer_of(&outcome);
+            if answer.trim().is_empty() {
+                tracing::warn!(target: "harness.serve", %request_id, "empty answer — retrying once");
+                let retry = agent
+                    .run_with_seed_and_metadata(task, seed, metadata, &mut world, self.max_iters)
+                    .await
+                    .map_err(|e| ServeError::Agent(e.to_string()))?;
+                answer = answer_of(&retry);
+            }
+            Ok::<_, ServeError>(answer)
         }
+        .instrument(Self::request_span(session_id, &request_id, false))
+        .await?;
         self.sessions.append(session_id, message, &answer);
 
         Ok(ChatReply {
@@ -364,6 +405,7 @@ impl ChatService {
         let session_id = session_id.to_string();
         let message = message.to_string();
         let actor_id = actor.id;
+        let span = Self::request_span(&session_id, &request_id, true);
 
         tokio::spawn(async move {
             let mut world = harness_context::default_world(&data_dir);
@@ -411,7 +453,8 @@ impl ChatService {
                 }
             }
             // Dropping `tx` here closes the stream.
-        });
+        }
+        .instrument(span));
 
         Ok(futures::stream::unfold(rx, |mut rx| async move {
             rx.recv().await.map(|item| (item, rx))

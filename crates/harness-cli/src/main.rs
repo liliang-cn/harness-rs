@@ -280,7 +280,8 @@ async fn main() -> anyhow::Result<()> {
     // Parse first: `run --telemetry` has to raise the filter before the
     // subscriber is built, or the flag would need a second process to take.
     let cli = Cli::parse();
-    tracing_subscriber_init(matches!(
+    // Held for the life of the process: dropping it flushes the OTLP exporter.
+    let _otel = tracing_subscriber_init(matches!(
         cli.cmd,
         Cmd::Run {
             telemetry: true,
@@ -1479,7 +1480,14 @@ fn detect_local_workspace() -> anyhow::Result<PathBuf> {
     }
 }
 
-fn tracing_subscriber_init(telemetry: bool) {
+/// Flushes the OTLP exporter on drop; `()` in a build without the `otel` feature.
+#[cfg(feature = "otel")]
+type OtelGuard = Option<harness_loop::otel::OtelGuard>;
+#[cfg(not(feature = "otel"))]
+type OtelGuard = ();
+
+fn tracing_subscriber_init(telemetry: bool) -> OtelGuard {
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::{EnvFilter, fmt};
     // Default to `warn` so real failures (model 401s, delivery errors, dropped
     // jobs) surface instead of vanishing; override verbosity with RUST_LOG,
@@ -1496,10 +1504,31 @@ fn tracing_subscriber_init(telemetry: bool) {
             "warn"
         })
     });
-    let _ = fmt()
-        .with_env_filter(filter)
+    let logs = fmt::layer()
         .with_writer(std::io::stderr)
-        .try_init();
+        .with_filter(filter);
+
+    // Built with `--features otel` and pointed at a collector by the standard
+    // OpenTelemetry variable: the run's spans go there as well, independent of
+    // the log filter above.
+    #[cfg(feature = "otel")]
+    if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        let service = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "harness".to_string());
+        match harness_loop::otel::otlp_layer(service, endpoint.clone()) {
+            Ok((otel, guard)) => {
+                let _ = tracing_subscriber::registry()
+                    .with(logs)
+                    .with(otel)
+                    .try_init();
+                return Some(guard);
+            }
+            Err(e) => eprintln!("harness: OTLP export to {endpoint} disabled: {e}"),
+        }
+    }
+
+    let _ = tracing_subscriber::registry().with(logs).try_init();
+    #[cfg(feature = "otel")]
+    return None;
 }
 
 #[cfg(test)]
