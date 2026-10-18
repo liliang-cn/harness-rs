@@ -1,4 +1,4 @@
-//! `HookBus` — dispatch the 27 lifecycle events to registered [`Hook`]s.
+//! `HookBus` — dispatch the lifecycle events to registered [`Hook`]s.
 //!
 //! Per DESIGN.md §10, a hook is a *cheap* synchronous policy that decides what
 //! happens around tool calls, model calls, compaction, sensor runs, and so on.

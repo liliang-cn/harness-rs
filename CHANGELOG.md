@@ -26,6 +26,16 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Added
 
+- **`harness trace run.jsonl --html out.html`**: a recorded run as a
+  self-contained HTML timeline (`harness_loop::timeline::render_html`). Each
+  model call, tool call and compaction is a bar placed by when it ran, so
+  parallel calls overlap and a failed one is red. Clicking a row shows its
+  tokens, reply, arguments and result. The page fetches nothing from anywhere,
+  is light by default with a dark toggle, and works at phone width.
+- **`Event::ToolTimed { action, started_ms, finished_ms }`**: when a tool call
+  really ran, fired just before its `PostToolUse`. `Event` is
+  `#[non_exhaustive]`, so this is additive. `SessionRecorder` records it as
+  `SessionEvent::ToolTimed`.
 - **Metrics** (`harness_loop::meters`), recorded through the `metrics`
   facade:
   - `gen_ai.client.operation.duration` and `gen_ai.client.token.usage`
@@ -47,12 +57,22 @@ every `harness-rs-*` crate (workspace-level `[package].version`).
 
 ### Fixed
 
+- **Parallel tool calls were timed as ~0ms.** The loop dispatches a turn's
+  leading read-only calls concurrently *before* their `PreToolUse` fires, so
+  `TelemetryHook`'s `tool.call` `duration_ms` and the run's `tool_ms` measured
+  the gap between two events that arrive back to back after the work. Both now
+  come from `ToolTimed`.
 - **`init_tracing_with_otlp` exported nothing unless `RUST_LOG` was set.** It
   filtered every layer with `EnvFilter::from_default_env()`, which lets only
   `ERROR` through when the variable is unset, and the agent's spans are
   `INFO`. The collector stayed empty and no error said why. The OTLP layer now
   has its own filter (`harness.telemetry=info`). `RUST_LOG` only governs the
   stderr logs, where it defaults to `warn`.
+
+### Changed (breaking)
+
+- `SessionEvent` is now `#[non_exhaustive]` and has a `ToolTimed` variant. An
+  exhaustive `match` on it outside this crate needs a `_` arm.
 
 ### Removed
 

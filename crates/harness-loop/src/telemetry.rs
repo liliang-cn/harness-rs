@@ -68,8 +68,12 @@ use std::time::Instant;
 /// sensor, compaction, and budget warning. See the module docs for the OTLP
 /// bridge.
 pub struct TelemetryHook {
-    /// `call_id -> dispatch start`, so `tool.call` can report a duration.
+    /// `call_id -> PreToolUse time`: which calls are in flight, for a cancel
+    /// to settle, and a duration fallback for a loop that sends no `ToolTimed`.
     tool_starts: Mutex<HashMap<String, Instant>>,
+    /// `call_id -> how long it really ran`, from `ToolTimed`. Parallel calls
+    /// finish before their `PreToolUse` fires, so the fallback reads ~0 for them.
+    tool_ran_ms: Mutex<HashMap<String, u64>>,
     /// When the current model call was handed off, so the run summary can say
     /// how much of the wall clock was spent waiting on the provider.
     model_start: Mutex<Option<Instant>>,
@@ -118,6 +122,7 @@ impl TelemetryHook {
     pub fn new() -> Self {
         Self {
             tool_starts: Mutex::new(HashMap::new()),
+            tool_ran_ms: Mutex::new(HashMap::new()),
             model_start: Mutex::new(None),
             awaiting_first_token: Mutex::new(false),
             totals: Mutex::new(RunTotals::default()),
@@ -156,6 +161,7 @@ impl Hook for TelemetryHook {
                 // for the hook's lifetime and a later cancel would count it as
                 // a dispatch of *that* run. Every run starts from a clean slate.
                 self.tool_starts.lock().unwrap().clear();
+                self.tool_ran_ms.lock().unwrap().clear();
                 *self.model_start.lock().unwrap() = None;
                 *self.awaiting_first_token.lock().unwrap() = false;
             }
@@ -240,13 +246,29 @@ impl Hook for TelemetryHook {
                     .unwrap()
                     .insert(action.call_id.clone(), Instant::now());
             }
+            Event::ToolTimed {
+                action,
+                started_ms,
+                finished_ms,
+            } => {
+                self.tool_ran_ms.lock().unwrap().insert(
+                    action.call_id.clone(),
+                    finished_ms.saturating_sub(*started_ms).max(0) as u64,
+                );
+            }
             Event::PostToolUse { action, result } => {
-                let duration_ms = self
+                let since_pre = self
                     .tool_starts
                     .lock()
                     .unwrap()
                     .remove(&action.call_id)
-                    .map(|s| s.elapsed().as_millis() as u64)
+                    .map(|s| s.elapsed().as_millis() as u64);
+                let duration_ms = self
+                    .tool_ran_ms
+                    .lock()
+                    .unwrap()
+                    .remove(&action.call_id)
+                    .or(since_pre)
                     .unwrap_or(0);
                 let repeat = result
                     .content

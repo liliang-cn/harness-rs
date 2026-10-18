@@ -213,7 +213,9 @@ it in a `chat_request` span carrying the request id, which is the same id the
 audit trail and the replay recording use.
 
 **Records.** `SessionRecorder` writes the run as JSONL, which `harness trace`
-pretty-prints and `harness replay` reruns offline with no LLM calls.
+pretty-prints, `harness trace --html out.html` turns into a self-contained
+timeline page (parallel calls overlapping, a click for each call's details), and
+`harness replay` reruns offline with no LLM calls.
 `AuditHook` keeps a compliance trail (optionally redacted and hash-chained).
 `BroadcastHook` streams the lifecycle live to any number of subscribers.
 

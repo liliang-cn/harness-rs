@@ -48,6 +48,19 @@ pub enum Event<'a> {
         action: &'a Action,
         result: &'a ToolResult,
     },
+    /// When a tool call actually ran, by the [`World`](crate::World) clock.
+    /// Fires once per dispatched call, immediately before its `PostToolUse`.
+    ///
+    /// The gap between `PreToolUse` and `PostToolUse` is not the call's
+    /// duration: the loop dispatches a turn's leading read-only calls in
+    /// parallel *before* firing their `PreToolUse`, so for those the two events
+    /// arrive back to back after the work is done. Anything that times tool
+    /// calls — telemetry, a recording, a timeline — should read this instead.
+    ToolTimed {
+        action: &'a Action,
+        started_ms: i64,
+        finished_ms: i64,
+    },
     PermissionRequest {
         action: &'a Action,
     },
@@ -204,6 +217,7 @@ impl<'a> Event<'a> {
             Event::SealBreached { .. } => "SealBreached",
             Event::PreToolUse { .. } => "PreToolUse",
             Event::PostToolUse { .. } => "PostToolUse",
+            Event::ToolTimed { .. } => "ToolTimed",
             Event::PermissionRequest { .. } => "PermissionRequest",
             Event::PreCompact { .. } => "PreCompact",
             Event::PostCompact { .. } => "PostCompact",
