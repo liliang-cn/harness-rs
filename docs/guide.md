@@ -17,7 +17,7 @@ What the crates give you, and how they compose. Rationale lives in
 | **Memory · Recall** | `Memory` / `RecallStore` traits + JSONL stores · `harness_memory::open_memory(url)` / `open_recall(url)` picks the backend by URL: `file://`, `sqlite://` (FTS5 / CJK), `mem://` · `surrealkv://` · `ws://` (SurrealDB: BM25 + optional HNSW hybrid through any `Embedder`), `cortexdb://` | `harness-core`, `harness-context`, `harness-memory` |
 | **Privacy** | PII detect + redact (label/mask/hash/block, Luhn-checked cards) · redact-on-write `Memory` decorators | `harness-redact`, `harness-context` |
 | **Documents** | `read_document` — PDF/Word/Excel/PPT locally (pure Rust) · offline OCR for scanned PDFs (`pdftoppm` + `tesseract`) · LLM/vision fallback | `harness-tools-docs` |
-| **Observability** | `TelemetryHook` (structured `tracing` spans → OTLP) · JSONL session record + deterministic offline `replay` | `harness-loop` |
+| **Observability** | Loop-owned `tracing` spans (run → model / tool calls) → OTLP · `TelemetryHook` events + run totals · `metrics` (Prometheus via `harness-serve`) · JSONL session record + deterministic offline `replay` | `harness-loop`, `harness-serve` |
 | **Scheduler · MCP · Sandbox · CLI** | recurring jobs · MCP server+client · OS-native sandbox (macOS Seatbelt) · git-worktree / Docker · `harness code` / `run` / `replay` / `trace` / `sched` / `new` / `mcp serve` | — |
 
 ## Composable layers
@@ -119,11 +119,21 @@ let tool = ReadDocument::with_llm_fallback(model); // + vision fallback for imag
 
 ## Observability
 
-Two seams, one instrumentation. **`TelemetryHook`** projects the agent's
-lifecycle onto structured `tracing` spans (`agent_run` → `model.complete` /
-`tool.call` / `budget.warning`, with token, latency, and ok/err fields).
-Attach `tracing-opentelemetry` and they export to Jaeger / Tempo / any OTLP
-backend unchanged; attach `tracing_subscriber::fmt().json()` for a log pipeline.
+**Traces.** The loop runs each run in an `agent_run` span, each model call in
+a `chat` span and each tool call in an `execute_tool` span — real durations,
+parallel calls overlapping, failures marked `otel.status_code=error`, fields
+per the OpenTelemetry GenAI conventions. Enable the `otel` feature and call
+`harness_loop::otel::init_tracing_with_otlp("my-agent", "http://localhost:4317")`
+(or add `otel::otlp_layer` to your own subscriber) and they export to Jaeger /
+Tempo / any OTLP backend. **`TelemetryHook`** adds events inside those spans
+(`model.complete`, `tool.call`, `compact`, `budget.warning`) and a `run.end`
+line with the run's bill.
+
+**Metrics.** The loop records model-call duration and token usage, tool-call
+duration, run duration and compaction savings through the `metrics` facade
+(`harness_loop::meters` lists names and labels). Install any `metrics`
+recorder — or `harness_serve::prometheus::install()` and merge
+`prometheus::router(handle)` for `GET /metrics`.
 
 **Record + replay** makes a run reproducible for free:
 

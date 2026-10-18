@@ -22,7 +22,10 @@ before it can face real users:
   fresh audit hook per request means concurrent callers never share state.
 - **Auditable & traceable** — every request gets a `request_id` (returned in
   `ChatReply` / the terminal `Done` chunk) that is stamped into the audit trail,
-  the OTel trace, **and** the replay recording. One id ties all three together.
+  the trace (a `chat_request` span wrapping the run), **and** the replay
+  recording. One id ties all three together. A `TelemetryHook` is attached per
+  request by default (`without_telemetry()` to opt out); feature `prometheus`
+  serves the loop's metrics at `GET /metrics`, feature `otel` exports traces.
   Turn on `.with_replay(dir)` to record each run for deterministic replay, and use
   `harness_hooks::HashChainSink` for a tamper-evident (hash-chained) audit log
   that `verify_chain` can check for deletion / edits / reordering.
