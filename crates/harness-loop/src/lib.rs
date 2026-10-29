@@ -54,6 +54,8 @@ pub use learning::*;
 pub use memory_layer::*;
 pub mod boundary_guide;
 pub use boundary_guide::*;
+pub mod events;
+pub use events::{HostEvent, NoticeGuide};
 pub use profile_guide::*;
 pub use recall_layer::*;
 pub use registry::*;
