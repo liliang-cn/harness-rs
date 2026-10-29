@@ -56,8 +56,12 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
+    /// The whole prompt this call sent, cached or not. The loop calibrates
+    /// compaction against it, so an adapter whose provider reports cache
+    /// reads and writes separately (Anthropic) must add them back in.
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// The part of `input_tokens` served from a provider prompt cache.
     pub cached_input_tokens: u32,
     /// Tokens written into a provider prompt cache on this call — billed at a
     /// premium (Anthropic: 1.25x) to make later reads cheap. Zero on providers

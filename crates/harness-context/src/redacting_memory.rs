@@ -13,7 +13,7 @@
 //! transcript writer and the episode store write through the same trait:
 //!
 //! ```ignore
-//! use crate::RedactingMemory;
+//! use harness_context::RedactingMemory;
 //! // cortex: Arc<dyn Memory> backed by CortexDB
 //! let safe: Arc<dyn Memory> = Arc::new(RedactingMemory::new(cortex));
 //! spawn_transcript_writer(rx, safe.clone());   // every turn is scrubbed

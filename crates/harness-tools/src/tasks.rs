@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use crate::tasks::{JsonFileStore, make_tools};
+//! use harness_tools::tasks::{JsonFileStore, make_tools};
 //! use std::sync::Arc;
 //!
 //! let store = Arc::new(JsonFileStore::new("/var/lib/myapp/tasks.json"));

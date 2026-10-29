@@ -31,7 +31,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use crate::browser::BrowserTool;
+//! use harness_tools::browser::BrowserTool;
 //!
 //! AgentLoop::boxed(model).with_tool(std::sync::Arc::new(BrowserTool::new()))
 //! ```

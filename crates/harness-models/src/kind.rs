@@ -57,9 +57,34 @@ impl ApiKind {
     }
 }
 
+/// `"openai"`, `"anthropic"` or `"gemini"`, case-insensitive — the spelling a
+/// CLI flag or an env var carries.
+impl std::str::FromStr for ApiKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "openai" => Ok(ApiKind::OpenAI),
+            "anthropic" => Ok(ApiKind::Anthropic),
+            "gemini" => Ok(ApiKind::Gemini),
+            _ => Err(format!(
+                "unknown API kind {s:?} (expected openai, anthropic or gemini)"
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_the_three_kinds_and_rejects_anything_else() {
+        assert_eq!("openai".parse(), Ok(ApiKind::OpenAI));
+        assert_eq!("Anthropic".parse(), Ok(ApiKind::Anthropic));
+        assert_eq!("GEMINI".parse(), Ok(ApiKind::Gemini));
+        assert!("deepseek".parse::<ApiKind>().is_err());
+    }
 
     #[test]
     fn each_kind_builds_a_model_with_the_given_url_and_model() {

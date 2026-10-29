@@ -92,10 +92,16 @@ enum Cmd {
         /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
         #[arg(long)]
         model: Option<String>,
-        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL, else
-        /// https://api.deepseek.com).
+        /// Base URL of the endpoint (default: $HARNESS_BASE_URL, else
+        /// https://api.deepseek.com for --api openai). For --api anthropic it is
+        /// the host without /v1, e.g. https://api.anthropic.com.
         #[arg(long)]
         base_url: Option<String>,
+        /// Wire protocol: openai (chat-completions, the default), anthropic
+        /// (native Messages API, with prompt caching) or gemini (native).
+        /// Default: $HARNESS_API, else openai.
+        #[arg(long)]
+        api: Option<harness_models::ApiKind>,
         /// Max agent iterations (default: 12).
         #[arg(long, default_value_t = 12)]
         max_iters: u32,
@@ -144,9 +150,13 @@ enum Cmd {
         /// Model id (default: $HARNESS_MODEL, else "deepseek-chat").
         #[arg(long)]
         model: Option<String>,
-        /// OpenAI-compatible base URL (default: $HARNESS_BASE_URL).
+        /// Base URL of the endpoint (default: $HARNESS_BASE_URL).
         #[arg(long)]
         base_url: Option<String>,
+        /// Wire protocol: openai, anthropic or gemini (default: $HARNESS_API,
+        /// else openai).
+        #[arg(long)]
+        api: Option<harness_models::ApiKind>,
         /// Max agent iterations per turn (default: 30 — coding needs headroom).
         #[arg(long, default_value_t = 30)]
         max_iters: u32,
@@ -403,6 +413,7 @@ async fn main() -> anyhow::Result<()> {
             workspace,
             model,
             base_url,
+            api,
             max_iters,
             write,
             shell,
@@ -417,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
                 workspace,
                 model,
                 base_url,
+                api,
                 max_iters,
                 write,
                 shell,
@@ -432,10 +444,11 @@ async fn main() -> anyhow::Result<()> {
             workspace,
             model,
             base_url,
+            api,
             max_iters,
             yolo,
             sandbox,
-        } => run_code(workspace, model, base_url, max_iters, yolo, sandbox).await,
+        } => run_code(workspace, model, base_url, api, max_iters, yolo, sandbox).await,
     }
 }
 
@@ -444,6 +457,7 @@ struct RunOpts {
     workspace: Option<PathBuf>,
     model: Option<String>,
     base_url: Option<String>,
+    api: Option<harness_models::ApiKind>,
     max_iters: u32,
     write: bool,
     shell: bool,
@@ -456,10 +470,9 @@ struct RunOpts {
 async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     use harness_core::Task;
     use harness_loop::{AgentLoop, LiveProgressHook, Outcome};
-    use harness_models::OpenAiCompat;
     use std::sync::Arc;
 
-    let (base_url, model_id, key) = resolve_endpoint(opts.model, opts.base_url)?;
+    let endpoint = resolve_endpoint(opts.api, opts.model, opts.base_url)?;
 
     let root = opts
         .workspace
@@ -476,11 +489,7 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         || std::process::exit(130),
     );
 
-    let mut model = OpenAiCompat::with_key(base_url, model_id, key);
-    if let Some(w) = opts.context_window {
-        model = model.with_context_window(w);
-    }
-    let mut loop_ = AgentLoop::new(model)
+    let mut loop_ = AgentLoop::boxed(endpoint.build(opts.context_window))
         .with_cancellation(current.arm())
         // Always on: the hook only emits `tracing` spans/events, which cost
         // nothing without a subscriber. Without it, `RUST_LOG=harness.telemetry=info`
@@ -780,17 +789,17 @@ async fn run_code(
     workspace: Option<PathBuf>,
     model: Option<String>,
     base_url: Option<String>,
+    api: Option<harness_models::ApiKind>,
     max_iters: u32,
     yolo: bool,
     sandbox: bool,
 ) -> anyhow::Result<()> {
     use harness_core::{Block, Task, Turn, TurnRole};
     use harness_loop::{AgentLoop, Outcome};
-    use harness_models::OpenAiCompat;
     use std::io::Write;
     use std::sync::Arc;
 
-    let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
+    let endpoint = resolve_endpoint(api, model, base_url)?;
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
     // With --sandbox, shell commands run inside an OS sandbox (network denied,
     // writes confined to the workspace); falls back to a normal world if the OS
@@ -803,9 +812,9 @@ async fn run_code(
             "off".to_string(),
         )
     };
-    let model = OpenAiCompat::with_key(base_url, model_id.clone(), key);
+    let model_id = endpoint.model_id.clone();
 
-    let mut loop_ = AgentLoop::new(model)
+    let mut loop_ = AgentLoop::boxed(endpoint.build(None))
         .with_streaming(true)
         // Same reasoning as `run`, and more so here: this is the streaming
         // command, so it is the only one that can report time-to-first-token —
@@ -923,20 +932,74 @@ async fn run_code(
     Ok(())
 }
 
-/// Resolve (base_url, model_id, api_key) from flags → env → defaults. Shared by
-/// `run` and `sched`. Flags override env; env overrides sane defaults.
+/// The model endpoint a command talks to: protocol, URL, model id and key.
+struct Endpoint {
+    api: harness_models::ApiKind,
+    base_url: String,
+    model_id: String,
+    key: String,
+}
+
+impl Endpoint {
+    fn build(self, context_window: Option<u32>) -> std::sync::Arc<dyn harness_core::Model> {
+        use harness_models::{AnthropicNative, ApiKind, GeminiNative, OpenAiCompat};
+        use std::sync::Arc;
+
+        let Endpoint {
+            api,
+            base_url,
+            model_id,
+            key,
+        } = self;
+        let Some(w) = context_window else {
+            return api.build(base_url, model_id, key);
+        };
+        match api {
+            ApiKind::OpenAI => {
+                Arc::new(OpenAiCompat::with_key(base_url, model_id, key).with_context_window(w))
+            }
+            ApiKind::Anthropic => {
+                Arc::new(AnthropicNative::with_key(base_url, model_id, key).with_context_window(w))
+            }
+            ApiKind::Gemini => {
+                Arc::new(GeminiNative::with_key(base_url, model_id, key).with_context_window(w))
+            }
+        }
+    }
+}
+
+/// Resolve the endpoint from flags → env → defaults. Shared by `run`, `code`
+/// and `sched`. Flags override env; env overrides sane defaults.
 fn resolve_endpoint(
+    api: Option<harness_models::ApiKind>,
     model: Option<String>,
     base_url: Option<String>,
-) -> anyhow::Result<(String, String, String)> {
+) -> anyhow::Result<Endpoint> {
+    use harness_models::ApiKind;
+
+    let api = match api {
+        Some(api) => api,
+        None => match std::env::var("HARNESS_API") {
+            Ok(v) => v
+                .parse::<ApiKind>()
+                .map_err(|e| anyhow::anyhow!("$HARNESS_API: {e}"))?,
+            Err(_) => ApiKind::OpenAI,
+        },
+    };
     let (key, key_var) = std::env::var("HARNESS_API_KEY")
         .map(|k| (k, "HARNESS_API_KEY"))
         .or_else(|_| std::env::var("DEEPSEEK_API_KEY").map(|k| (k, "DEEPSEEK_API_KEY")))
         .map_err(|_| anyhow::anyhow!("set HARNESS_API_KEY (or DEEPSEEK_API_KEY)"))?;
-    let explicit_url = base_url.is_some() || std::env::var("HARNESS_BASE_URL").is_ok();
-    let base_url = base_url
-        .or_else(|| std::env::var("HARNESS_BASE_URL").ok())
-        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+    let explicit_url = base_url.or_else(|| std::env::var("HARNESS_BASE_URL").ok());
+    // The DeepSeek default only makes sense for chat-completions. A native
+    // protocol has no default to fall back on, so the URL must be given.
+    let base_url = match (explicit_url.clone(), api) {
+        (Some(url), _) => url,
+        (None, ApiKind::OpenAI) => "https://api.deepseek.com".to_string(),
+        (None, _) => {
+            anyhow::bail!("--api {api:?} needs an endpoint: set --base-url or $HARNESS_BASE_URL")
+        }
+    };
     let model_id = model
         .or_else(|| std::env::var("HARNESS_MODEL").ok())
         .unwrap_or_else(|| "deepseek-chat".to_string());
@@ -944,13 +1007,18 @@ fn resolve_endpoint(
     // A key set for one provider, sent to the default endpoint of another, is a
     // 401 that reads like a bad key rather than a misrouted one. Say the pairing
     // out loud before the request, while it can still be acted on.
-    if !explicit_url && key_var == "HARNESS_API_KEY" {
+    if explicit_url.is_none() && key_var == "HARNESS_API_KEY" {
         eprintln!(
             "note: using $HARNESS_API_KEY against the default endpoint {base_url} \
              (set --base-url or $HARNESS_BASE_URL if that key belongs elsewhere)"
         );
     }
-    Ok((base_url, model_id, key))
+    Ok(Endpoint {
+        api,
+        base_url,
+        model_id,
+        key,
+    })
 }
 
 /// Default jobs store: `~/.harness/jobs.json` (or `./harness-jobs.json` if HOME
@@ -1085,12 +1153,10 @@ fn build_scheduler(
     base_url: Option<String>,
 ) -> anyhow::Result<harness_loop::scheduler::Scheduler> {
     use harness_loop::scheduler::{EmailChannel, FileJobStore, JobStore, Scheduler, StdoutChannel};
-    use harness_models::OpenAiCompat;
     use std::sync::Arc;
 
-    let (base_url, model_id, key) = resolve_endpoint(model, base_url)?;
-    let model: Arc<dyn harness_core::Model> =
-        Arc::new(OpenAiCompat::with_key(base_url, model_id, key));
+    // The sched subcommands take no --api flag; $HARNESS_API picks the protocol.
+    let model = resolve_endpoint(None, model, base_url)?.build(None);
     let store: Arc<dyn JobStore> = Arc::new(FileJobStore::open(sched_store_path(store))?);
     let root = workspace.unwrap_or_else(|| std::env::current_dir().unwrap());
 

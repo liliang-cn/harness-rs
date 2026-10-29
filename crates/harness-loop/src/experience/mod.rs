@@ -34,7 +34,7 @@
 //! ## Wiring
 //!
 //! ```ignore
-//! use crate::experience::ExperienceRecorder;
+//! use harness_loop::experience::ExperienceRecorder;
 //!
 //! let recorder = ExperienceRecorder::new(memory);   // any Memory backend
 //! let loop_ = AgentLoop::new(model)
