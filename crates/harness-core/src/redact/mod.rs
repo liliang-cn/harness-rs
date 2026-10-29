@@ -20,7 +20,7 @@
 //!    demanded a block.
 //!
 //! ```
-//! use crate::redact::{Redactor, Action};
+//! use harness_core::redact::Redactor;
 //! let r = Redactor::new();
 //! let out = r.scrub("mail me at a@b.com, card 4111111111111111");
 //! assert!(out.text.contains("<EMAIL>"));

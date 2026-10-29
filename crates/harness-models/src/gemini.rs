@@ -77,6 +77,11 @@ impl GeminiNative {
         self
     }
 
+    pub fn with_context_window(mut self, w: u32) -> Self {
+        self.context_window = w;
+        self
+    }
+
     pub fn config(&self) -> &LlmConfig {
         &self.cfg
     }

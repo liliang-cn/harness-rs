@@ -12,7 +12,7 @@
 //! per request:
 //!
 //! ```ignore
-//! use crate::hooks::audit::{AuditHook, JsonlAuditSink, ACTOR_KEY, SESSION_KEY};
+//! use harness_loop::hooks::audit::{AuditHook, JsonlAuditSink, ACTOR_KEY, SESSION_KEY};
 //! use harness_core::redact::Redactor;
 //! use std::sync::Arc;
 //!

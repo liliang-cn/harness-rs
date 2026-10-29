@@ -71,7 +71,7 @@ impl std::error::Error for PolicyDenied {}
 /// need a type:
 ///
 /// ```
-/// use crate::browser::{BrowserTool, UrlPolicy};
+/// use harness_tools::browser::{BrowserTool, UrlPolicy};
 /// let tool = BrowserTool::new().with_policy(|url: &str| {
 ///     if url.starts_with("https://docs.internal.example/") {
 ///         Ok(())

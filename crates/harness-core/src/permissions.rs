@@ -21,7 +21,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use crate::permissions::{PermissionMode, PermissionRules, PermissionHook};
+//! use harness_core::permissions::{PermissionMode, PermissionRules, PermissionHook};
 //! use std::sync::Arc;
 //!
 //! let tools = my_tools();  // Vec<Arc<dyn Tool>>

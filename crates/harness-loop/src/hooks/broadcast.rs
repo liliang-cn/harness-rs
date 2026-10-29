@@ -25,7 +25,7 @@
 //! model images are omitted.
 //!
 //! ```ignore
-//! use crate::hooks::broadcast::BroadcastHook;
+//! use harness_loop::hooks::broadcast::BroadcastHook;
 //!
 //! let hook = std::sync::Arc::new(BroadcastHook::new(1024));
 //! let mut ui = hook.subscribe();        // → WebSocket / SSE

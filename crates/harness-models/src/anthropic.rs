@@ -207,6 +207,26 @@ struct AnthropicUsage {
     cache_creation_input_tokens: u32,
 }
 
+impl AnthropicUsage {
+    /// Anthropic's `input_tokens` counts only what came after the last cache
+    /// breakpoint — cache reads and writes are reported beside it, not inside
+    /// it. Every other adapter reports the whole prompt as input with the
+    /// cached part as a subset of it, and the loop relies on that: it
+    /// calibrates the compactor against `input_tokens`. Passed through raw,
+    /// a cached turn reads as a 2-token prompt and compaction fires far too
+    /// late.
+    fn to_usage(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens
+                + self.cache_read_input_tokens
+                + self.cache_creation_input_tokens,
+            output_tokens: self.output_tokens,
+            cached_input_tokens: self.cache_read_input_tokens,
+            cache_write_input_tokens: self.cache_creation_input_tokens,
+        }
+    }
+}
+
 // ----------------------------------------------------------------
 // Model impl
 // ----------------------------------------------------------------
@@ -365,12 +385,7 @@ impl Model for AnthropicNative {
         Ok(ModelOutput {
             text: if text.is_empty() { None } else { Some(text) },
             tool_calls,
-            usage: Usage {
-                input_tokens: parsed.usage.input_tokens,
-                output_tokens: parsed.usage.output_tokens,
-                cached_input_tokens: parsed.usage.cache_read_input_tokens,
-                cache_write_input_tokens: parsed.usage.cache_creation_input_tokens,
-            },
+            usage: parsed.usage.to_usage(),
             stop_reason,
             reasoning: if reasoning.is_empty() {
                 None
@@ -658,6 +673,22 @@ mod tests {
             tools: vec![],
             response_format: harness_core::ResponseFormat::Free,
         }
+    }
+
+    #[test]
+    fn usage_counts_cached_tokens_as_part_of_the_input() {
+        let u: AnthropicUsage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 2,
+            "output_tokens": 90,
+            "cache_read_input_tokens": 4527,
+            "cache_creation_input_tokens": 469,
+        }))
+        .unwrap();
+        let u = u.to_usage();
+        assert_eq!(u.input_tokens, 2 + 4527 + 469);
+        assert_eq!(u.cached_input_tokens, 4527);
+        assert_eq!(u.cache_write_input_tokens, 469);
+        assert_eq!(u.output_tokens, 90);
     }
 
     #[test]

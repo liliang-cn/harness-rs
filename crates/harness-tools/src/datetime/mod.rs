@@ -123,7 +123,7 @@ impl Default for Conventions {
 ///
 /// ```
 /// use chrono::DateTime;
-/// use crate::datetime::resolve;
+/// use harness_tools::datetime::resolve;
 ///
 /// let now = DateTime::parse_from_rfc3339("2026-06-15T09:00:00+08:00").unwrap();
 /// let r = resolve("明天下午3点开会", now).unwrap();
