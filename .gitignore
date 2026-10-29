@@ -34,3 +34,5 @@ projects/datainside/*/web/vendor/
 /package-lock.json
 # local article/export output
 /out/
+# Background job logs written by shell_spawn during local runs
+.harness/jobs/
