@@ -133,18 +133,37 @@ pub trait Model: Send + Sync + 'static {
     }
 
     /// Streaming is optional; default implementation falls back to `complete`.
+    ///
+    /// The fallback has to replay the whole output, not just its text: a
+    /// streaming loop rebuilds the turn from these deltas alone, so a tool
+    /// call left out here is a tool call the model made and the loop never
+    /// ran — the turn ends empty and reads as "the model only thought".
     async fn stream(
         &self,
         ctx: &Context,
     ) -> Result<futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError>
     {
         let out = self.complete(ctx).await?;
-        let deltas: Vec<Result<ModelDelta, ModelError>> = out
-            .text
-            .into_iter()
-            .map(|t| Ok(ModelDelta::Text(t)))
-            .chain(std::iter::once(Ok(ModelDelta::Stop(out.stop_reason))))
-            .collect();
+        let mut deltas: Vec<Result<ModelDelta, ModelError>> = Vec::new();
+        if let Some(r) = out.reasoning {
+            deltas.push(Ok(ModelDelta::Reasoning(r)));
+        }
+        if let Some(t) = out.text {
+            deltas.push(Ok(ModelDelta::Text(t)));
+        }
+        for call in out.tool_calls {
+            deltas.push(Ok(ModelDelta::ToolCallStart {
+                id: call.id.clone(),
+                name: call.name,
+            }));
+            deltas.push(Ok(ModelDelta::ToolCallArgs {
+                id: call.id.clone(),
+                partial_json: call.args.to_string(),
+            }));
+            deltas.push(Ok(ModelDelta::ToolCallEnd { id: call.id }));
+        }
+        deltas.push(Ok(ModelDelta::Usage(out.usage)));
+        deltas.push(Ok(ModelDelta::Stop(out.stop_reason)));
         Ok(Box::pin(futures::stream::iter(deltas)))
     }
 
@@ -233,5 +252,89 @@ mod arc_model_tests {
             .await
             .unwrap();
         assert_eq!(out.text.as_deref(), Some("ok"));
+    }
+
+    struct CompleteOnly;
+
+    #[async_trait]
+    impl Model for CompleteOnly {
+        async fn complete(&self, _ctx: &Context) -> Result<ModelOutput, ModelError> {
+            Ok(ModelOutput {
+                text: Some("checking".into()),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "a".into(),
+                        name: "read_file".into(),
+                        args: serde_json::json!({"path": "x"}),
+                    },
+                    ToolCall {
+                        id: "b".into(),
+                        name: "list_dir".into(),
+                        args: serde_json::json!({}),
+                    },
+                ],
+                usage: Usage {
+                    input_tokens: 120,
+                    output_tokens: 7,
+                    cached_input_tokens: 100,
+                    cache_write_input_tokens: 0,
+                },
+                stop_reason: StopReason::ToolUse,
+                reasoning: Some("thinking".into()),
+                ..Default::default()
+            })
+        }
+        fn info(&self) -> ModelInfo {
+            Dummy.info()
+        }
+    }
+
+    #[tokio::test]
+    async fn default_stream_replays_tool_calls_usage_and_reasoning() {
+        use futures::StreamExt;
+        let ctx = Context::new(crate::Task {
+            description: "x".into(),
+            source: None,
+            deadline: None,
+        });
+        let deltas: Vec<ModelDelta> = CompleteOnly
+            .stream(&ctx)
+            .await
+            .unwrap()
+            .map(|d| d.unwrap())
+            .collect()
+            .await;
+
+        let mut starts = Vec::new();
+        let mut args = Vec::new();
+        let mut usage = None;
+        let mut reasoning = None;
+        let mut text = None;
+        for d in deltas {
+            match d {
+                ModelDelta::ToolCallStart { id, name } => starts.push((id, name)),
+                ModelDelta::ToolCallArgs { id, partial_json } => args.push((id, partial_json)),
+                ModelDelta::Usage(u) => usage = Some(u),
+                ModelDelta::Reasoning(r) => reasoning = Some(r),
+                ModelDelta::Text(t) => text = Some(t),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            starts,
+            vec![
+                ("a".to_string(), "read_file".to_string()),
+                ("b".to_string(), "list_dir".to_string())
+            ]
+        );
+        assert_eq!(args[0].0, "a");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&args[0].1).unwrap(),
+            serde_json::json!({"path": "x"})
+        );
+        let usage = usage.expect("usage must survive the fallback");
+        assert_eq!((usage.input_tokens, usage.cached_input_tokens), (120, 100));
+        assert_eq!(reasoning.as_deref(), Some("thinking"));
+        assert_eq!(text.as_deref(), Some("checking"));
     }
 }

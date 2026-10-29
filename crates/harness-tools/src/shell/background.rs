@@ -37,6 +37,23 @@
 //! group kill. Ownership is stamped from `World::session` at spawn: a job is
 //! only visible to the actor that started it.
 //!
+//! ## Telling the host — events instead of polling
+//!
+//! A job is *watched*, not polled: once it outlives the grace window a
+//! per-job task awaits the child's exit directly. That task is the only owner
+//! of the `Child`, records the exit status in the table (so `status` / `list`
+//! see it at once) and, if the host called [`JobTable::subscribe`], sends a
+//! [`JobEvent`]:
+//!
+//! - `Exited` — the process ended (including via `shell_job_kill`).
+//! - `Overdue` — the job is still running `expect_secs` after it started
+//!   (default 600), and again every `expect_secs` after that. The model sets
+//!   `expect_secs` when it spawns, so "CI should take ~20 minutes" becomes a
+//!   deadline the host is woken at, instead of a promise nobody keeps.
+//!
+//! Jobs reaped on purpose (run end, session close, shutdown) are silent: the
+//! host asked for that. With no subscriber nothing is queued.
+//!
 //! The table is host-owned and shared: hand the same `Arc<JobTable>` to the
 //! three tools, the reaper hook, and (in a server) your shutdown path — which
 //! should call [`JobTable::kill_all_owned`].
@@ -49,9 +66,10 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::{Notify, mpsc, watch};
 
 /// How long `shell_spawn` waits for the command to just finish. Anything that
 /// exits inside this window is an ordinary exec, not a job.
@@ -68,6 +86,16 @@ const TERM_GRACE_MS: u64 = 3000;
 const MAX_WAIT_MS: u64 = 60_000;
 /// How often an in-call wait re-reads the job.
 const WAIT_TICK: Duration = Duration::from_millis(250);
+/// How long a job may run before the host is told it is overdue, when the
+/// spawner gave no estimate.
+const DEFAULT_EXPECT_SECS: u64 = 600;
+/// How long the watcher waits for the output pumps to hit EOF after the child
+/// exits. A grandchild that inherited the pipes can hold them open forever.
+const PUMP_FLUSH_MS: u64 = 500;
+/// The tail carried by a [`JobEvent`]: at most this many lines...
+const TAIL_LINES: usize = 8;
+/// ...of at most this many bytes in all.
+const TAIL_BYTES: usize = 2048;
 
 /// Which cleanup tier a job belongs to. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -90,6 +118,11 @@ pub struct SpawnRequest {
     pub cwd: Option<String>,
     #[serde(default = "default_scope")]
     pub scope: JobScope,
+    /// How long the spawner expects this to run, in seconds. When it is still
+    /// running after that, the host gets a [`JobEvent::Overdue`] (and another
+    /// every interval after). Default 600.
+    #[serde(default)]
+    pub expect_secs: Option<u64>,
 }
 
 fn default_scope() -> JobScope {
@@ -104,10 +137,38 @@ pub enum Spawned {
     Running { id: u64, pid: u32, preview: String },
 }
 
+/// What the host hears about a background job. Sent only for jobs that
+/// outlived the grace window and were not reaped on purpose.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum JobEvent {
+    /// The process ended; `exit_status` is -1 when it was killed by a signal.
+    Exited {
+        id: u64,
+        program: String,
+        exit_status: i32,
+        running_for: Duration,
+        /// Last few lines of the log, bounded.
+        tail: String,
+    },
+    /// Still running past its `expect_secs`. Repeats every interval.
+    Overdue {
+        id: u64,
+        program: String,
+        running_for: Duration,
+        tail: String,
+    },
+}
+
 struct Job {
     program: String,
     args: Vec<String>,
-    child: Option<tokio::process::Child>,
+    /// The `Child` itself lives in the job's watcher task; these are the
+    /// handles to it: exit status (`None` until it ends) and a hard-kill nudge.
+    exit_rx: watch::Receiver<Option<i32>>,
+    hard_kill: Arc<Notify>,
+    expect_secs: u64,
+    overdue: u32,
     pid: u32,
     scope: JobScope,
     /// Ownership stamps from `World::session` at spawn time.
@@ -148,7 +209,10 @@ impl Job {
 
 /// The shared registry of live jobs. One per host process; see module docs.
 pub struct JobTable {
-    jobs: Mutex<HashMap<u64, Job>>, // std Mutex: never held across an await
+    // std Mutex: never held across an await. Arc'd because each job's watcher
+    // task records its exit here.
+    jobs: Arc<Mutex<HashMap<u64, Job>>>,
+    events: Arc<Mutex<Option<mpsc::UnboundedSender<JobEvent>>>>,
     next: AtomicU64,
 }
 
@@ -161,9 +225,19 @@ impl Default for JobTable {
 impl JobTable {
     pub fn new() -> Self {
         Self {
-            jobs: Mutex::new(HashMap::new()),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            events: Arc::new(Mutex::new(None)),
             next: AtomicU64::new(1),
         }
+    }
+
+    /// Receive [`JobEvent`]s for every background job of this table. One
+    /// subscriber at a time: a later call replaces the earlier one. Drop the
+    /// receiver and events are discarded again.
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<JobEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.events.lock().unwrap() = Some(tx);
+        rx
     }
 
     /// Start a process in its own process group, pumping output to
@@ -191,6 +265,7 @@ impl JobTable {
         #[cfg(unix)]
         cmd.process_group(0); // its own group: group-kill reaches grandchildren
 
+        let started_at = Instant::now(); // process start, not "grace window over"
         let mut child = cmd
             .spawn()
             .map_err(|e| ToolError::Exec(format!("spawn `{}`: {e}", req.program)))?;
@@ -224,10 +299,17 @@ impl JobTable {
             }
             Err(_) => {
                 let preview = read_slice(&log_path, 0, SPAWN_PREVIEW_BYTES).0;
+                let log_path_for_watch = log_path.clone();
+                let (exit_tx, exit_rx) = watch::channel(None);
+                let hard_kill = Arc::new(Notify::new());
+                let expect_secs = req.expect_secs.unwrap_or(DEFAULT_EXPECT_SECS).max(1);
                 let job = Job {
                     program: req.program.clone(),
                     args: req.args.clone(),
-                    child: Some(child),
+                    exit_rx,
+                    hard_kill: hard_kill.clone(),
+                    expect_secs,
+                    overdue: 0,
                     pid,
                     scope: req.scope,
                     actor: world
@@ -240,11 +322,25 @@ impl JobTable {
                     log_path,
                     read_offset: preview.len() as u64,
                     started_ms: world.clock.now_ms(),
-                    started_at: Instant::now(),
+                    started_at,
                     last_touch: Instant::now(),
                     exit: None,
                 };
                 self.jobs.lock().unwrap().insert(id, job);
+                tokio::spawn(
+                    Watcher {
+                        id,
+                        program: req.program.clone(),
+                        log_path: log_path_for_watch,
+                        started_at,
+                        interval: Duration::from_secs(expect_secs),
+                        jobs: self.jobs.clone(),
+                        events: self.events.clone(),
+                        exit_tx,
+                        hard_kill,
+                    }
+                    .run(child, pumps),
+                );
                 Ok(Spawned::Running { id, pid, preview })
             }
         }
@@ -261,13 +357,6 @@ impl JobTable {
             let mut jobs = self.jobs.lock().unwrap();
             let job = jobs.get_mut(&id).filter(|j| j.visible_to(actor))?;
             job.last_touch = Instant::now();
-            if job.exit.is_none()
-                && let Some(child) = job.child.as_mut()
-                && let Ok(Some(st)) = child.try_wait()
-            {
-                job.exit = Some(st.code().unwrap_or(-1));
-                job.child = None; // reaped; nothing left to kill
-            }
             (
                 job.log_path.clone(),
                 job.read_offset,
@@ -305,18 +394,11 @@ impl JobTable {
 
     /// Same, keyed by actor directly — for HTTP surfaces with no `World`.
     pub fn list_for(&self, actor: Option<&str>) -> Vec<Value> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let jobs = self.jobs.lock().unwrap();
         let mut rows: Vec<(u64, Value)> = jobs
-            .iter_mut()
+            .iter()
             .filter(|(_, j)| j.visible_to(actor))
             .map(|(id, j)| {
-                if j.exit.is_none()
-                    && let Some(child) = j.child.as_mut()
-                    && let Ok(Some(st)) = child.try_wait()
-                {
-                    j.exit = Some(st.code().unwrap_or(-1));
-                    j.child = None;
-                }
                 (
                     *id,
                     json!({
@@ -324,6 +406,9 @@ impl JobTable {
                         "state": j.state(), "exit_status": j.exit,
                         "scope": format!("{:?}", j.scope).to_lowercase(),
                         "started_ms": j.started_ms,
+                        "running_for_ms": j.started_at.elapsed().as_millis() as u64,
+                        "expect_secs": j.expect_secs,
+                        "overdue_count": j.overdue,
                     }),
                 )
             })
@@ -340,19 +425,17 @@ impl JobTable {
 
     /// Same, keyed by actor directly — for HTTP surfaces with no `World`.
     pub async fn kill_for(&self, id: u64, actor: Option<&str>) -> Option<Value> {
-        let (child, pid) = {
-            let mut jobs = self.jobs.lock().unwrap();
-            let job = jobs.get_mut(&id).filter(|j| j.visible_to(actor))?;
+        let (rx, hard_kill, pid) = {
+            let jobs = self.jobs.lock().unwrap();
+            let job = jobs.get(&id).filter(|j| j.visible_to(actor))?;
             if job.exit.is_some() {
                 return Some(json!({ "id": id, "state": "exited", "exit_status": job.exit }));
             }
-            (job.child.take(), job.pid)
+            (job.exit_rx.clone(), job.hard_kill.clone(), job.pid)
         };
-        let exit = terminate(child, pid).await;
-        let mut jobs = self.jobs.lock().unwrap();
-        if let Some(job) = jobs.get_mut(&id) {
-            job.exit = Some(exit);
-        }
+        // The watcher owns the child and records the exit (and tells the
+        // host); this only signals and waits for it to have happened.
+        let exit = terminate(rx, hard_kill, pid).await;
         Some(json!({ "id": id, "state": "killed", "exit_status": exit }))
     }
 
@@ -412,45 +495,126 @@ impl JobTable {
         };
         for job in doomed {
             signal_group(job.pid, Sig::Term);
-            let (child, pid) = (job.child, job.pid);
+            let (rx, hard_kill, pid) = (job.exit_rx, job.hard_kill, job.pid);
             match tokio::runtime::Handle::try_current() {
                 Ok(h) => {
                     h.spawn(async move {
-                        terminate(child, pid).await;
+                        terminate(rx, hard_kill, pid).await;
                     });
                 }
                 // No runtime (host is tearing down): no grace, just end it.
-                Err(_) => {
-                    signal_group(pid, Sig::Kill);
-                    drop(child); // kill_on_drop finishes the direct child
-                }
+                // The watcher task dies with the runtime and `kill_on_drop`
+                // finishes the direct child.
+                Err(_) => signal_group(pid, Sig::Kill),
             }
         }
     }
 }
 
-/// SIGTERM the group, give it `TERM_GRACE_MS`, then SIGKILL the group.
-/// Returns the exit status of the direct child (-1 when unknowable).
-async fn terminate(child: Option<tokio::process::Child>, pid: u32) -> i32 {
+/// SIGTERM the group, give it `TERM_GRACE_MS`, then SIGKILL the group. Waits
+/// for the watcher to report the exit and returns the direct child's status
+/// (-1 when unknowable).
+async fn terminate(
+    mut exit: watch::Receiver<Option<i32>>,
+    hard_kill: Arc<Notify>,
+    pid: u32,
+) -> i32 {
     signal_group(pid, Sig::Term);
-    let Some(mut child) = child else {
-        // Nothing to await on: schedule the hard stop and move on.
-        tokio::time::sleep(Duration::from_millis(TERM_GRACE_MS)).await;
-        signal_group(pid, Sig::Kill);
-        return -1;
-    };
-    match tokio::time::timeout(Duration::from_millis(TERM_GRACE_MS), child.wait()).await {
-        Ok(st) => st.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1),
-        Err(_) => {
-            signal_group(pid, Sig::Kill);
-            let _ = child.start_kill(); // non-unix fallback; no-op if already dead
-            child
-                .wait()
-                .await
-                .map(|s| s.code().unwrap_or(-1))
-                .unwrap_or(-1)
+    if let Some(code) = wait_exit(&mut exit, TERM_GRACE_MS).await {
+        return code;
+    }
+    signal_group(pid, Sig::Kill);
+    hard_kill.notify_one(); // non-unix fallback: the watcher `start_kill`s its child
+    wait_exit(&mut exit, TERM_GRACE_MS).await.unwrap_or(-1)
+}
+
+async fn wait_exit(exit: &mut watch::Receiver<Option<i32>>, ms: u64) -> Option<i32> {
+    tokio::time::timeout(Duration::from_millis(ms), exit.wait_for(|c| c.is_some()))
+        .await
+        .ok()?
+        .ok()
+        .and_then(|c| *c)
+}
+
+/// One per background job: owns the `Child`, so it can await the exit itself
+/// and race it against the job's deadline. The only place that learns a job
+/// ended — everything else (status, kill, the host) hears it from here.
+struct Watcher {
+    id: u64,
+    program: String,
+    log_path: PathBuf,
+    started_at: Instant,
+    interval: Duration,
+    jobs: Arc<Mutex<HashMap<u64, Job>>>,
+    events: Arc<Mutex<Option<mpsc::UnboundedSender<JobEvent>>>>,
+    exit_tx: watch::Sender<Option<i32>>,
+    hard_kill: Arc<Notify>,
+}
+
+impl Watcher {
+    async fn run(self, mut child: tokio::process::Child, pumps: Vec<tokio::task::JoinHandle<()>>) {
+        // Measured from process start, so a deadline shorter than the grace
+        // window fires the moment the watch begins.
+        let mut next = tokio::time::Instant::from_std(self.started_at + self.interval);
+        let mut deadline = Box::pin(tokio::time::sleep_until(next));
+        let status = loop {
+            tokio::select! {
+                st = child.wait() => break st.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1),
+                _ = &mut deadline => {
+                    next += self.interval;
+                    deadline.as_mut().reset(next);
+                    // A reaped job (entry gone) is silent: the host ended it.
+                    let known = self.jobs.lock().unwrap().get_mut(&self.id).map(|j| j.overdue += 1);
+                    if known.is_some() {
+                        self.emit(JobEvent::Overdue {
+                            id: self.id,
+                            program: self.program.clone(),
+                            running_for: self.started_at.elapsed(),
+                            tail: self.tail(),
+                        });
+                    }
+                }
+                _ = self.hard_kill.notified() => {
+                    let _ = child.start_kill();
+                }
+            }
+        };
+        // Flush what the job printed before anyone reads the tail, but don't
+        // wait on a grandchild that kept the pipes open.
+        for p in pumps {
+            let _ = tokio::time::timeout(Duration::from_millis(PUMP_FLUSH_MS), p).await;
+        }
+        let known = {
+            let mut jobs = self.jobs.lock().unwrap();
+            jobs.get_mut(&self.id).map(|j| j.exit = Some(status))
+        };
+        let _ = self.exit_tx.send(Some(status));
+        if known.is_some() {
+            self.emit(JobEvent::Exited {
+                id: self.id,
+                program: self.program.clone(),
+                exit_status: status,
+                running_for: self.started_at.elapsed(),
+                tail: self.tail(),
+            });
         }
     }
+
+    fn tail(&self) -> String {
+        tail_of(&read_slice(&self.log_path, 0, TAIL_BYTES).0, TAIL_LINES)
+    }
+
+    fn emit(&self, ev: JobEvent) {
+        if let Some(tx) = self.events.lock().unwrap().as_ref() {
+            let _ = tx.send(ev); // receiver gone = nobody is listening
+        }
+    }
+}
+
+/// The last `lines` non-blank lines of `text`.
+fn tail_of(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
 }
 
 enum Sig {
@@ -511,41 +675,96 @@ fn read_slice(path: &std::path::Path, offset: u64, cap: usize) -> (String, u64, 
 
 // ---------- the tools ----------
 
-use std::sync::Arc;
-
 /// Tool: start a background job. See the module docs for lifecycle.
 pub struct ShellSpawn {
     table: Arc<JobTable>,
+    default_scope: JobScope,
     schema: ToolSchema,
+}
+
+impl JobScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            JobScope::Run => "run",
+            JobScope::Session => "session",
+            JobScope::Detached => "detached",
+        }
+    }
+}
+
+fn spawn_schema(default_scope: JobScope) -> ToolSchema {
+    let scopes = [
+        ("run", "killed automatically when this task ends"),
+        (
+            "session",
+            "survives into later turns of this conversation, reclaimed on idle timeout",
+        ),
+        (
+            "detached",
+            "outlives everything; only when the user explicitly asks for that",
+        ),
+    ];
+    let scope_doc = scopes
+        .iter()
+        .map(|(name, what)| {
+            if *name == default_scope.as_str() {
+                format!("'{name}' (default — {what})")
+            } else {
+                format!("'{name}' ({what})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    ToolSchema {
+        name: "shell_spawn".into(),
+        description: format!(
+            "Start a long-running command in the background (dev server, watcher, CI wait, \
+             anything that does not exit on its own) and return a job_id immediately. Commands \
+             that finish within ~2s are returned directly like shell_exec. Poll with \
+             shell_job_status, stop with shell_job_kill. The host tells you when a job exits, \
+             and again if it is still running past expect_secs — so you do not need to poll or \
+             sleep: say what you started and stop. Always set expect_secs to your honest \
+             estimate of how long the command takes (default 600), and tell the user that ETA. \
+             scope: {scope_doc}."
+        ),
+        input: json!({
+            "type": "object",
+            "properties": {
+                "program": {"type": "string"},
+                "args": {"type": "array", "items": {"type": "string"}},
+                "cwd": {"type": "string", "description": "Relative to workspace root"},
+                "scope": {
+                    "type": "string", "enum": ["run", "session", "detached"],
+                    "default": default_scope.as_str()
+                },
+                "expect_secs": {
+                    "type": "integer", "minimum": 1,
+                    "description": "Expected run time in seconds. You are notified if the \
+                                    job is still running after this (and again each interval). \
+                                    Default 600."
+                }
+            },
+            "required": ["program"]
+        }),
+    }
 }
 
 impl ShellSpawn {
     pub fn new(table: Arc<JobTable>) -> Self {
         Self {
             table,
-            schema: ToolSchema {
-                name: "shell_spawn".into(),
-                description: "Start a long-running command in the background (dev server, \
-                              watcher, anything that does not exit on its own) and return a \
-                              job_id immediately. Commands that finish within ~2s are returned \
-                              directly like shell_exec. Poll with shell_job_status, stop with \
-                              shell_job_kill. scope: 'run' (default — killed automatically when \
-                              this task ends), 'session' (survives into later turns of this \
-                              conversation, reclaimed on idle timeout), 'detached' (outlives \
-                              everything; only when the user explicitly asks for that)."
-                    .into(),
-                input: json!({
-                    "type": "object",
-                    "properties": {
-                        "program": {"type": "string"},
-                        "args": {"type": "array", "items": {"type": "string"}},
-                        "cwd": {"type": "string", "description": "Relative to workspace root"},
-                        "scope": {"type": "string", "enum": ["run", "session", "detached"]}
-                    },
-                    "required": ["program"]
-                }),
-            },
+            default_scope: JobScope::Run,
+            schema: spawn_schema(JobScope::Run),
         }
+    }
+
+    /// Scope for jobs whose call does not name one. `run` unless the host
+    /// outlives a single agent run — an interactive REPL, where a job started
+    /// this turn must still be there to report on the next.
+    pub fn with_default_scope(mut self, scope: JobScope) -> Self {
+        self.default_scope = scope;
+        self.schema = spawn_schema(scope);
+        self
     }
 }
 
@@ -561,6 +780,11 @@ impl Tool for ShellSpawn {
         ToolRisk::Destructive
     }
     async fn invoke(&self, args: Value, world: &mut World) -> Result<ToolResult, ToolError> {
+        let mut args = args;
+        if let Some(o) = args.as_object_mut() {
+            o.entry("scope")
+                .or_insert(json!(self.default_scope.as_str()));
+        }
         let req: SpawnRequest =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
                 name: "shell_spawn".into(),

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use harness_core::Skill;
 use std::path::{Path, PathBuf};
 
+mod host;
 mod interrupt;
 
 #[derive(Parser, Debug)]
@@ -663,9 +664,17 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
 /// stdout token-by-token, prints a compact activity line before each tool call,
 /// and — in NORMAL mode — blocks on a y/N prompt before any mutating tool runs,
 /// returning `Deny` (which the loop surfaces to the model) if the user declines.
+///
+/// The keyboard has exactly one reader (the REPL's stdin thread), so the y/N
+/// answer is not read here: the hook leaves a one-shot sender in `answer` and
+/// the stdin thread gives the next line to it instead of to the event loop.
 struct ReplHook {
     yolo: bool,
+    answer: AnswerSlot,
 }
+
+/// Where the hook parks its request for "the next line the person types".
+type AnswerSlot = std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>>;
 
 impl harness_core::Hook for ReplHook {
     fn name(&self) -> &str {
@@ -706,9 +715,14 @@ impl harness_core::Hook for ReplHook {
                 }
                 eprint!("  apply this {}? [y/N] ", action.tool);
                 let _ = std::io::stderr().flush();
-                let mut line = String::new();
-                let ok = std::io::stdin().read_line(&mut line).is_ok()
-                    && matches!(line.trim(), "y" | "Y" | "yes");
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                *self.answer.lock().unwrap() = Some(tx);
+                // The hook is sync and runs on a runtime thread: block_in_place
+                // hands that thread's other work to its siblings while we wait
+                // (the stdin thread and job watchers must keep running). EOF
+                // drops the sender, which reads as "no".
+                let ok = tokio::task::block_in_place(|| rx.blocking_recv())
+                    .is_ok_and(|line| matches!(line.trim(), "y" | "Y" | "yes"));
                 if ok {
                     HookOutcome::Allow
                 } else {
@@ -795,7 +809,9 @@ async fn run_code(
     sandbox: bool,
 ) -> anyhow::Result<()> {
     use harness_core::{Block, Task, Turn, TurnRole};
-    use harness_loop::{AgentLoop, Outcome};
+    use harness_loop::{AgentLoop, HostEvent, NoticeGuide, Outcome};
+    use harness_tools::shell::background::JobScope;
+    use harness_tools::shell::{JobReaperHook, JobTable, ShellJobKill, ShellJobStatus, ShellSpawn};
     use std::io::Write;
     use std::sync::Arc;
 
@@ -804,7 +820,7 @@ async fn run_code(
     // With --sandbox, shell commands run inside an OS sandbox (network denied,
     // writes confined to the workspace); falls back to a normal world if the OS
     // sandbox tool is unavailable.
-    let (mut world, sandbox_desc) = if sandbox {
+    let (world, sandbox_desc) = if sandbox {
         os_sandbox_world(&root).await
     } else {
         (
@@ -814,7 +830,15 @@ async fn run_code(
     };
     let model_id = endpoint.model_id.clone();
 
-    let mut loop_ = AgentLoop::boxed(endpoint.build(None))
+    // One table behind the three job tools and the reaper hook. Jobs default
+    // to `session` scope here: a REPL turn ends long before "wait for CI"
+    // does, and a `run`-scoped job would be killed with it.
+    let jobs = Arc::new(JobTable::new());
+    // Job notices that arrive mid-turn wait here for the model's next call.
+    let notices = NoticeGuide::new();
+    let answer = AnswerSlot::default();
+
+    let loop_ = AgentLoop::boxed(endpoint.build(None))
         .with_streaming(true)
         // Same reasoning as `run`, and more so here: this is the streaming
         // command, so it is the only one that can report time-to-first-token —
@@ -829,7 +853,17 @@ async fn run_code(
         .with_tool(Arc::new(harness_tools::fs::EditFile))
         .with_tool(Arc::new(harness_tools::shell::ShellRead))
         .with_tool(Arc::new(harness_tools::shell::ShellExec))
-        .with_hook(Arc::new(ReplHook { yolo }));
+        .with_tool(Arc::new(
+            ShellSpawn::new(jobs.clone()).with_default_scope(JobScope::Session),
+        ))
+        .with_tool(Arc::new(ShellJobStatus::new(jobs.clone())))
+        .with_tool(Arc::new(ShellJobKill::new(jobs.clone())))
+        .with_hook(Arc::new(JobReaperHook::new(jobs.clone())))
+        .with_guide(notices.clone())
+        .with_hook(Arc::new(ReplHook {
+            yolo,
+            answer: answer.clone(),
+        }));
 
     let mode = if yolo {
         "\x1b[31mYOLO\x1b[0m (no approval)"
@@ -840,96 +874,255 @@ async fn run_code(
         "\x1b[1mharness code\x1b[0m — {model_id}  ·  {}  ·  {mode}  ·  sandbox: {sandbox_desc}",
         root.display()
     );
-    println!("tools: read · write · edit · list · grep · glob · shell    /reset · /exit\n");
+    println!(
+        "tools: read · write · edit · list · grep · glob · shell · background jobs    /jobs · /reset · /exit\n"
+    );
 
     // Ctrl-C during a turn cancels that turn — a fresh token each time, since
     // a cancelled token stays cancelled and would poison every later turn.
-    // Ctrl-C at the prompt, with nothing armed, quits like any other REPL.
+    // Ctrl-C at the prompt, with nothing armed, quits like any other REPL —
+    // taking the session's background jobs with it, since `process::exit`
+    // runs no destructors.
     let current = interrupt::Current::new();
+    let quit_jobs = jobs.clone();
     let _watcher = interrupt::watch(
         current.clone(),
         || eprintln!("\n\x1b[33m^C — cancelling; Ctrl-C again to force quit\x1b[0m"),
-        || {
+        move || {
             println!();
+            quit_jobs.kill_all_owned();
             std::process::exit(130)
         },
     );
 
-    let mut seed: Vec<Turn> = Vec::new();
-    let stdin = std::io::stdin();
-    loop {
-        print!("\x1b[1;36m› \x1b[0m");
-        std::io::stdout().flush().ok();
-        let mut line = String::new();
-        if stdin.read_line(&mut line)? == 0 {
-            break; // EOF / Ctrl-D
-        }
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        match input {
-            "/exit" | "/quit" | ":q" => break,
-            "/reset" => {
-                seed.clear();
-                println!("\x1b[2m(context cleared)\x1b[0m");
-                continue;
+    // Everything that can wake the host lands in this one queue: the keyboard
+    // thread and the job table's events.
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
+    spawn_keyboard(tx.clone(), answer);
+    {
+        let mut job_events = jobs.subscribe();
+        tokio::spawn(async move {
+            while let Some(ev) = job_events.recv().await {
+                if tx.send(ev.into()).is_err() {
+                    break;
+                }
             }
-            _ => {}
-        }
-
-        let task = Task {
-            description: input.to_string(),
-            source: None,
-            deadline: None,
-        };
-        loop_.cancel = current.arm();
-        let outcome = loop_
-            .run_with_seed_history(task, seed.clone(), &mut world, max_iters)
-            .await;
-        current.disarm();
-        println!(); // terminate the streamed line
-        let reply = match outcome {
-            Ok(Outcome::Done { text, .. }) => text.unwrap_or_default(),
-            Ok(Outcome::BudgetExhausted {
-                last_text, iters, ..
-            }) => {
-                eprintln!("\x1b[33m(stopped at {iters}-iter budget)\x1b[0m");
-                last_text.unwrap_or_default()
-            }
-            Ok(Outcome::Stuck {
-                last_text,
-                iters,
-                reason,
-                ..
-            }) => {
-                eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
-                last_text.unwrap_or_default()
-            }
-            Ok(Outcome::Cancelled {
-                last_text, iters, ..
-            }) => {
-                eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
-                last_text.unwrap_or_default()
-            }
-            Err(e) => {
-                eprintln!("\x1b[31merror:\x1b[0m {e}");
-                continue;
-            }
-        };
-        // Grow the conversation so the next turn has context. Files on disk are
-        // the real shared state; this keeps the dialogue coherent.
-        seed.push(Turn {
-            role: TurnRole::User,
-            blocks: vec![Block::Text(input.to_string())],
-        });
-        seed.push(Turn {
-            role: TurnRole::Assistant,
-            blocks: vec![Block::Text(reply)],
         });
     }
+
+    let mut seed: Vec<Turn> = Vec::new();
+    // The loop and world live here between turns and move into the running
+    // turn's future (a borrow could not outlive the `select!` below), which
+    // hands them back when it finishes.
+    let mut idle = Some((loop_, world));
+    let mut dispatch = host::Dispatcher::default();
+    // Lines typed while a turn was running; they run, in order, once it ends.
+    let mut typed: std::collections::VecDeque<String> = Default::default();
+    // An input the host decided to run by itself (a job notice).
+    let mut auto_input: Option<String> = None;
+    let mut turn = None;
+    let mut turn_input = String::new();
+    let mut prompted = false;
+
+    loop {
+        if turn.is_none() {
+            let mut next = None;
+            if let Some(line) = typed.pop_front() {
+                let input = line.trim();
+                match input {
+                    "" => continue,
+                    "/exit" | "/quit" | ":q" => break,
+                    "/reset" => {
+                        seed.clear();
+                        println!("\x1b[2m(context cleared)\x1b[0m");
+                        prompted = false;
+                        continue;
+                    }
+                    _ => {}
+                }
+                dispatch.start_user_turn();
+                next = Some(input.to_string());
+            } else if let Some(notice) = auto_input.take() {
+                next = Some(notice);
+            }
+            match next {
+                Some(input) => {
+                    turn_input = input.clone();
+                    let task = Task {
+                        description: input,
+                        source: None,
+                        deadline: None,
+                    };
+                    let (mut loop_, mut world) = idle.take().expect("no turn is running");
+                    loop_.cancel = current.arm();
+                    let history = seed.clone();
+                    turn = Some(Box::pin(async move {
+                        let outcome = loop_
+                            .run_with_seed_history(task, history, &mut world, max_iters)
+                            .await;
+                        (outcome, loop_, world)
+                    }));
+                    prompted = false;
+                }
+                None if !prompted => {
+                    print!("\x1b[1;36m› \x1b[0m");
+                    std::io::stdout().flush().ok();
+                    prompted = true;
+                }
+                None => {}
+            }
+        }
+
+        tokio::select! {
+            ev = events.recv() => {
+                let Some(ev) = ev else { break };
+                match ev {
+                    HostEvent::Input(line) => {
+                        dispatch.user_input();
+                        if line.trim() == "/jobs" {
+                            // Read-only, so it answers even mid-turn.
+                            println!("{}", host::fmt_jobs(&jobs.list_for(None)));
+                            prompted = false;
+                        } else {
+                            typed.push_back(line);
+                        }
+                    }
+                    job_event => {
+                        if let Some(headline) = job_event.headline() {
+                            println!("\n\x1b[2m⏺ {headline}\x1b[0m");
+                        }
+                        let notice = job_event.notice().unwrap_or_default();
+                        match dispatch.on_job_event() {
+                            host::JobAction::StartTurn => auto_input = Some(notice),
+                            host::JobAction::Queue => {
+                                notices.push(notice);
+                                if !dispatch.is_busy() {
+                                    println!(
+                                        "\x1b[2m(not acting on it: {} turns ran on their own; \
+                                         it goes to the agent with your next message)\x1b[0m",
+                                        host::MAX_AUTO_TURNS
+                                    );
+                                    prompted = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finished = async { turn.as_mut().unwrap().await }, if turn.is_some() => {
+                let (outcome, loop_, world) = finished;
+                idle = Some((loop_, world));
+                turn = None;
+                current.disarm();
+                println!(); // terminate the streamed line
+                let reply = match outcome {
+                    Ok(Outcome::Done { text, .. }) => Some(text.unwrap_or_default()),
+                    Ok(Outcome::BudgetExhausted {
+                        last_text, iters, ..
+                    }) => {
+                        eprintln!("\x1b[33m(stopped at {iters}-iter budget)\x1b[0m");
+                        Some(last_text.unwrap_or_default())
+                    }
+                    Ok(Outcome::Stuck {
+                        last_text,
+                        iters,
+                        reason,
+                        ..
+                    }) => {
+                        eprintln!("\x1b[33m(stuck after {iters} iters: {reason})\x1b[0m");
+                        Some(last_text.unwrap_or_default())
+                    }
+                    Ok(Outcome::Cancelled {
+                        last_text, iters, ..
+                    }) => {
+                        eprintln!("\x1b[33m(cancelled after {iters} iters)\x1b[0m");
+                        Some(last_text.unwrap_or_default())
+                    }
+                    Err(e) => {
+                        eprintln!("\x1b[31merror:\x1b[0m {e}");
+                        None
+                    }
+                };
+                // The notices the model read this turn belong to the
+                // conversation the next turn inherits; the turn's own context
+                // is gone once it ends.
+                let delivered = notices.take_delivered();
+                if let Some(reply) = reply {
+                    // Grow the conversation so the next turn has context. Files
+                    // on disk are the real shared state; this keeps the
+                    // dialogue coherent.
+                    let mut blocks = vec![Block::Text(std::mem::take(&mut turn_input))];
+                    blocks.extend(delivered.into_iter().map(Block::Text));
+                    seed.push(Turn {
+                        role: TurnRole::User,
+                        blocks,
+                    });
+                    seed.push(Turn {
+                        role: TurnRole::Assistant,
+                        blocks: vec![Block::Text(reply)],
+                    });
+                }
+                // A notice that came in too late for this turn's last model
+                // call still has to be read — unless the person has already
+                // typed something, whose turn will carry it.
+                let late = notices.has_pending() && typed.is_empty();
+                if dispatch.finish_turn(late) {
+                    auto_input = Some(notices.take_pending().join("\n\n"));
+                } else if late {
+                    println!(
+                        "\x1b[2m(not acting on pending job notices: {} turns ran on their own; \
+                         they go to the agent with your next message)\x1b[0m",
+                        host::MAX_AUTO_TURNS
+                    );
+                }
+                prompted = false;
+            }
+        }
+    }
+    jobs.kill_all_owned();
     println!("bye.");
     Ok(())
+}
+
+/// The single reader of stdin. A line goes to a pending approval prompt if
+/// the hook is waiting on one, otherwise to the event loop as typed input.
+/// EOF (Ctrl-D, end of a pipe) is `/exit`, and also answers any waiting
+/// approval with "no" by dropping its sender.
+fn spawn_keyboard(
+    tx: tokio::sync::mpsc::UnboundedSender<harness_loop::HostEvent>,
+    answer: AnswerSlot,
+) {
+    // A plain thread, not a tokio task: a blocked `read_line` would otherwise
+    // keep the runtime from shutting down until the next keypress.
+    std::thread::Builder::new()
+        .name("stdin".into())
+        .spawn(move || {
+            let stdin = std::io::stdin();
+            loop {
+                let mut line = String::new();
+                match stdin.read_line(&mut line) {
+                    Ok(0) | Err(_) => {
+                        answer.lock().unwrap().take();
+                        let _ = tx.send(harness_loop::HostEvent::Input("/exit".into()));
+                        return;
+                    }
+                    Ok(_) => {
+                        let waiting = answer.lock().unwrap().take();
+                        match waiting {
+                            Some(reply) => {
+                                let _ = reply.send(line);
+                            }
+                            None => {
+                                if tx.send(harness_loop::HostEvent::Input(line)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .expect("spawn stdin thread");
 }
 
 /// The model endpoint a command talks to: protocol, URL, model id and key.

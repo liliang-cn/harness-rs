@@ -11,7 +11,7 @@
 //! [`background::JobTable`], with scoped, automatic cleanup.
 
 pub mod background;
-pub use background::{JobReaperHook, JobTable, ShellJobKill, ShellJobStatus, ShellSpawn};
+pub use background::{JobEvent, JobReaperHook, JobTable, ShellJobKill, ShellJobStatus, ShellSpawn};
 
 use async_trait::async_trait;
 use harness_core::{Tool, ToolError, ToolResult, ToolRisk, ToolSchema, World};
