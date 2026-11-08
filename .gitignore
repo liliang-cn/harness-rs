@@ -36,3 +36,14 @@ projects/datainside/*/web/vendor/
 /out/
 # Background job logs written by shell_spawn during local runs
 .harness/jobs/
+# Ad-hoc test and launch scripts at the repo root never belong in git: real
+# tests live in each crate's tests/, and the launch scripts carried API keys.
+/test_*
+/start_*
+/fix_*
+__pycache__/
+*.pyc
+node_modules/
+.playwright-cli/
+# Local agent loop state
+*.local.md
