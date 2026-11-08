@@ -45,5 +45,12 @@ __pycache__/
 *.pyc
 node_modules/
 .playwright-cli/
+# Build outputs and installers
+/dist/
+*.dmg
+# Screenshots and scratch images anywhere (real images live in assets/ and docs/)
+Screenshot*.png
+screenshot*.png
+*截图*.png
 # Local agent loop state
 *.local.md

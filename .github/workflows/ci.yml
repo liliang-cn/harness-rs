@@ -62,6 +62,27 @@ jobs:
       - name: Test harness-cortexdb (grpc feature)
         run: cargo test -p harness-rs-cortexdb --features grpc
 
+  # A public repo once carried a live API key in scratch launch scripts, swept
+  # in by `git add -A` together with node_modules and a .dmg. This keeps the
+  # tracked tree to real source: no dependency trees, no scratch scripts or
+  # screenshots outside the directories that hold real ones, no live keys.
+  hygiene:
+    name: repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No dependencies, scratch scripts, scratch images or keys in git
+        run: |
+          bad=$( {
+            git ls-files | grep -E '(^|/)node_modules/|(^|/)__pycache__/|\.dmg$|^(test_|start_|fix_)[^/]*$'
+            git ls-files | grep -iE '\.(py|js|mjs|cjs|ts|sh)$' | grep -vE '^(examples/[^/]+/|skills/|deploy/)'
+            git ls-files | grep -iE '\.(png|jpe?g|gif|webp|bmp|heic|tiff?)$' | grep -vE '^(assets|docs)/'
+          } || true )
+          if [ -n "$bad" ]; then echo "::error::files that do not belong in git:"; echo "$bad"; exit 1; fi
+          if git grep -lE 'sk-cpa-[A-Za-z0-9]|sk-an[t]-api[0-9]|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}'; then
+            echo "::error::a file above looks like it carries a live key"; exit 1
+          fi
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
