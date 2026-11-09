@@ -3,6 +3,42 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.67
+
+### Added
+
+- **Trajectory checks.** `harness_loop::trajectory` turns a recorded session
+  (`--record`) into the ordered model and tool steps of the run and checks it
+  against rules: `requires`, `order`, `forbids` (with an args regex), `args`,
+  `max_steps`, `no_repeated_failure`, `ends`. Rules come from code
+  (`TrajectoryCheck`) or a TOML file (`RuleSet`); a run can also be compared
+  with a known good one by its tool-call sequence (`compare_to_golden`).
+  `harness trace <log> --check rules.toml --golden good.jsonl` exits non-zero
+  on a violation or on drift beyond `--max-drift`.
+- **`harness code` is an event loop.** Background jobs started with
+  `shell_spawn` report their exit, and an overdue deadline, back to the agent
+  on their own (`JobEvent::Exited` / `JobEvent::Overdue`, `NoticeGuide`); the
+  agent no longer has to remember to poll.
+- **The CLI speaks the native Anthropic protocol.** `--api anthropic` (or
+  `HARNESS_API`) with `HARNESS_BASE_URL` / `HARNESS_API_KEY` / `HARNESS_MODEL`
+  uses the Anthropic client, with prompt caching.
+
+### Fixed
+
+- **The default `Model::stream` dropped tool calls.** A model without its own
+  streaming (the Anthropic client) ended every tool turn empty in streaming
+  loops; the fallback now replays text, tool calls, usage and reasoning.
+- **Anthropic `input_tokens` left out the cached part**, which collapsed the
+  compaction calibration; cache reads and writes are now counted in.
+- Doc examples import their crate by name, so they compile as doctests.
+
+### Repository
+
+- History was rewritten to remove a leaked key, root scratch scripts,
+  `node_modules` and a `.dmg`; every tag was re-pointed. CI now refuses
+  dependency trees, scratch scripts and images outside their real directories,
+  and live keys.
+
 ## 0.0.66
 
 ### Changed
