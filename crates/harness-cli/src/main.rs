@@ -56,6 +56,18 @@ enum Cmd {
         /// calls overlapping, a click for details.
         #[arg(long, value_name = "PATH")]
         html: Option<PathBuf>,
+        /// Judge the run against a TOML rule file (`[[rules]]` tables) instead
+        /// of printing it. Exits non-zero when any rule is violated.
+        #[arg(long, value_name = "RULES")]
+        check: Option<PathBuf>,
+        /// Compare the run's tool sequence with a known good session log.
+        /// Exits non-zero when it drifts further than `--max-drift`.
+        #[arg(long, value_name = "GOLDEN")]
+        golden: Option<PathBuf>,
+        /// Largest accepted edit-distance ratio against `--golden` (0.0 means
+        /// identical, 1.0 nothing in common).
+        #[arg(long, default_value_t = 0.3, value_name = "RATIO")]
+        max_drift: f64,
     },
     /// Deterministically re-execute a recorded session log (from
     /// `SessionRecorder`) offline — no LLM calls. The recorded model outputs
@@ -392,6 +404,15 @@ async fn main() -> anyhow::Result<()> {
         } => scaffold_new_project(name, path, workspace, local),
         Cmd::Trace {
             file,
+            check,
+            golden,
+            max_drift,
+            ..
+        } if check.is_some() || golden.is_some() => {
+            check_session_trajectory(&file, check.as_deref(), golden.as_deref(), max_drift)
+        }
+        Cmd::Trace {
+            file,
             html: Some(out),
             ..
         } => write_session_timeline(file, out),
@@ -400,6 +421,7 @@ async fn main() -> anyhow::Result<()> {
             summary,
             verbose,
             html: None,
+            ..
         } => print_session_trace(file, summary, verbose),
         Cmd::Replay {
             file,
@@ -1423,6 +1445,48 @@ fn print_session_trace(file: PathBuf, summary_only: bool, verbose: bool) -> anyh
     Ok(())
 }
 
+/// Judge a recorded run instead of showing it. Both checks always run and
+/// print, so one invocation reports every problem; the returned error (and so
+/// the non-zero exit) is what lets CI gate on it.
+fn check_session_trajectory(
+    file: &std::path::Path,
+    rules: Option<&std::path::Path>,
+    golden: Option<&std::path::Path>,
+    max_drift: f64,
+) -> anyhow::Result<()> {
+    use harness_loop::{RuleSet, Trajectory};
+    let load = |p: &std::path::Path| {
+        Trajectory::load(p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))
+    };
+    let actual = load(file)?;
+    let mut failures = Vec::new();
+    if let Some(path) = rules {
+        let report = RuleSet::from_path(path)?.check(&actual);
+        println!("{report}");
+        if !report.is_ok() {
+            failures.push(format!("{} rule violation(s)", report.violations.len()));
+        }
+    }
+    if let Some(path) = golden {
+        let diff = actual.compare_to_golden(&load(path)?);
+        println!("{diff}");
+        if !diff.within(max_drift) {
+            failures.push(format!(
+                "drift {:.2} exceeds --max-drift {max_drift:.2}",
+                diff.ratio
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "trajectory check failed: {}",
+            failures.join("; ")
+        ))
+    }
+}
+
 fn write_session_timeline(file: PathBuf, out: PathBuf) -> anyhow::Result<()> {
     let events = harness_loop::read_session(&file)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", file.display()))?;
@@ -1828,5 +1892,70 @@ mod scaffold_tests {
         // Every dependency line the template writes uses the same `{v}`.
         let rendered = format!(r#"harness-rs = "{v}""#);
         assert!(rendered.contains(v));
+    }
+}
+
+#[cfg(test)]
+mod trajectory_check_tests {
+    use super::check_session_trajectory;
+    use harness_core::{Action, ToolResult};
+    use harness_loop::SessionEvent;
+
+    fn write_log(path: &std::path::Path, tools: &[&str]) {
+        let mut lines = Vec::new();
+        for (i, t) in tools.iter().enumerate() {
+            let id = format!("c{i}");
+            let pre = SessionEvent::PreTool {
+                ts_ms: 0,
+                action: Action {
+                    tool: (*t).into(),
+                    call_id: id.clone(),
+                    args: serde_json::json!({}),
+                },
+            };
+            let post = SessionEvent::PostTool {
+                ts_ms: 0,
+                call_id: id,
+                result: ToolResult {
+                    ok: true,
+                    content: serde_json::json!("ok"),
+                    trace: None,
+                },
+            };
+            lines.push(serde_json::to_string(&pre).unwrap());
+            lines.push(serde_json::to_string(&post).unwrap());
+        }
+        std::fs::write(path, lines.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn rules_and_golden_drive_the_exit_status() {
+        let dir = std::env::temp_dir().join(format!("harness-cli-traj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (run, golden, rules) = (
+            dir.join("run.jsonl"),
+            dir.join("golden.jsonl"),
+            dir.join("rules.toml"),
+        );
+        write_log(&run, &["read_file", "edit_file"]);
+        write_log(&golden, &["read_file", "edit_file"]);
+        std::fs::write(
+            &rules,
+            "[[rules]]\nrule = \"requires\"\ntool = \"read_file\"\n",
+        )
+        .unwrap();
+        assert!(check_session_trajectory(&run, Some(&rules), Some(&golden), 0.3).is_ok());
+
+        std::fs::write(
+            &rules,
+            "[[rules]]\nrule = \"forbids\"\ntool = \"edit_file\"\n",
+        )
+        .unwrap();
+        assert!(check_session_trajectory(&run, Some(&rules), None, 0.3).is_err());
+
+        write_log(&golden, &["shell", "shell", "shell"]);
+        assert!(check_session_trajectory(&run, None, Some(&golden), 0.3).is_err());
+        assert!(check_session_trajectory(&run, None, Some(&golden), 1.0).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -49,6 +49,10 @@ pub mod replay;
 pub mod subagent;
 pub mod telemetry;
 pub mod timeline;
+pub mod trajectory;
+pub use trajectory::{
+    GoldenDiff, Report, Rule, RuleSet, Step, Trajectory, TrajectoryCheck, Violation,
+};
 
 pub use learning::*;
 pub use memory_layer::*;

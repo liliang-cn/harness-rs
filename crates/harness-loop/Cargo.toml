@@ -39,6 +39,9 @@ futures           = { workspace = true }
 # pins for its audit hash chain; not a workspace entry because only these two
 # crates hash anything.
 sha2              = "0.10"
+# Trajectory rules (src/trajectory.rs): regex matching and TOML rule files.
+regex             = { workspace = true }
+toml              = "0.9"
 # Metrics facade (src/meters.rs): the loop records, the binary installs an
 # exporter. No recorder, no cost — same contract as `tracing`.
 metrics           = "0.24"
@@ -71,7 +74,6 @@ name = "memory_guide"
 harness = false
 
 [dev-dependencies]
-toml = "0.9"
 once_cell         = { workspace = true }
 harness-context   = { workspace = true }
 harness-core      = { workspace = true }
