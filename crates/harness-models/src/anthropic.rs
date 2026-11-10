@@ -722,6 +722,8 @@ where
         eof: bool,
         sse: AnthropicSse,
         pending: std::collections::VecDeque<Result<ModelDelta, ModelError>>,
+        /// A stop reason arrived. A stream that closes without one was cut.
+        saw_stop: bool,
     }
     let init = State {
         upstream: stream,
@@ -730,6 +732,7 @@ where
         eof: false,
         sse: AnthropicSse::default(),
         pending: std::collections::VecDeque::new(),
+        saw_stop: false,
     };
     futures::stream::unfold(init, |mut st| async move {
         loop {
@@ -748,6 +751,9 @@ where
                     .join("");
                 if let Ok(v) = serde_json::from_str::<JsonValue>(&payload) {
                     let evs = st.sse.on_event(&v);
+                    if evs.iter().any(|e| matches!(e, Ok(ModelDelta::Stop(_)))) {
+                        st.saw_stop = true;
+                    }
                     st.pending.extend(evs);
                 }
                 continue;
@@ -764,7 +770,14 @@ where
                     st.pending
                         .push_back(Err(ModelError::Transport(format!("stream: {e}"))));
                 }
-                None => st.eof = true,
+                None => {
+                    st.eof = true;
+                    if !st.saw_stop {
+                        st.pending.push_back(Err(ModelError::Transport(
+                            "stream ended before the model finished (no stop_reason)".into(),
+                        )));
+                    }
+                }
             }
         }
     })

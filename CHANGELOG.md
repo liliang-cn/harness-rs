@@ -3,6 +3,19 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Fixed
+
+- **A stream cut before the model finished is no longer taken as a normal
+  end.** The OpenAI-compatible, Gemini and Anthropic adapters now report a
+  connection that closes without a finish reason (`[DONE]`, `finishReason`,
+  `stop_reason`) as `ModelError::Transport`. Before, it surfaced as `EndTurn`
+  with zero usage, and a half-made turn read as complete.
+- `AgentLoop` retries a model turn that fails in transport (dropped
+  connection, cut stream) up to 2 times, with a short backoff, instead of
+  failing the run. A retry is not a new iteration.
+
 ## 0.0.69
 
 ### Fixed

@@ -749,6 +749,8 @@ struct GeminiStreamState<S> {
     grounding_chunks: Vec<JsonValue>,
     tool_call_seq: u32,
     sent_reasoning: bool,
+    /// A `finishReason` arrived. A stream that closes without one was cut.
+    saw_stop: bool,
 }
 
 /// Parse Gemini's `:streamGenerateContent?alt=sse` byte stream into
@@ -774,6 +776,7 @@ where
         grounding_chunks: Vec::new(),
         tool_call_seq: 0,
         sent_reasoning: false,
+        saw_stop: false,
     };
 
     unfold(init, |mut state| async move {
@@ -847,6 +850,11 @@ where
                             state.pending.push_back(Ok(ModelDelta::Reasoning(blob)));
                         }
                     }
+                    if !state.saw_stop {
+                        state.pending.push_back(Err(ModelError::Transport(
+                            "stream ended before the model finished (no finishReason)".into(),
+                        )));
+                    }
                     state.eof = true;
                     return state.pending.pop_front().map(|d| (d, state));
                 }
@@ -904,6 +912,7 @@ fn process_gemini_chunk<S>(state: &mut GeminiStreamState<S>, chunk: GeminiRespon
                 "TOOL_USE" | "TOOL_CALL" => StopReason::ToolUse,
                 _ => StopReason::EndTurn,
             };
+            state.saw_stop = true;
             state.pending.push_back(Ok(ModelDelta::Stop(stop)));
         }
     }

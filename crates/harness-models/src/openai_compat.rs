@@ -988,6 +988,19 @@ where
                     state.done = true;
                     return Some((Err(ModelError::Transport(format!("stream: {e}"))), state));
                 }
+                // The connection closed with neither a finish_reason nor
+                // `[DONE]`: the stream was cut, not finished. Reporting that
+                // as a normal end would pass a half-made turn off as complete.
+                None if !state.saw_stop => {
+                    state.done = true;
+                    return Some((
+                        Err(ModelError::Transport(
+                            "stream ended before the model finished (no finish_reason, no [DONE])"
+                                .into(),
+                        )),
+                        state,
+                    ));
+                }
                 None => return None,
             }
         }
@@ -1939,6 +1952,33 @@ mod tests {
         }"#;
         let parsed: ChatResponse = serde_json::from_str(body).expect("null tool_calls must parse");
         assert!(parsed.choices[0].message.tool_calls.is_empty());
+    }
+
+    /// A connection that closes mid-answer, with neither a finish_reason nor
+    /// `[DONE]`, is a cut stream and must surface as an error, not a stop.
+    #[tokio::test]
+    async fn a_stream_that_closes_before_finishing_is_an_error() {
+        use futures::stream::StreamExt;
+        let chunks: Vec<bytes::Bytes> = vec![
+            br#"data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}
+"#
+            .to_vec()
+            .into(),
+        ];
+        let stream = futures::stream::iter(
+            chunks
+                .into_iter()
+                .map::<Result<bytes::Bytes, reqwest::Error>, _>(Ok),
+        );
+        let mut s = std::pin::pin!(parse_sse_stream(stream));
+        let mut last = None;
+        while let Some(d) = s.next().await {
+            last = Some(d);
+        }
+        match last {
+            Some(Err(ModelError::Transport(m))) => assert!(m.contains("before the model finished")),
+            other => panic!("expected a transport error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

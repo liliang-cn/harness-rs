@@ -99,3 +99,44 @@ async fn the_retry_tells_the_model_what_happened() {
     let second = format!("{:?}", calls[1].history_summary);
     assert!(second.contains("output token limit"), "{second}");
 }
+
+/// Fails the first stream it is asked for with a transport error, the way a
+/// connection cut mid-answer does, then behaves.
+struct DropsFirstStream {
+    inner: MockModel,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl Model for DropsFirstStream {
+    async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ModelError::Transport(
+                "stream ended before the model finished".into(),
+            ));
+        }
+        self.inner.complete(ctx).await
+    }
+    fn info(&self) -> ModelInfo {
+        self.inner.info()
+    }
+}
+
+#[tokio::test]
+async fn a_turn_whose_stream_was_cut_is_asked_again() {
+    let model = DropsFirstStream {
+        inner: MockModel::new().script_many(vec![MockResponse::text("final answer")]),
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    let out = AgentLoop::new(model)
+        .run_with_max_iters(task(), &mut default_world(std::env::temp_dir()), 10)
+        .await
+        .unwrap();
+    match out {
+        Outcome::Done { text, iters, .. } => {
+            assert_eq!(text.as_deref(), Some("final answer"));
+            assert_eq!(iters, 1, "a transport retry is not a new iteration");
+        }
+        other => panic!("expected Done, got {other:?}"),
+    }
+}

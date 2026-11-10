@@ -340,6 +340,9 @@ impl Default for CompactPolicy {
 /// How often a streamed model call reports progress / a heartbeat.
 const MODEL_PROGRESS_EVERY: Duration = Duration::from_secs(5);
 const MODEL_HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+/// Times one model turn is retried after a transport failure (dropped
+/// connection, stream cut before a finish reason) before the error ends the run.
+const MODEL_TRANSPORT_RETRIES: u32 = 2;
 /// Turns in a row the model may be cut off by the output-token limit, with no
 /// tool call to show for it, before the run is ended as [`Outcome::Stuck`].
 /// Each one is sent back with an instruction to stop deliberating and act.
@@ -2302,13 +2305,34 @@ impl<M: Model> AgentLoop<M> {
         partial: &mut String,
         iter: u32,
     ) -> Result<ModelOutput, HarnessError> {
-        if self.streaming {
-            self.complete_via_stream(ctx, world, partial, iter).await
-        } else {
-            self.model
-                .complete(ctx)
-                .await
-                .map_err(harness_core::HarnessError::Model)
+        let mut attempt: u32 = 0;
+        loop {
+            let r = if self.streaming {
+                self.complete_via_stream(ctx, world, partial, iter).await
+            } else {
+                self.model
+                    .complete(ctx)
+                    .await
+                    .map_err(harness_core::HarnessError::Model)
+            };
+            // A transport failure (connection dropped, stream cut before the
+            // model finished) says nothing about the request itself, so the
+            // turn is asked again from the start rather than failing the run.
+            match r {
+                Err(HarnessError::Model(harness_core::ModelError::Transport(msg)))
+                    if attempt < MODEL_TRANSPORT_RETRIES =>
+                {
+                    attempt += 1;
+                    tracing::warn!(
+                        attempt,
+                        error = %msg,
+                        "model call failed in transport; retrying the turn"
+                    );
+                    partial.clear();
+                    tokio::time::sleep(Duration::from_secs(u64::from(attempt) * 2)).await;
+                }
+                other => return other,
+            }
         }
     }
 
