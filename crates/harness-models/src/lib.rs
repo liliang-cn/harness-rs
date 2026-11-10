@@ -57,6 +57,22 @@ pub use router::*;
 pub use speech_dashscope::*;
 pub use speech_openai::*;
 
+/// Whether adapters' `complete()` rides the streaming transport by default.
+///
+/// Streaming is the default everywhere; `HARNESS_STREAM=0` (also `false`,
+/// `off`, `no`) is the explicit process-wide opt-out. Each adapter also has a
+/// `with_streaming(bool)` builder that overrides this per model.
+pub fn stream_default_from_env() -> bool {
+    parse_stream_flag(std::env::var("HARNESS_STREAM").ok().as_deref())
+}
+
+pub(crate) fn parse_stream_flag(raw: Option<&str>) -> bool {
+    !matches!(
+        raw.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
 /// Append an HTTP chunk to a text buffer without losing a character that
 /// straddles the boundary.
 ///

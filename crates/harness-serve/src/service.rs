@@ -375,7 +375,7 @@ impl ChatService {
     /// forwards `Event::ModelTokenDelta` into the returned stream and persists the
     /// exchange when it finishes.
     ///
-    /// Providers without real token streaming still work: the loop falls back to
+    /// Providers without real token streaming still work: the default `Model::stream()` falls back to
     /// a single delta (see [`AgentLoop::with_streaming`]).
     pub fn chat_stream(
         &self,

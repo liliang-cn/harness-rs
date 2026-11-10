@@ -34,8 +34,12 @@ use std::time::Duration;
 pub struct GeminiNative {
     cfg: LlmConfig,
     client: reqwest::Client,
+    /// Bounds silence between chunks, not total time. Used for streaming.
+    stream_client: reqwest::Client,
     context_window: u32,
     enable_search_grounding: bool,
+    /// Whether `complete()` rides the streaming transport (the default).
+    stream_default: bool,
 }
 
 impl GeminiNative {
@@ -44,12 +48,33 @@ impl GeminiNative {
             .timeout(Duration::from_secs(120))
             .build()
             .expect("reqwest client builds");
+        // No total timeout: `read_timeout` restarts on every chunk, so a long
+        // generation that keeps producing is never cut off, but a stalled one is.
+        let idle = std::env::var("HARNESS_HTTP_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .filter(|&s| s > 0)
+            .unwrap_or(120);
+        let stream_client = reqwest::Client::builder()
+            .read_timeout(Duration::from_secs(idle))
+            .build()
+            .expect("reqwest client builds");
         Self {
             cfg,
             client,
+            stream_client,
             context_window: 1_000_000, // Gemini 2.5+ is 1M context
             enable_search_grounding: true,
+            stream_default: crate::stream_default_from_env(),
         }
+    }
+
+    /// Choose the transport behind `complete()`: `true` (default) streams and
+    /// collects, `false` is the explicit opt-out to one plain request.
+    /// `HARNESS_STREAM=0` sets the same thing process-wide; this builder wins.
+    pub fn with_streaming(mut self, enable: bool) -> Self {
+        self.stream_default = enable;
+        self
     }
 
     /// Convenience: `base_url + model + api_key`. You pass the endpoint —
@@ -301,6 +326,45 @@ struct GeminiUsage {
 #[async_trait]
 impl Model for GeminiNative {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        if self.stream_default {
+            crate::retry::with_retry("gemini:complete-stream", || async {
+                let stream = self.open_stream_once(ctx).await?;
+                harness_core::collect_stream(stream, |_| {})
+                    .await
+                    .map_err(|e| match e {
+                        ModelError::Transport(m) => crate::retry::Retryable::transient(m),
+                        other => crate::retry::Retryable::permanent(other.to_string()),
+                    })
+            })
+            .await
+            .map_err(ModelError::Transport)
+        } else {
+            self.complete_blocking(ctx).await
+        }
+    }
+
+    async fn stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        // Opens the SSE request directly; must never route through
+        // `complete()`, which on the streaming default calls back into here.
+        crate::retry::with_retry("gemini:stream", || self.open_stream_once(ctx))
+            .await
+            .map_err(ModelError::Transport)
+    }
+
+    fn info(&self) -> ModelInfo {
+        self.model_info()
+    }
+
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        self.search_web_impl(query).await
+    }
+}
+
+impl GeminiNative {
+    async fn complete_blocking(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
         let (system, contents) = build_contents(ctx);
 
         let mut tools: Vec<GeminiTool> = Vec::new();
@@ -519,10 +583,10 @@ impl Model for GeminiNative {
         })
     }
 
-    async fn stream(
+    async fn open_stream_once(
         &self,
         ctx: &Context,
-    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, crate::retry::Retryable> {
         let (system, contents) = build_contents(ctx);
         let mut tools: Vec<GeminiTool> = Vec::new();
         if !ctx.tools.is_empty() {
@@ -582,24 +646,31 @@ impl Model for GeminiNative {
             self.cfg.model
         );
         let resp = self
-            .client
+            .stream_client
             .post(&url)
             .header("x-goog-api-key", &self.cfg.api_key)
             .header("Content-Type", "application/json")
             .json(&req)
             .send()
             .await
-            .map_err(|e| ModelError::Transport(format!("send: {e}")))?;
+            .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ModelError::Transport(format!("HTTP {status}: {body}")));
+            let msg = format!("HTTP {status}: {body}");
+            return Err(
+                if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    crate::retry::Retryable::transient(msg)
+                } else {
+                    crate::retry::Retryable::permanent(msg)
+                },
+            );
         }
         let byte_stream = resp.bytes_stream();
         Ok(parse_gemini_sse(byte_stream).boxed())
     }
 
-    fn info(&self) -> ModelInfo {
+    fn model_info(&self) -> ModelInfo {
         ModelInfo {
             handle: self.cfg.name.clone(),
             provider: "gemini".into(),
@@ -617,7 +688,7 @@ impl Model for GeminiNative {
     /// already attached to every request (see `mixed_tools` above), so the model
     /// can search mid-loop. This exists so a caller holding a `dyn Model` can
     /// ask for a search without knowing which provider it got.
-    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+    async fn search_web_impl(&self, query: &str) -> Option<Result<String, ModelError>> {
         if !self.enable_search_grounding {
             return None;
         }

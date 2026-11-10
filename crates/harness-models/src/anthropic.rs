@@ -8,9 +8,10 @@
 
 use crate::LlmConfig;
 use async_trait::async_trait;
+use futures::stream::{BoxStream, StreamExt};
 use harness_core::{
-    Block, Context, Model, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall, TurnRole,
-    Usage,
+    Block, Context, Model, ModelDelta, ModelError, ModelInfo, ModelOutput, StopReason, ToolCall,
+    TurnRole, Usage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -19,8 +20,12 @@ use std::time::Duration;
 pub struct AnthropicNative {
     cfg: LlmConfig,
     client: reqwest::Client,
+    /// Bounds silence between chunks, not total time. Used for streaming.
+    stream_client: reqwest::Client,
     context_window: u32,
     api_version: String,
+    /// Whether `complete()` rides the streaming transport (the default).
+    stream_default: bool,
 }
 
 impl AnthropicNative {
@@ -29,12 +34,33 @@ impl AnthropicNative {
             .timeout(Duration::from_secs(120))
             .build()
             .expect("reqwest client builds");
+        // No total timeout: `read_timeout` restarts on every chunk, so a long
+        // generation that keeps producing is never cut off, but a stalled one is.
+        let idle = std::env::var("HARNESS_HTTP_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .filter(|&s| s > 0)
+            .unwrap_or(120);
+        let stream_client = reqwest::Client::builder()
+            .read_timeout(Duration::from_secs(idle))
+            .build()
+            .expect("reqwest client builds");
         Self {
             cfg,
             client,
+            stream_client,
             context_window: 200_000,
             api_version: "2023-06-01".into(),
+            stream_default: crate::stream_default_from_env(),
         }
+    }
+
+    /// Choose the transport behind `complete()`: `true` (default) streams and
+    /// collects, `false` is the explicit opt-out to one plain request.
+    /// `HARNESS_STREAM=0` sets the same thing process-wide; this builder wins.
+    pub fn with_streaming(mut self, enable: bool) -> Self {
+        self.stream_default = enable;
+        self
     }
 
     /// Convenience: `base_url + model + api_key`. You pass the endpoint —
@@ -89,6 +115,8 @@ struct AnthropicRequest<'a> {
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<AnthropicTool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 /// One system block, optionally marked as the end of the cacheable prefix.
@@ -234,6 +262,51 @@ impl AnthropicUsage {
 #[async_trait]
 impl Model for AnthropicNative {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        if self.stream_default {
+            crate::retry::with_retry("anthropic:complete-stream", || async {
+                let stream = self.open_stream_once(ctx).await?;
+                harness_core::collect_stream(stream, |_| {})
+                    .await
+                    .map_err(|e| match e {
+                        ModelError::Transport(m) => crate::retry::Retryable::transient(m),
+                        other => crate::retry::Retryable::permanent(other.to_string()),
+                    })
+            })
+            .await
+            .map_err(ModelError::Transport)
+        } else {
+            self.complete_blocking(ctx).await
+        }
+    }
+
+    async fn stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        // Opens the SSE request directly; must never route through
+        // `complete()`, which on the streaming default calls back into here.
+        crate::retry::with_retry("anthropic:stream", || self.open_stream_once(ctx))
+            .await
+            .map_err(ModelError::Transport)
+    }
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo {
+            handle: self.cfg.name.clone(),
+            provider: "anthropic".into(),
+            model: self.cfg.model.clone(),
+            context_window: self.context_window,
+            input_cost_usd_per_million_tokens: None,
+            output_cost_usd_per_million_tokens: None,
+            supports_tool_use: true,
+            supports_streaming: true,
+            supports_web_grounding: false, // not wired yet
+        }
+    }
+}
+
+impl AnthropicNative {
+    fn build_request<'a>(&'a self, ctx: &Context, stream: bool) -> AnthropicRequest<'a> {
         let (system, mut messages) = build_messages(ctx);
         // Second breakpoint: end of the conversation. See mark_history_breakpoint.
         mark_history_breakpoint(&mut messages);
@@ -266,14 +339,48 @@ impl Model for AnthropicNative {
             true
         };
 
-        let req = AnthropicRequest {
+        AnthropicRequest {
             model: &self.cfg.model,
             max_tokens: ctx.policy.max_output_tokens.max(1024),
             system: system_blocks(system, cache_on_system),
             messages,
             tools,
-        };
+            stream,
+        }
+    }
 
+    async fn open_stream_once(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, crate::retry::Retryable> {
+        let req = self.build_request(ctx, true);
+        let url = format!("{}/v1/messages", self.cfg.base_url.trim_end_matches('/'));
+        let resp = self
+            .stream_client
+            .post(&url)
+            .header("x-api-key", &self.cfg.api_key)
+            .header("anthropic-version", &self.api_version)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| crate::retry::Retryable::transient(format!("send: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let msg = format!("HTTP {status}: {body}");
+            return Err(
+                if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    crate::retry::Retryable::transient(msg)
+                } else {
+                    crate::retry::Retryable::permanent(msg)
+                },
+            );
+        }
+        Ok(parse_anthropic_sse(resp.bytes_stream()).boxed())
+    }
+
+    async fn complete_blocking(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        let req = self.build_request(ctx, false);
         let url = format!("{}/v1/messages", self.cfg.base_url.trim_end_matches('/'));
         let bytes = crate::retry::with_retry("anthropic:complete", || async {
             let resp = self
@@ -398,20 +505,269 @@ impl Model for AnthropicNative {
             images: Vec::new(),
         })
     }
+}
 
-    fn info(&self) -> ModelInfo {
-        ModelInfo {
-            handle: self.cfg.name.clone(),
-            provider: "anthropic".into(),
-            model: self.cfg.model.clone(),
-            context_window: self.context_window,
-            input_cost_usd_per_million_tokens: None,
-            output_cost_usd_per_million_tokens: None,
-            supports_tool_use: true,
-            supports_streaming: false,
-            supports_web_grounding: false, // not wired yet
+// ----------------------------------------------------------------
+// SSE streaming
+// ----------------------------------------------------------------
+
+fn stop_from_anthropic(reason: &str) -> StopReason {
+    match reason {
+        "end_turn" => StopReason::EndTurn,
+        "tool_use" => StopReason::ToolUse,
+        "max_tokens" => StopReason::MaxTokens,
+        "stop_sequence" => StopReason::StopSequence,
+        _ => StopReason::EndTurn,
+    }
+}
+
+/// One in-flight content block, by its stream `index`.
+enum OpenBlock {
+    Text,
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    Redacted,
+    ToolUse {
+        id: String,
+    },
+}
+
+/// Folds Anthropic's SSE events into `ModelDelta`s.
+///
+/// Thinking is *not* streamed as fragments: the next request has to echo each
+/// block back with its signature, so a block is packed as one
+/// `{"kind":"thinking",...}` line when it closes, exactly the shape the
+/// non-streaming parser produces. While it grows, empty `Reasoning` deltas go
+/// out purely as liveness ticks.
+#[derive(Default)]
+struct AnthropicSse {
+    blocks: std::collections::HashMap<u64, OpenBlock>,
+    usage: AnthropicUsage,
+    stop: Option<StopReason>,
+    reasoning_blocks: u32,
+    usage_sent: bool,
+}
+
+impl AnthropicSse {
+    fn pack_reasoning(&mut self, packed: JsonValue) -> ModelDelta {
+        let sep = if self.reasoning_blocks > 0 { "\n" } else { "" };
+        self.reasoning_blocks += 1;
+        ModelDelta::Reasoning(format!("{sep}{packed}"))
+    }
+
+    fn emit_usage(&mut self, out: &mut Vec<Result<ModelDelta, ModelError>>) {
+        if !self.usage_sent {
+            self.usage_sent = true;
+            out.push(Ok(ModelDelta::Usage(self.usage.to_usage())));
         }
     }
+
+    fn on_event(&mut self, v: &JsonValue) -> Vec<Result<ModelDelta, ModelError>> {
+        let mut out = Vec::new();
+        let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+        let str_of = |x: &JsonValue, k: &str| x.get(k).and_then(|s| s.as_str()).map(String::from);
+        match v.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+            "message_start" => {
+                if let Some(u) = v.get("message").and_then(|m| m.get("usage"))
+                    && let Ok(u) = serde_json::from_value::<AnthropicUsage>(u.clone())
+                {
+                    self.usage = u;
+                }
+            }
+            "content_block_start" => {
+                let cb = v.get("content_block").cloned().unwrap_or(JsonValue::Null);
+                match cb.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                    "text" => {
+                        self.blocks.insert(idx, OpenBlock::Text);
+                        if let Some(t) = str_of(&cb, "text").filter(|t| !t.is_empty()) {
+                            out.push(Ok(ModelDelta::Text(t)));
+                        }
+                    }
+                    "thinking" => {
+                        self.blocks.insert(
+                            idx,
+                            OpenBlock::Thinking {
+                                thinking: str_of(&cb, "thinking").unwrap_or_default(),
+                                signature: str_of(&cb, "signature"),
+                            },
+                        );
+                    }
+                    "redacted_thinking" => {
+                        let packed = serde_json::json!({
+                            "kind": "redacted_thinking",
+                            "data": str_of(&cb, "data").unwrap_or_default(),
+                        });
+                        let d = self.pack_reasoning(packed);
+                        self.blocks.insert(idx, OpenBlock::Redacted);
+                        out.push(Ok(d));
+                    }
+                    "tool_use" => {
+                        let id = str_of(&cb, "id").unwrap_or_default();
+                        out.push(Ok(ModelDelta::ToolCallStart {
+                            id: id.clone(),
+                            name: str_of(&cb, "name").unwrap_or_default(),
+                        }));
+                        self.blocks.insert(idx, OpenBlock::ToolUse { id });
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_delta" => {
+                let d = v.get("delta").cloned().unwrap_or(JsonValue::Null);
+                match d.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                    "text_delta" => {
+                        if let Some(t) = str_of(&d, "text").filter(|t| !t.is_empty()) {
+                            out.push(Ok(ModelDelta::Text(t)));
+                        }
+                    }
+                    "input_json_delta" => {
+                        if let Some(OpenBlock::ToolUse { id }) = self.blocks.get(&idx) {
+                            out.push(Ok(ModelDelta::ToolCallArgs {
+                                id: id.clone(),
+                                partial_json: str_of(&d, "partial_json").unwrap_or_default(),
+                            }));
+                        }
+                    }
+                    "thinking_delta" => {
+                        if let Some(OpenBlock::Thinking { thinking, .. }) =
+                            self.blocks.get_mut(&idx)
+                        {
+                            thinking.push_str(&str_of(&d, "thinking").unwrap_or_default());
+                        }
+                        out.push(Ok(ModelDelta::Reasoning(String::new())));
+                    }
+                    "signature_delta" => {
+                        if let Some(OpenBlock::Thinking { signature, .. }) =
+                            self.blocks.get_mut(&idx)
+                        {
+                            *signature = str_of(&d, "signature");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => match self.blocks.remove(&idx) {
+                Some(OpenBlock::ToolUse { id }) => out.push(Ok(ModelDelta::ToolCallEnd { id })),
+                Some(OpenBlock::Thinking {
+                    thinking,
+                    signature,
+                }) => {
+                    let packed = serde_json::json!({
+                        "kind": "thinking",
+                        "thinking": thinking,
+                        "signature": signature,
+                    });
+                    out.push(Ok(self.pack_reasoning(packed)));
+                }
+                _ => {}
+            },
+            "message_delta" => {
+                if let Some(u) = v.get("usage") {
+                    // Cumulative output count; newer API versions repeat the
+                    // input fields too, older ones omit them.
+                    let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).map(|x| x as u32);
+                    if let Some(x) = n("output_tokens") {
+                        self.usage.output_tokens = x;
+                    }
+                    if let Some(x) = n("input_tokens").filter(|x| *x > 0) {
+                        self.usage.input_tokens = x;
+                    }
+                    if let Some(x) = n("cache_read_input_tokens").filter(|x| *x > 0) {
+                        self.usage.cache_read_input_tokens = x;
+                    }
+                    if let Some(x) = n("cache_creation_input_tokens").filter(|x| *x > 0) {
+                        self.usage.cache_creation_input_tokens = x;
+                    }
+                }
+                if let Some(r) = v
+                    .get("delta")
+                    .and_then(|d| d.get("stop_reason"))
+                    .and_then(|r| r.as_str())
+                {
+                    self.stop = Some(stop_from_anthropic(r));
+                }
+                self.emit_usage(&mut out);
+                if let Some(r) = self.stop {
+                    out.push(Ok(ModelDelta::Stop(r)));
+                }
+            }
+            "message_stop" => self.emit_usage(&mut out),
+            // Keepalive: nothing to say, but it proves the connection is alive.
+            "ping" => out.push(Ok(ModelDelta::Reasoning(String::new()))),
+            "error" => {
+                let e = v.get("error").cloned().unwrap_or(JsonValue::Null);
+                out.push(Err(ModelError::Transport(format!(
+                    "stream error: {}: {}",
+                    str_of(&e, "type").unwrap_or_else(|| "unknown".into()),
+                    str_of(&e, "message").unwrap_or_default()
+                ))));
+            }
+            _ => {}
+        }
+        out
+    }
+}
+
+/// Parse the `/v1/messages` SSE byte stream into `ModelDelta`s.
+fn parse_anthropic_sse<S>(stream: S) -> impl futures::Stream<Item = Result<ModelDelta, ModelError>>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + Unpin + 'static,
+{
+    struct State<S> {
+        upstream: S,
+        buf: String,
+        tail: Vec<u8>,
+        eof: bool,
+        sse: AnthropicSse,
+        pending: std::collections::VecDeque<Result<ModelDelta, ModelError>>,
+    }
+    let init = State {
+        upstream: stream,
+        buf: String::new(),
+        tail: Vec::new(),
+        eof: false,
+        sse: AnthropicSse::default(),
+        pending: std::collections::VecDeque::new(),
+    };
+    futures::stream::unfold(init, |mut st| async move {
+        loop {
+            if let Some(d) = st.pending.pop_front() {
+                return Some((d, st));
+            }
+            if st.eof {
+                return None;
+            }
+            if let Some(sep) = st.buf.find("\n\n") {
+                let event = st.buf.drain(..sep + 2).collect::<String>();
+                let payload = event
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
+                    .collect::<Vec<_>>()
+                    .join("");
+                if let Ok(v) = serde_json::from_str::<JsonValue>(&payload) {
+                    let evs = st.sse.on_event(&v);
+                    st.pending.extend(evs);
+                }
+                continue;
+            }
+            match st.upstream.next().await {
+                Some(Ok(bytes)) => {
+                    let mut decoded = String::new();
+                    crate::push_utf8_chunk(&mut decoded, &mut st.tail, &bytes);
+                    st.buf
+                        .push_str(&decoded.replace("\r\n", "\n").replace('\r', "\n"));
+                }
+                Some(Err(e)) => {
+                    st.eof = true;
+                    st.pending
+                        .push_back(Err(ModelError::Transport(format!("stream: {e}"))));
+                }
+                None => st.eof = true,
+            }
+        }
+    })
 }
 
 /// Best-effort response-format support for Anthropic: append schema/JSON
@@ -835,6 +1191,7 @@ mod cache_tests {
             system: system_blocks(Some("be helpful".into()), cache_on_system),
             messages: vec![],
             tools,
+            stream: false,
         };
         let v = serde_json::to_value(&req).unwrap();
 
@@ -961,5 +1318,89 @@ mod cache_tests {
 
         let mut empty: Vec<AnthropicMessage> = vec![];
         mark_history_breakpoint(&mut empty);
+    }
+
+    async fn collect_sse(events: &[&str]) -> ModelOutput {
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = events
+            .iter()
+            .map(|e| Ok(bytes::Bytes::from(format!("event: x\ndata: {e}\n\n"))))
+            .collect();
+        harness_core::collect_stream(
+            Box::pin(parse_anthropic_sse(futures::stream::iter(chunks))),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn sse_assembles_thinking_text_tool_use_usage_and_stop() {
+        let out = collect_sse(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":3,"cache_read_input_tokens":100,"cache_creation_input_tokens":20,"output_tokens":1}}}"#,
+            r#"{"type":"ping"}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm "}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"ok"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Let me "}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"look."}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}"#,
+            r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#,
+            r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\"x\"}"}}"#,
+            r#"{"type":"content_block_stop","index":2}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":42}}"#,
+            r#"{"type":"message_stop"}"#,
+        ])
+        .await;
+        assert_eq!(out.text.as_deref(), Some("Let me look."));
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].id, "toolu_1");
+        assert_eq!(out.tool_calls[0].args, serde_json::json!({"path": "x"}));
+        assert_eq!(out.stop_reason, StopReason::ToolUse);
+        // Same accounting as the non-streaming path: cache reads and writes
+        // are folded into the prompt size.
+        assert_eq!(out.usage.input_tokens, 123);
+        assert_eq!(out.usage.output_tokens, 42);
+        assert_eq!(out.usage.cached_input_tokens, 100);
+        assert_eq!(out.usage.cache_write_input_tokens, 20);
+        // The thinking block is packed with its signature so it can be echoed.
+        let packed: serde_json::Value =
+            serde_json::from_str(out.reasoning.as_deref().unwrap()).unwrap();
+        assert_eq!(packed["kind"], "thinking");
+        assert_eq!(packed["thinking"], "hm ok");
+        assert_eq!(packed["signature"], "SIG");
+    }
+
+    #[tokio::test]
+    async fn sse_max_tokens_and_no_tool_args_and_error_event() {
+        let out = collect_sse(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"list_dir","input":{}}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9}}"#,
+        ])
+        .await;
+        assert_eq!(out.tool_calls[0].args, serde_json::json!({}));
+        let none = collect_sse(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"a"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":9}}"#,
+        ])
+        .await;
+        assert_eq!(none.stop_reason, StopReason::MaxTokens);
+        assert_eq!(none.text.as_deref(), Some("a"));
+
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> = vec![Ok(bytes::Bytes::from(
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n",
+        ))];
+        let r = harness_core::collect_stream(
+            Box::pin(parse_anthropic_sse(futures::stream::iter(chunks))),
+            |_| {},
+        )
+        .await;
+        assert!(matches!(r, Err(ModelError::Transport(m)) if m.contains("overloaded_error")));
     }
 }

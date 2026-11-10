@@ -17,6 +17,9 @@ pub struct OpenAiCompat {
     /// Bounds silence between chunks. Used only for `stream`.
     stream_client: reqwest::Client,
     context_window: u32,
+    /// Whether `complete()` rides the streaming transport. On by default; see
+    /// [`crate::stream_default_from_env`].
+    stream_default: bool,
 }
 
 /// How long one non-streaming completion may take in total.
@@ -158,7 +161,23 @@ impl OpenAiCompat {
             client,
             stream_client,
             context_window: 128_000,
+            stream_default: crate::stream_default_from_env(),
         }
+    }
+
+    /// Choose the transport behind `complete()`.
+    ///
+    /// `true` (the default) sends a streaming request and collects it, so a
+    /// long generation is bounded by the idle gap between chunks rather than
+    /// by one whole-request timeout, and the result is identical. `false` is
+    /// the explicit opt-out: one plain non-streaming request. The env var
+    /// `HARNESS_STREAM=0` sets the same thing process-wide; this builder wins.
+    ///
+    /// Reasons to opt out: a gateway that mishandles SSE, or a model that
+    /// answers with images, which only the non-streaming response carries.
+    pub fn with_streaming(mut self, enable: bool) -> Self {
+        self.stream_default = enable;
+        self
     }
 
     /// Set both HTTP bounds for this model.
@@ -593,6 +612,145 @@ impl ChatUsage {
 #[async_trait]
 impl Model for OpenAiCompat {
     async fn complete(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        if self.stream_default {
+            self.complete_streamed(ctx).await
+        } else {
+            self.complete_blocking(ctx).await
+        }
+    }
+
+    fn info(&self) -> ModelInfo {
+        ModelInfo {
+            handle: self.cfg.name.clone(),
+            provider: provider_from_base_url(&self.cfg.base_url),
+            model: self.cfg.model.clone(),
+            context_window: self.context_window,
+            input_cost_usd_per_million_tokens: None,
+            output_cost_usd_per_million_tokens: None,
+            supports_tool_use: true,
+            supports_streaming: true,
+            supports_web_grounding: self.grounding_tool().is_some(),
+        }
+    }
+
+    /// Ask the provider to search, with its built-in tool and nothing else.
+    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
+        let tool = self.grounding_tool()?;
+        Some(self.grounded_answer(tool, query).await)
+    }
+
+    async fn stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        // Opens the SSE request directly. It must never route through
+        // `complete()`, which on the streaming default calls back into here.
+        self.open_stream(ctx).await
+    }
+}
+
+impl OpenAiCompat {
+    /// `complete()` over the streaming transport: same request, same result,
+    /// but bounded by the idle gap instead of one whole-request timeout.
+    /// Transient failures (connect, 5xx, a stream cut mid-answer) retry the
+    /// whole call, which is safe because nothing is surfaced until it ends.
+    async fn complete_streamed(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
+        let mut out = crate::retry::with_retry("openai-compat:complete-stream", || async {
+            let stream = self.open_stream_once(ctx).await?;
+            harness_core::collect_stream(stream, |_| {})
+                .await
+                .map_err(|e| match e {
+                    ModelError::Transport(m) => crate::retry::Retryable::transient(m),
+                    other => crate::retry::Retryable::permanent(other.to_string()),
+                })
+        })
+        .await
+        .map_err(ModelError::Transport)?;
+        // Same rule as the non-streaming path: a thinking model that put the
+        // whole answer in the reasoning channel must not return a blank turn.
+        if out.tool_calls.is_empty()
+            && out.text.as_deref().map(str::trim).unwrap_or("").is_empty()
+            && let Some(r) = &out.reasoning
+            && !r.trim().is_empty()
+        {
+            out.text = Some(r.clone());
+        }
+        Ok(out)
+    }
+
+    /// Open the SSE request, retrying connect-time failures like `complete`.
+    async fn open_stream(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
+        crate::retry::with_retry("openai-compat:stream", || self.open_stream_once(ctx))
+            .await
+            .map_err(ModelError::Transport)
+    }
+
+    async fn open_stream_once(
+        &self,
+        ctx: &Context,
+    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, crate::retry::Retryable> {
+        let (response_format, schema_hint) =
+            build_response_format(&ctx.response_format, &self.cfg.base_url);
+        let mut messages = build_messages(ctx);
+        if let Some(hint) = schema_hint {
+            inject_schema_hint(&mut messages, &hint);
+        }
+        let tools = ctx
+            .tools
+            .iter()
+            .map(|t| ToolDecl {
+                kind: "function",
+                function: ToolDeclFunction {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.input.clone(),
+                },
+            })
+            .collect();
+        let req = ChatRequest {
+            model: &self.cfg.model,
+            messages,
+            max_tokens: Some(ctx.policy.max_output_tokens),
+            tools,
+            stream: true,
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
+            response_format,
+        };
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
+        let resp = self
+            .stream_client
+            .post(&url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&request_body(&req))
+            .send()
+            .await
+            .map_err(|e| crate::retry::Retryable::transient(transport_detail(&url, &e)))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let msg = http_detail(&url, status, &body);
+            return Err(
+                if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    crate::retry::Retryable::transient(msg)
+                } else {
+                    crate::retry::Retryable::permanent(msg)
+                },
+            );
+        }
+        let byte_stream = resp.bytes_stream();
+        let delta_stream = parse_sse_stream(byte_stream);
+        Ok(delta_stream.boxed())
+    }
+
+    async fn complete_blocking(&self, ctx: &Context) -> Result<ModelOutput, ModelError> {
         let (response_format, schema_hint) =
             build_response_format(&ctx.response_format, &self.cfg.base_url);
         let mut messages = build_messages(ctx);
@@ -737,81 +895,6 @@ impl Model for OpenAiCompat {
             images,
         })
     }
-
-    fn info(&self) -> ModelInfo {
-        ModelInfo {
-            handle: self.cfg.name.clone(),
-            provider: provider_from_base_url(&self.cfg.base_url),
-            model: self.cfg.model.clone(),
-            context_window: self.context_window,
-            input_cost_usd_per_million_tokens: None,
-            output_cost_usd_per_million_tokens: None,
-            supports_tool_use: true,
-            supports_streaming: true,
-            supports_web_grounding: self.grounding_tool().is_some(),
-        }
-    }
-
-    /// Ask the provider to search, with its built-in tool and nothing else.
-    async fn search_web(&self, query: &str) -> Option<Result<String, ModelError>> {
-        let tool = self.grounding_tool()?;
-        Some(self.grounded_answer(tool, query).await)
-    }
-
-    async fn stream(
-        &self,
-        ctx: &Context,
-    ) -> Result<BoxStream<'static, Result<ModelDelta, ModelError>>, ModelError> {
-        let (response_format, schema_hint) =
-            build_response_format(&ctx.response_format, &self.cfg.base_url);
-        let mut messages = build_messages(ctx);
-        if let Some(hint) = schema_hint {
-            inject_schema_hint(&mut messages, &hint);
-        }
-        let tools = ctx
-            .tools
-            .iter()
-            .map(|t| ToolDecl {
-                kind: "function",
-                function: ToolDeclFunction {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.input.clone(),
-                },
-            })
-            .collect();
-        let req = ChatRequest {
-            model: &self.cfg.model,
-            messages,
-            max_tokens: Some(ctx.policy.max_output_tokens),
-            tools,
-            stream: true,
-            stream_options: Some(StreamOptions {
-                include_usage: true,
-            }),
-            response_format,
-        };
-        let url = format!(
-            "{}/chat/completions",
-            self.cfg.base_url.trim_end_matches('/')
-        );
-        let resp = self
-            .stream_client
-            .post(&url)
-            .bearer_auth(&self.cfg.api_key)
-            .json(&request_body(&req))
-            .send()
-            .await
-            .map_err(|e| ModelError::Transport(transport_detail(&url, &e)))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ModelError::Transport(http_detail(&url, status, &body)));
-        }
-        let byte_stream = resp.bytes_stream();
-        let delta_stream = parse_sse_stream(byte_stream);
-        Ok(delta_stream.boxed())
-    }
 }
 
 /// Parse the SSE byte stream from OpenAI chat completions into `ModelDelta`s.
@@ -833,6 +916,9 @@ where
         /// is regularly in the middle of a 3-byte CJK character.
         tail: Vec<u8>,
         done: bool,
+        // A finish_reason already came through; `[DONE]` must not overwrite
+        // it with EndTurn (that would turn `length` into a normal stop).
+        saw_stop: bool,
         // Partial JSON args for in-flight tool calls, keyed by call index.
         partial_tool_args: std::collections::HashMap<u32, ToolCallAccumPriv>,
         // Extra deltas from a chunk that decoded to more than one (e.g. a
@@ -845,6 +931,7 @@ where
         buf: String::new(),
         tail: Vec::new(),
         done: false,
+        saw_stop: false,
         partial_tool_args: std::collections::HashMap::new(),
         pending: std::collections::VecDeque::new(),
     };
@@ -866,6 +953,9 @@ where
                     let payload = rest.trim();
                     if payload == "[DONE]" {
                         state.done = true;
+                        if state.saw_stop {
+                            return None;
+                        }
                         return Some((Ok(ModelDelta::Stop(StopReason::EndTurn)), state));
                     }
                     if payload.is_empty() {
@@ -876,6 +966,9 @@ where
                         Err(_) => continue,
                     };
                     let mut deltas = decode_delta(&v, &mut state.partial_tool_args);
+                    if deltas.iter().any(|d| matches!(d, ModelDelta::Stop(_))) {
+                        state.saw_stop = true;
+                    }
                     if !deltas.is_empty() {
                         let first = deltas.remove(0);
                         state.pending.extend(deltas);
@@ -929,7 +1022,17 @@ fn decode_delta(
             cache_write_input_tokens: 0,
         };
         if usage.input_tokens > 0 || usage.output_tokens > 0 {
-            return vec![ModelDelta::Usage(usage)];
+            let mut out = vec![ModelDelta::Usage(usage)];
+            // Some providers put usage on the same chunk as the finish
+            // reason; dropping the latter would lose `length`.
+            if let Some(Value::String(reason)) = v
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("finish_reason"))
+            {
+                out.push(ModelDelta::Stop(stop_from_finish(reason)));
+            }
+            return out;
         }
     }
 
@@ -1018,16 +1121,19 @@ fn decode_delta(
     }
     // Finish reason
     if let Some(Value::String(reason)) = first.get("finish_reason") {
-        let r = match reason.as_str() {
-            "stop" => StopReason::EndTurn,
-            "length" => StopReason::MaxTokens,
-            "tool_calls" => StopReason::ToolUse,
-            "content_filter" => StopReason::Other,
-            _ => StopReason::EndTurn,
-        };
-        return vec![ModelDelta::Stop(r)];
+        return vec![ModelDelta::Stop(stop_from_finish(reason))];
     }
     Vec::new()
+}
+
+fn stop_from_finish(reason: &str) -> StopReason {
+    match reason {
+        "stop" => StopReason::EndTurn,
+        "length" => StopReason::MaxTokens,
+        "tool_calls" => StopReason::ToolUse,
+        "content_filter" => StopReason::Other,
+        _ => StopReason::EndTurn,
+    }
 }
 
 #[derive(Default)]
@@ -1442,6 +1548,7 @@ mod tests {
     async fn a_completion_slower_than_the_idle_bound_still_succeeds() {
         let base = slow_server(Duration::from_millis(600)).await;
         let model = OpenAiCompat::with_key(base, "m", "k")
+            .with_streaming(false)
             .with_timeouts(Duration::from_secs(5), Duration::from_millis(150));
 
         let out = model.complete(&probe_ctx()).await;
@@ -1513,6 +1620,7 @@ mod tests {
     async fn a_completion_past_its_own_bound_still_times_out() {
         let base = slow_server(Duration::from_secs(3)).await;
         let model = OpenAiCompat::with_key(base, "m", "k")
+            .with_streaming(false)
             .with_timeouts(Duration::from_millis(300), Duration::from_millis(150));
 
         let out = model.complete(&probe_ctx()).await;
@@ -1521,6 +1629,149 @@ mod tests {
             out.is_err(),
             "a completion past the completion bound must fail"
         );
+    }
+
+    /// Serve one SSE chat completion made of `events`, and hand back the
+    /// request body the client sent, so a test can check what was asked for.
+    async fn sse_server(
+        events: Vec<&'static str>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 8192];
+            // Read until the JSON body is complete (Content-Length known).
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf)
+                    .await
+                    .unwrap();
+                req.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&req).to_string();
+                if let Some(h) = text.find("\r\n\r\n") {
+                    let len = text[..h]
+                        .to_ascii_lowercase()
+                        .lines()
+                        .find_map(|l| {
+                            l.strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if text.len() >= h + 4 + len || n == 0 {
+                        *seen2.lock().unwrap() = text[h + 4..].to_string();
+                        break;
+                    }
+                }
+            }
+            let head =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, head.as_bytes()).await;
+            for e in events {
+                let chunk = format!("data: {e}\n\n");
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, chunk.as_bytes()).await;
+            }
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, b"data: [DONE]\n\n").await;
+        });
+        (format!("http://{addr}/v1"), seen)
+    }
+
+    /// `complete()` rides the stream by default and must hand back exactly what
+    /// the non-streaming path would: text, tool calls with parsed arguments,
+    /// usage (which only arrives if the request asked for it), reasoning, and a
+    /// stop reason that survives the trailing `[DONE]`.
+    #[tokio::test]
+    async fn complete_collects_a_stream_into_the_same_output() {
+        let (base, seen) = sse_server(vec![
+            r#"{"choices":[{"delta":{"reasoning_content":"hm "}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"ok"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"Let me "}}]}"#,
+            r#"{"choices":[{"delta":{"content":"look."}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":100}}}"#,
+        ])
+        .await;
+        let model = OpenAiCompat::with_key(base, "m", "k");
+
+        let out = model.complete(&probe_ctx()).await.expect("completes");
+
+        assert_eq!(out.text.as_deref(), Some("Let me look."));
+        assert_eq!(out.reasoning.as_deref(), Some("hm ok"));
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].id, "call_1");
+        assert_eq!(out.tool_calls[0].name, "read_file");
+        assert_eq!(out.tool_calls[0].args, serde_json::json!({"path": "x"}));
+        assert_eq!(out.stop_reason, StopReason::ToolUse);
+        assert_eq!(
+            (
+                out.usage.input_tokens,
+                out.usage.output_tokens,
+                out.usage.cached_input_tokens
+            ),
+            (120, 7, 100)
+        );
+        let sent: serde_json::Value = serde_json::from_str(&seen.lock().unwrap()).unwrap();
+        assert_eq!(sent["stream"], true);
+        assert_eq!(sent["stream_options"]["include_usage"], true);
+    }
+
+    /// `length` must not be flattened to a normal stop by the `[DONE]` marker,
+    /// even when the provider rides usage on the same chunk as the reason.
+    #[tokio::test]
+    async fn a_length_stop_survives_done_and_a_combined_usage_chunk() {
+        let (base, _) = sse_server(vec![
+            r#"{"choices":[{"delta":{"content":"cut off"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}"#,
+        ])
+        .await;
+        let out = OpenAiCompat::with_key(base, "m", "k")
+            .complete(&probe_ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.stop_reason, StopReason::MaxTokens);
+        assert_eq!(out.usage.output_tokens, 3);
+    }
+
+    /// A thinking model that puts its whole answer in the reasoning channel
+    /// gets the same fallback as the non-streaming path.
+    #[tokio::test]
+    async fn reasoning_only_streams_fall_back_to_text_like_the_plain_path() {
+        let (base, _) = sse_server(vec![
+            r#"{"choices":[{"delta":{"reasoning_content":"the answer"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])
+        .await;
+        let out = OpenAiCompat::with_key(base, "m", "k")
+            .complete(&probe_ctx())
+            .await
+            .unwrap();
+        assert_eq!(out.text.as_deref(), Some("the answer"));
+    }
+
+    /// The opt-out: `with_streaming(false)` sends one plain request, and
+    /// `HARNESS_STREAM=0` is the same switch spelled for the environment.
+    #[tokio::test]
+    async fn the_opt_out_sends_a_plain_request() {
+        let base = slow_server(Duration::from_millis(0)).await;
+        let model = OpenAiCompat::with_key(base, "m", "k").with_streaming(false);
+        let out = model.complete(&probe_ctx()).await.unwrap();
+        assert_eq!(out.text.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn harness_stream_env_parsing() {
+        use crate::parse_stream_flag;
+        assert!(parse_stream_flag(None));
+        assert!(parse_stream_flag(Some("1")));
+        assert!(parse_stream_flag(Some("")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!parse_stream_flag(Some(off)), "{off}");
+        }
     }
 
     // A base_url without `/v1` is the commonest way to misconfigure a local

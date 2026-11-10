@@ -170,6 +170,106 @@ pub trait Model: Send + Sync + 'static {
     fn info(&self) -> ModelInfo;
 }
 
+/// Drain a model delta stream into the same `ModelOutput` `complete()` would
+/// have produced. `on_delta` sees every delta of any kind as it arrives (the
+/// loop fires `ModelTokenDelta`, progress and heartbeats from it).
+///
+/// Tool calls keep first-seen order and their arguments are parsed once the
+/// stream ends (unparseable args stay a JSON string, as in the non-streaming
+/// path). `stop_reason` is reconciled with what came out: tool calls present
+/// means `ToolUse`, whatever the adapter said.
+pub async fn collect_stream_observed(
+    mut stream: futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>,
+    mut on_delta: impl FnMut(&ModelDelta),
+) -> Result<ModelOutput, ModelError> {
+    use futures::StreamExt;
+    use std::collections::HashMap;
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut usage = Usage::default();
+    let mut stop_reason = StopReason::EndTurn;
+    // id -> (name, args). The id is the key because a stream may emit args
+    // before the chunk that names the call; order is tracked separately.
+    let mut tool_starts: HashMap<String, (String, String)> = HashMap::new();
+    let mut tool_order: Vec<String> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let delta = item?;
+        on_delta(&delta);
+        match delta {
+            ModelDelta::Text(t) => {
+                text.push_str(&t);
+            }
+            ModelDelta::ToolCallStart { id, name } => {
+                if !tool_starts.contains_key(&id) {
+                    tool_order.push(id.clone());
+                }
+                tool_starts
+                    .entry(id)
+                    .or_insert_with(|| (name, String::new()));
+            }
+            ModelDelta::ToolCallArgs { id, partial_json } => {
+                if !tool_order.iter().any(|k| k == &id) {
+                    tool_order.push(id.clone());
+                }
+                tool_starts
+                    .entry(id)
+                    .or_insert_with(|| (String::new(), String::new()))
+                    .1
+                    .push_str(&partial_json);
+            }
+            ModelDelta::ToolCallEnd { .. } => {}
+            ModelDelta::Usage(u) => usage = u,
+            ModelDelta::Stop(r) => stop_reason = r,
+            // Streamed reasoning arrives as fragments: concatenate verbatim.
+            ModelDelta::Reasoning(s) => reasoning.push_str(&s),
+        }
+    }
+    let tool_calls: Vec<ToolCall> = tool_order
+        .into_iter()
+        .filter_map(|id| {
+            tool_starts.remove(&id).map(|(name, args)| {
+                let args = if args.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&args)
+                        .unwrap_or(serde_json::Value::String(args))
+                };
+                ToolCall { id, name, args }
+            })
+        })
+        .collect();
+    let stop_reason = if tool_calls.is_empty() {
+        stop_reason
+    } else {
+        StopReason::ToolUse
+    };
+    Ok(ModelOutput {
+        text: (!text.is_empty()).then_some(text),
+        tool_calls,
+        usage,
+        stop_reason,
+        reasoning: (!reasoning.is_empty()).then_some(reasoning),
+        // `ModelDelta` carries no image variant; image-output models answer
+        // non-streamed, so there is nothing to accumulate here.
+        images: Vec::new(),
+    })
+}
+
+/// [`collect_stream_observed`] with a callback for text fragments only.
+pub async fn collect_stream(
+    stream: futures::stream::BoxStream<'static, Result<ModelDelta, ModelError>>,
+    mut on_text: impl FnMut(&str),
+) -> Result<ModelOutput, ModelError> {
+    collect_stream_observed(stream, |d| {
+        if let ModelDelta::Text(t) = d
+            && !t.is_empty()
+        {
+            on_text(t);
+        }
+    })
+    .await
+}
+
 /// A concrete newtype wrapping a boxed model, so an `Arc<dyn Model>` can be used
 /// where a concrete `M: Model` is required (e.g. `Subagent::new` / `AgentLoop<M>`).
 ///
@@ -336,5 +436,68 @@ mod arc_model_tests {
         assert_eq!((usage.input_tokens, usage.cached_input_tokens), (120, 100));
         assert_eq!(reasoning.as_deref(), Some("thinking"));
         assert_eq!(text.as_deref(), Some("checking"));
+    }
+
+    #[tokio::test]
+    async fn collect_stream_rebuilds_what_complete_would_return() {
+        let deltas: Vec<Result<ModelDelta, ModelError>> = vec![
+            Ok(ModelDelta::Reasoning("th".into())),
+            Ok(ModelDelta::Reasoning("ink".into())),
+            Ok(ModelDelta::Text("he".into())),
+            Ok(ModelDelta::Text("llo".into())),
+            Ok(ModelDelta::ToolCallStart {
+                id: "a".into(),
+                name: "read_file".into(),
+            }),
+            Ok(ModelDelta::ToolCallArgs {
+                id: "a".into(),
+                partial_json: "{\"path\":".into(),
+            }),
+            Ok(ModelDelta::ToolCallArgs {
+                id: "a".into(),
+                partial_json: "\"x\"}".into(),
+            }),
+            Ok(ModelDelta::ToolCallEnd { id: "a".into() }),
+            Ok(ModelDelta::ToolCallStart {
+                id: "b".into(),
+                name: "list_dir".into(),
+            }),
+            Ok(ModelDelta::Usage(Usage {
+                input_tokens: 9,
+                output_tokens: 4,
+                cached_input_tokens: 2,
+                cache_write_input_tokens: 0,
+            })),
+            Ok(ModelDelta::Stop(StopReason::EndTurn)),
+        ];
+        let mut seen = String::new();
+        let out = collect_stream(Box::pin(futures::stream::iter(deltas)), |t| {
+            seen.push_str(t)
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen, "hello");
+        assert_eq!(out.text.as_deref(), Some("hello"));
+        assert_eq!(out.reasoning.as_deref(), Some("think"));
+        assert_eq!(out.tool_calls.len(), 2);
+        assert_eq!(out.tool_calls[0].args, serde_json::json!({"path": "x"}));
+        assert_eq!(out.tool_calls[1].args, serde_json::json!({}));
+        assert_eq!(out.usage.input_tokens, 9);
+        assert_eq!(out.usage.cached_input_tokens, 2);
+        assert_eq!(
+            out.stop_reason,
+            StopReason::ToolUse,
+            "reconciled with calls"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_stream_propagates_an_error_mid_stream() {
+        let deltas: Vec<Result<ModelDelta, ModelError>> = vec![
+            Ok(ModelDelta::Text("partial".into())),
+            Err(ModelError::Transport("cut".into())),
+        ];
+        let r = collect_stream(Box::pin(futures::stream::iter(deltas)), |_| {}).await;
+        assert!(matches!(r, Err(ModelError::Transport(_))));
     }
 }

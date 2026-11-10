@@ -3,6 +3,29 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Changed
+
+- **Every model call streams by default.** `AgentLoop` now drives each turn,
+  including the forced final synthesis, through `Model::stream()`, so
+  `harness run` no longer sits silent through a long generation. The OpenAI
+  compatible, Gemini and Anthropic adapters make `complete()` open a streaming
+  request and collect it (`harness_core::collect_stream`), so the compactor,
+  memory layer and every other direct caller get the idle timeout
+  (`HARNESS_HTTP_IDLE_TIMEOUT_SECS`) instead of the 300s whole-request one.
+  Opt out with `AgentLoop::with_streaming(false)`, the adapters'
+  `with_streaming(false)`, or `HARNESS_STREAM=0`. Image-output models answer
+  only on the non-streaming path, so opt out for those.
+- `AnthropicNative` now streams for real (SSE: text, tool use, thinking with
+  signatures, usage including cache tokens, stop reason).
+- A `length` finish no longer turns into a normal stop when the provider sends
+  `[DONE]` or puts usage on the same chunk as the finish reason.
+- `harness run --progress` prints a line about every 5s while a model turn is
+  generating (elapsed, chars, rate), and the session recording gets a
+  `Heartbeat` about every 30s during a model call, so `harness trace` can tell
+  "still generating" from "stuck".
+
 ## 0.0.67
 
 ### Added

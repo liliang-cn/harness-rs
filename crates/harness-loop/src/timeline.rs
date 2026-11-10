@@ -69,7 +69,12 @@ fn bars(events: &[SessionEvent]) -> (Vec<Bar>, Vec<(i64, u32)>) {
 
     for e in events {
         match e {
-            SessionEvent::Heartbeat { ts_ms, iter } => iters.push((*ts_ms, *iter)),
+            SessionEvent::Heartbeat { ts_ms, iter } => {
+                // Mid-call heartbeats repeat the iteration; mark it once.
+                if iters.last().is_none_or(|(_, last)| last != iter) {
+                    iters.push((*ts_ms, *iter));
+                }
+            }
             SessionEvent::PreModel {
                 ts_ms, history_len, ..
             } => model_open = Some((*ts_ms, *history_len)),

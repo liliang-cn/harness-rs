@@ -71,8 +71,8 @@ use crate::compactor::{CALIBRATION_KEY, DefaultCompactor};
 use crate::hooks::HookBus;
 use harness_core::{
     Action, Block, CompactionStage, Compactor, Context, Event, Guide, HarnessError, HookOutcome,
-    Model, ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage,
-    StopReason, Task, ToolCall, ToolResult, Turn, TurnRole, Usage, World,
+    Model, ModelDelta, ModelOutput, ResponseFormat, Sensor, SessionSource, SignalSet, Stage, Task,
+    ToolCall, ToolResult, Turn, TurnRole, World,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -337,6 +337,10 @@ impl Default for CompactPolicy {
 /// Inline preview size for a spilled result. Deliberately smaller than the
 /// ceiling: the point of spilling is that the context gets a *glimpse* and a
 /// path, not four-fifths of the flood.
+/// How often a streamed model call reports progress / a heartbeat.
+const MODEL_PROGRESS_EVERY: Duration = Duration::from_secs(5);
+const MODEL_HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+
 const SPILL_PREVIEW_BYTES: usize = 4 * 1024;
 
 /// Told to the model when the step budget ran out and the loop stripped its
@@ -670,10 +674,12 @@ pub struct AgentLoop<M: Model> {
     /// Default response format applied to every run unless overridden by
     /// `run_typed`. See [`ResponseFormat`].
     pub response_format: ResponseFormat,
-    /// When `true`, the loop drives each model turn via `Model::stream()`
-    /// instead of `complete()`, firing `Event::ModelTokenDelta` for each
-    /// text fragment. Tool-call deltas are still assembled inside the loop;
-    /// only the terminal `ModelOutput` shape is observable downstream.
+    /// When `true` (the default), the loop drives each model turn, including
+    /// the forced final synthesis, via `Model::stream()` instead of
+    /// `complete()`, firing `Event::ModelTokenDelta` for each text fragment.
+    /// Tool-call deltas are still assembled inside the loop; only the terminal
+    /// `ModelOutput` shape is observable downstream. `with_streaming(false)`
+    /// is the explicit opt-out.
     pub streaming: bool,
     /// Stops the run from outside. Checked at the top of every iteration and
     /// raced against the model step and every tool dispatch, so a cancel
@@ -753,7 +759,7 @@ impl<M: Model> AgentLoop<M> {
             compactor: Arc::new(DefaultCompactor::new()),
             tool_timeout: Some(Duration::from_secs(120)),
             response_format: ResponseFormat::Free,
-            streaming: false,
+            streaming: true,
             cancel: CancellationToken::new(),
             recall: None,
             recall_auto_inject: false,
@@ -861,8 +867,9 @@ impl<M: Model> AgentLoop<M> {
         self
     }
 
-    /// Opt in to streaming the model's terminal turn token-by-token via
-    /// `Model::stream()`. Hooks subscribed to `Event::ModelTokenDelta` see
+    /// Streaming is the default; pass `false` to opt out and use one
+    /// non-streaming `Model::complete()` per turn. Streamed turns go through
+    /// `Model::stream()`, and hooks subscribed to `Event::ModelTokenDelta` see
     /// each fragment as it arrives; the rest of the loop is unchanged.
     pub fn with_streaming(mut self, enable: bool) -> Self {
         self.streaming = enable;
@@ -1564,7 +1571,7 @@ impl<M: Model> AgentLoop<M> {
 
             self.hooks.fire(&Event::PreModel { ctx: &ctx }, world);
             let mut partial = String::new();
-            let Some(out) = self.model_step(&ctx, world, &mut partial).await? else {
+            let Some(out) = self.model_step(&ctx, world, &mut partial, iter).await? else {
                 tracing::info!(iter, "run cancelled during model step");
                 // What the stream delivered before the cancel is what the person
                 // saw; it belongs to the outcome, not to the dropped future.
@@ -2217,25 +2224,16 @@ impl<M: Model> AgentLoop<M> {
         ctx: &Context,
         world: &mut World,
         partial: &mut String,
+        iter: u32,
     ) -> Result<Option<ModelOutput>, HarnessError> {
         let info = self.model.info();
         let span = chat_span(&info);
         let started = std::time::Instant::now();
         let r = async {
-            if self.streaming {
-                tokio::select! {
-                    biased;
-                    _ = self.cancel.cancelled() => Ok(None),
-                    r = self.complete_via_stream(ctx, world, partial) => r.map(Some),
-                }
-            } else {
-                tokio::select! {
-                    biased;
-                    _ = self.cancel.cancelled() => Ok(None),
-                    r = self.model.complete(ctx) => r
-                        .map(Some)
-                        .map_err(harness_core::HarnessError::Model),
-                }
+            tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => Ok(None),
+                r = self.model_call(ctx, world, partial, iter) => r.map(Some),
             }
         }
         .instrument(span.clone())
@@ -2249,15 +2247,36 @@ impl<M: Model> AgentLoop<M> {
         r
     }
 
+    /// One model request: streamed unless the loop was opted out with
+    /// `with_streaming(false)`.
+    async fn model_call(
+        &self,
+        ctx: &Context,
+        world: &mut World,
+        partial: &mut String,
+        iter: u32,
+    ) -> Result<ModelOutput, HarnessError> {
+        if self.streaming {
+            self.complete_via_stream(ctx, world, partial, iter).await
+        } else {
+            self.model
+                .complete(ctx)
+                .await
+                .map_err(harness_core::HarnessError::Model)
+        }
+    }
+
     /// Drive `Model::stream()` and assemble the result into a `ModelOutput`,
     /// firing `Event::ModelTokenDelta` for each text fragment along the way.
     ///
-    /// Adapters that don't implement real streaming (e.g. `GeminiNative` /
-    /// `AnthropicNative` today) fall back to the default trait impl, which
-    /// runs `complete()` and emits the whole reply as a single delta. That
-    /// works — the loop sees one big `ModelDelta::Text(...)` followed by
-    /// `Stop`, fires one big `ModelTokenDelta`, and proceeds. So enabling
-    /// `streaming` is safe regardless of which provider the user picked.
+    /// Adapters without a real `stream()` fall back to the default trait impl,
+    /// which runs `complete()` and emits the whole reply as a single delta, so
+    /// streaming is safe regardless of which provider the user picked. The
+    /// assembly itself is [`harness_core::collect_stream_observed`], shared
+    /// with the adapters' own `complete()`.
+    ///
+    /// While the stream runs, a `model_progress` custom event fires about every
+    /// 5s and a `Heartbeat` about every 30s, both driven by arriving deltas.
     ///
     /// `sink` is where the text accumulates, owned by the caller so that a
     /// cancel — which drops this future mid-stream — does not drop the chunks
@@ -2271,101 +2290,62 @@ impl<M: Model> AgentLoop<M> {
         ctx: &Context,
         world: &mut World,
         sink: &mut String,
+        iter: u32,
     ) -> Result<ModelOutput, HarnessError> {
-        use futures::StreamExt;
-        let mut stream = self
+        let stream = self
             .model
             .stream(ctx)
             .await
             .map_err(harness_core::HarnessError::Model)?;
-        let mut reasoning = String::new();
-        let mut usage = Usage::default();
-        let mut stop_reason = StopReason::EndTurn;
-        // Insertion-ordered map: index → (id, name, args). We can't use the
-        // tool-call id as the primary key because the stream may emit args
-        // chunks before the first chunk that carries the id; the OpenAI-compat
-        // SSE parser already does its own buffering and surfaces `id` in
-        // ToolCallStart, but be lenient with adapters that may interleave.
-        let mut tool_starts: HashMap<String, (String, String)> = HashMap::new();
-        let mut tool_order: Vec<String> = Vec::new();
-        while let Some(item) = stream.next().await {
-            let delta = item.map_err(harness_core::HarnessError::Model)?;
+        let started = std::time::Instant::now();
+        let mut last_progress = started;
+        let mut last_heartbeat = started;
+        let (mut chars, mut deltas) = (0usize, 0usize);
+        let hooks = &self.hooks;
+        let out = harness_core::collect_stream_observed(stream, |delta| {
+            deltas += 1;
             match delta {
-                ModelDelta::Text(t) => {
-                    if !t.is_empty() {
-                        self.hooks.fire(&Event::ModelTokenDelta { text: &t }, world);
-                        sink.push_str(&t);
-                    }
+                ModelDelta::Text(t) if !t.is_empty() => {
+                    chars += t.chars().count();
+                    hooks.fire(&Event::ModelTokenDelta { text: t }, world);
+                    sink.push_str(t);
                 }
-                ModelDelta::ToolCallStart { id, name } => {
-                    if !tool_starts.contains_key(&id) {
-                        tool_order.push(id.clone());
-                    }
-                    tool_starts
-                        .entry(id)
-                        .or_insert_with(|| (name, String::new()));
+                ModelDelta::Reasoning(t) => chars += t.chars().count(),
+                ModelDelta::ToolCallArgs { partial_json, .. } => {
+                    chars += partial_json.chars().count()
                 }
-                ModelDelta::ToolCallArgs { id, partial_json } => {
-                    let entry = tool_starts
-                        .entry(id.clone())
-                        .or_insert_with(|| (String::new(), String::new()));
-                    if !tool_order.iter().any(|k| k == &id) {
-                        tool_order.push(id);
-                    }
-                    entry.1.push_str(&partial_json);
-                }
-                ModelDelta::ToolCallEnd { .. } => {}
-                ModelDelta::Usage(u) => usage = u,
-                ModelDelta::Stop(r) => stop_reason = r,
-                ModelDelta::Reasoning(s) => {
-                    // Streamed reasoning arrives as token fragments, not lines —
-                    // concatenate verbatim (same as `text`), don't insert newlines.
-                    reasoning.push_str(&s);
-                }
-                // ModelDelta is `#[non_exhaustive]`; ignore future variants
-                // we don't yet understand.
                 _ => {}
             }
-        }
-        let tool_calls: Vec<ToolCall> = tool_order
-            .into_iter()
-            .filter_map(|id| {
-                tool_starts.remove(&id).map(|(name, args)| {
-                    let args_v = serde_json::from_str::<serde_json::Value>(&args)
-                        .unwrap_or(serde_json::Value::String(args));
-                    ToolCall {
-                        id,
-                        name,
-                        args: args_v,
-                    }
-                })
-            })
-            .collect();
-        // Reconcile stop_reason with what actually came out — adapters
-        // sometimes emit `Stop(EndTurn)` even after tool_calls, which would
-        // confuse downstream consumers that branch on stop_reason alone.
-        let stop_reason = if !tool_calls.is_empty() {
-            StopReason::ToolUse
-        } else {
-            stop_reason
-        };
-        let text = std::mem::take(sink);
-        Ok(ModelOutput {
-            text: if text.is_empty() { None } else { Some(text) },
-            tool_calls,
-            usage,
-            stop_reason,
-            reasoning: if reasoning.is_empty() {
-                None
-            } else {
-                Some(reasoning)
-            },
-            // `ModelDelta` has no image variant: the verified image-output
-            // path (Gemini image models over chat) answers non-streamed, so
-            // there is nothing to accumulate here. A streaming provider that
-            // emits images would need a `ModelDelta::Image` first.
-            images: Vec::new(),
+            // Driven by arriving deltas, so a heartbeat means "bytes are
+            // still flowing", and its absence in a trace means stuck.
+            let now = std::time::Instant::now();
+            if now.duration_since(last_heartbeat) >= MODEL_HEARTBEAT_EVERY {
+                last_heartbeat = now;
+                hooks.fire(&Event::Heartbeat { iter }, world);
+            }
+            if now.duration_since(last_progress) >= MODEL_PROGRESS_EVERY {
+                last_progress = now;
+                let elapsed = now.duration_since(started).as_secs_f64();
+                let data = serde_json::json!({
+                    "elapsed_s": elapsed,
+                    "chars": chars,
+                    "deltas": deltas,
+                    "chars_per_s": if elapsed > 0.0 { chars as f64 / elapsed } else { 0.0 },
+                });
+                hooks.fire(
+                    &Event::Custom {
+                        name: "model_progress",
+                        data: &data,
+                    },
+                    world,
+                );
+            }
         })
+        .await
+        .map_err(harness_core::HarnessError::Model)?;
+        // Completed: the output now owns the text; only a cancel needs the sink.
+        sink.clear();
+        Ok(out)
     }
 
     /// One tool call, under the per-call deadline and the run's cancellation
@@ -2642,10 +2622,14 @@ impl<M: Model> AgentLoop<M> {
         let info = self.model.info();
         let span = chat_span(&info);
         let started = std::time::Instant::now();
+        let mut partial = String::new();
+        let iter = ctx.policy.max_iters;
         let result = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => None,
-            r = self.model.complete(ctx).instrument(span.clone()) => Some(r),
+            r = self
+                .model_call(ctx, world, &mut partial, iter)
+                .instrument(span.clone()) => Some(r),
         };
         finish_chat(
             &span,

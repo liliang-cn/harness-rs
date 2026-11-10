@@ -533,6 +533,19 @@ impl Hook for LiveProgressHook {
     fn fire(&self, ev: &Event<'_>, world: &mut World) -> HookOutcome {
         let ts = world.clock.now_ms();
         let iter = self.iter.load(std::sync::atomic::Ordering::Relaxed);
+        if let Event::Custom {
+            name: "model_progress",
+            data,
+        } = ev
+        {
+            eprintln!(
+                "[iter={iter}] … generating {:.0}s, {} chars so far ({:.0} chars/s)",
+                data["elapsed_s"].as_f64().unwrap_or(0.0),
+                data["chars"].as_u64().unwrap_or(0),
+                data["chars_per_s"].as_f64().unwrap_or(0.0),
+            );
+            return HookOutcome::Allow;
+        }
         // Reuse the recorder's projection + the verbose formatter so the
         // live output is the same format you'd see post-mortem.
         let session_ev = match ev {
