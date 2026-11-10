@@ -565,10 +565,13 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     let cancelled = matches!(outcome, Outcome::Cancelled { .. });
     // A run that stopped without finishing (stuck, out of budget) did not
     // succeed, and a script driving `harness run` has to be able to tell.
-    let unfinished = matches!(
-        outcome,
-        Outcome::Stuck { .. } | Outcome::BudgetExhausted { .. }
-    );
+    // So did a run that ended `Done` with a failed acceptance verdict: it
+    // stopped, but what it stopped on did not hold up.
+    let unfinished = match &outcome {
+        Outcome::Stuck { .. } | Outcome::BudgetExhausted { .. } => true,
+        Outcome::Done { verified, .. } => verified.as_ref().is_some_and(|v| !v.passed),
+        _ => false,
+    };
 
     if opts.json {
         // Best-effort structured dump of the outcome.
@@ -643,7 +646,13 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         );
     } else {
         match outcome {
-            Outcome::Done { text, .. } => {
+            Outcome::Done { text, verified, .. } => {
+                if let Some(v) = verified.as_ref().filter(|v| !v.passed) {
+                    eprintln!(
+                        "(stopped, but the result did not pass its check: {})",
+                        v.reason
+                    );
+                }
                 println!("{}", text.unwrap_or_default().trim());
             }
             Outcome::BudgetExhausted {
@@ -688,7 +697,7 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
 }
 
 /// `harness run` exit status when the loop stopped without finishing:
-/// `Outcome::Stuck` or `Outcome::BudgetExhausted`.
+/// `Outcome::Stuck`, `Outcome::BudgetExhausted`, or `Done` with a failed check.
 const EXIT_UNFINISHED: i32 = 3;
 
 // ------------------------------------------------------------------

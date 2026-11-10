@@ -340,6 +340,62 @@ impl Default for CompactPolicy {
 /// How often a streamed model call reports progress / a heartbeat.
 const MODEL_PROGRESS_EVERY: Duration = Duration::from_secs(5);
 const MODEL_HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+/// What one finished model turn amounts to.
+///
+/// Every decision about "what does this response mean" is made here, once, and
+/// the loop acts on the result. Before this existed the same question was
+/// answered in several places, and each new shape of response (a turn cut off
+/// at the token limit, a turn that only thought) was a fresh bug: the one
+/// place that forgot about it let the turn through as a finished answer.
+///
+/// A stream cut mid-turn never gets here: it is a transport error, retried in
+/// `model_call` before there is an output to classify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnKind {
+    /// It asked for tools. The only kind that moves the work forward.
+    Acts,
+    /// It stopped with text. A candidate answer, still subject to acceptance.
+    Answers,
+    /// The provider cut it off at the output-token limit with no tool call.
+    /// Whatever came out is not the model saying "done".
+    Truncated,
+    /// It stopped by itself with reasoning only, or with nothing at all.
+    /// Never an answer, however the acceptance set is configured.
+    Stalled,
+}
+
+impl TurnKind {
+    /// Classify one model output. Pure; the loop's whole reading of a turn.
+    pub fn of(out: &ModelOutput) -> Self {
+        if !out.tool_calls.is_empty() {
+            return TurnKind::Acts;
+        }
+        if out.stop_reason == harness_core::StopReason::MaxTokens {
+            return TurnKind::Truncated;
+        }
+        if out.text.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+            TurnKind::Answers
+        } else {
+            TurnKind::Stalled
+        }
+    }
+
+    /// The label recorded for this kind (`turn_kind` events, logs).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TurnKind::Acts => "acts",
+            TurnKind::Answers => "answers",
+            TurnKind::Truncated => "truncated",
+            TurnKind::Stalled => "stalled",
+        }
+    }
+}
+
+/// Said to a model whose turn stalled when no acceptance check already said it.
+const STALLED_TURN_NUDGE: &str = "You ended that turn without answering and without calling a \
+     tool: you only thought about it. Nothing you described has been done yet. Carry on now: \
+     call the tools you need, and when the work is really finished, say so.";
+
 /// Times one model turn is retried after a transport failure (dropped
 /// connection, stream cut before a finish reason) before the error ends the run.
 const MODEL_TRANSPORT_RETRIES: u32 = 2;
@@ -1652,7 +1708,9 @@ impl<M: Model> AgentLoop<M> {
                 self.recall_append(&recall_owner, &recall_session, m).await;
             }
 
-            if out.tool_calls.is_empty() && out.stop_reason == harness_core::StopReason::MaxTokens {
+            let kind = TurnKind::of(&out);
+            tracing::debug!(iter, kind = kind.as_str(), "model turn classified");
+            if kind == TurnKind::Truncated {
                 // The provider cut the turn off. Whatever came out (usually
                 // all reasoning, sometimes half an answer) is not the model
                 // saying "done", so it must never become `Outcome::Done`.
@@ -1697,7 +1755,7 @@ impl<M: Model> AgentLoop<M> {
             }
             truncated_turns = 0;
 
-            if out.tool_calls.is_empty() {
+            if matches!(kind, TurnKind::Answers | TurnKind::Stalled) {
                 // The model stopping is its opinion that the work is done.
                 // Before taking it as fact, run whatever the caller said
                 // "done" actually means. A failure goes back as an instruction
@@ -1740,6 +1798,12 @@ impl<M: Model> AgentLoop<M> {
                     // holds up" is a different claim from "nobody looked", and
                     // the host has to be able to tell them apart.
                     verdict = verdict.or_else(|| Some(Verdict::passed()));
+                }
+                // A stalled turn is not an answer whatever the acceptance set
+                // says, including when a host replaced it and dropped
+                // `NonEmptyAnswer`: that is configuration, this is structure.
+                if kind == TurnKind::Stalled && verdict.as_ref().is_none_or(|v| v.passed) {
+                    verdict = Some(Verdict::failed(STALLED_TURN_NUDGE));
                 }
 
                 // A pass is only worth the contract it was measured against.

@@ -3,6 +3,22 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Changed
+
+- **One place decides what a model turn means.** `TurnKind::of(&ModelOutput)`
+  classifies every finished turn as `Acts` (tool calls), `Answers` (text),
+  `Truncated` (cut off at the output-token limit) or `Stalled` (reasoning
+  only, or nothing), and the loop acts on that. A cut stream never reaches it:
+  it is a transport error, retried before there is an output. The table of
+  every shape seen in the wild is pinned in `tests/turn_kind.rs`.
+- A `Stalled` turn is never a passing answer, even when the host replaced the
+  acceptance set and dropped `NonEmptyAnswer`. That rule is now structural
+  rather than configuration.
+- `harness run` exits 3 when the run ends `Done` but its acceptance verdict
+  failed, and says why on stderr.
+
 ## 0.0.71
 
 ### Fixed
