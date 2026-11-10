@@ -3,6 +3,21 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## 0.0.71
+
+### Fixed
+
+- **Compaction no longer throws the task away.** The microcompact and
+  auto-compact stages, and the model-backed summary, replaced the head of the
+  history (where the run's one user turn, the task, lives) with block counts
+  or 80-character snippets. A run that compacted early lost its task and the
+  model answered "what task are we working on?", which the loop took as done.
+  Every summary now carries the task verbatim after its tag.
+- A turn cut off by the output-token limit is removed from the history before
+  the retry. Its half-finished reasoning (a full output budget, 8000 tokens on
+  a 32k window) is never used and was what pushed small-window runs into
+  compaction.
+
 ## 0.0.70
 
 ### Fixed

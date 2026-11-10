@@ -1662,6 +1662,17 @@ impl<M: Model> AgentLoop<M> {
                     max_output_tokens = ctx.policy.max_output_tokens,
                     "model turn hit the output token limit without a tool call"
                 );
+                // Drop the cut-off turn from the history. Nothing in it is
+                // used, and keeping it costs the context a full output budget
+                // of half-finished reasoning (8000 tokens on a 32k window),
+                // which is what pushed a 9B run straight into compaction.
+                if ctx
+                    .history
+                    .last()
+                    .is_some_and(|t| matches!(t.role, TurnRole::Assistant))
+                {
+                    ctx.history.pop();
+                }
                 if truncated_turns <= MAX_TRUNCATED_TURNS && iter + 1 < ctx.policy.max_iters {
                     ctx.history.push(Turn {
                         role: TurnRole::User,

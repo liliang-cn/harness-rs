@@ -140,3 +140,21 @@ async fn a_turn_whose_stream_was_cut_is_asked_again() {
         other => panic!("expected Done, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn a_cut_off_turn_does_not_stay_in_the_history() {
+    let probe = Arc::new(MockModel::new().script_many(vec![
+        cut_off("very long half-finished reasoning"),
+        MockResponse::text("ok"),
+    ]));
+    AgentLoop::new(Shared(probe.clone()))
+        .run_with_max_iters(task(), &mut default_world(std::env::temp_dir()), 10)
+        .await
+        .unwrap();
+    let second = format!("{:?}", probe.calls()[1].history_summary);
+    assert!(
+        !second.contains("half-finished"),
+        "the cut-off reasoning was sent back: {second}"
+    );
+    assert!(second.contains("score the transactions"), "{second}");
+}

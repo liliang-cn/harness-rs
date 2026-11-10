@@ -275,7 +275,10 @@ impl ModelBackedCompactor {
             // See `starts_an_exchange`: a user turn keeps a following tool
             // request legal.
             role: TurnRole::User,
-            blocks: vec![Block::Text(format!("[{tag}]\n{summary}"))],
+            blocks: vec![Block::Text(format!(
+                "{}{summary}",
+                with_task(ctx, &format!("[{tag}]\n"))
+            ))],
         }];
         new_history.extend(ctx.history.drain(split..));
         ctx.history = new_history;
@@ -433,7 +436,7 @@ fn microcompact_old(ctx: &mut Context) {
     };
 
     // Build a textual summary of `0..split`.
-    let mut summary = String::from("[microcompact-summary]\n");
+    let mut summary = with_task(ctx, "[microcompact-summary]\n");
     for turn in ctx.history.iter().take(split) {
         let role = match turn.role {
             TurnRole::User => "user",
@@ -508,6 +511,21 @@ fn context_collapse(ctx: &mut Context) {
     );
 }
 
+/// Start a summary that replaces the head of the history with the task,
+/// verbatim. The head is where the task lives: an agent run has one user turn
+/// and it is the first one, so a summary of "the earlier turns" that counts
+/// blocks or keeps 80 characters of each throws the task away. A 9B run did
+/// exactly that and then answered "what task are we working on?".
+fn with_task(ctx: &Context, header: &str) -> String {
+    let task = ctx.task.description.trim();
+    if task.is_empty() {
+        return header.to_string();
+    }
+    // The tag stays on the first line so a summary is still recognisable as one.
+    let (tag, rest) = header.split_once('\n').unwrap_or((header, ""));
+    format!("{tag}\nThe task (verbatim):\n{task}\n\n{rest}")
+}
+
 // ---------- Stage 5: AutoCompact ----------
 
 /// Last resort: rewrite the whole history into a single condensed summary block.
@@ -519,8 +537,10 @@ fn auto_compact(ctx: &mut Context) {
     let Some(split) = safe_split(&ctx.history, ctx.history.len() - keep_recent) else {
         return;
     };
-    let mut combined =
-        String::from("[auto-compact-summary]\nCondensed history of earlier turns:\n");
+    let mut combined = with_task(
+        ctx,
+        "[auto-compact-summary]\nCondensed history of earlier turns:\n",
+    );
     let mut counts = std::collections::BTreeMap::new();
     for turn in ctx.history.iter().take(split) {
         for b in &turn.blocks {
@@ -694,6 +714,36 @@ mod tests {
             ctx.history.len()
         );
         assert_history_is_legal(&ctx.history, "bare tool alternation");
+    }
+
+    /// Every stage that rewrites the head of the history must carry the task
+    /// through verbatim: the head is where the task lives.
+    #[test]
+    fn the_task_survives_every_rewriting_stage() {
+        let task = "Apply policy/fraud_policy.md to every transaction and write out/scored.csv";
+        for stage in ["micro", "auto"] {
+            let mut ctx = mk_ctx(0);
+            ctx.task.description = task.into();
+            ctx.history.push(Turn {
+                role: TurnRole::User,
+                blocks: vec![Block::Text(task.into())],
+            });
+            for i in 0..10 {
+                ctx.history.push(Turn {
+                    role: TurnRole::Assistant,
+                    blocks: vec![Block::Text(format!("step {i}"))],
+                });
+            }
+            match stage {
+                "micro" => microcompact_old(&mut ctx),
+                _ => auto_compact(&mut ctx),
+            }
+            let head = match &ctx.history[0].blocks[0] {
+                Block::Text(t) => t.clone(),
+                other => panic!("{stage}: head is {other:?}"),
+            };
+            assert!(head.contains(task), "{stage} dropped the task: {head}");
+        }
     }
 
     /// An agent run has exactly ONE user turn — the task — and it sits at
