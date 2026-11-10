@@ -3,6 +3,21 @@
 All notable changes to the **harness-rs** workspace. Versioning is shared across
 every `harness-rs-*` crate (workspace-level `[package].version`).
 
+## Unreleased
+
+### Fixed
+
+- **A turn cut off by the output-token limit no longer ends the run as
+  `Done`.** When the provider stops a turn at `max_output_tokens` and the turn
+  has no tool call (typically a thinking model that spent the whole budget on
+  reasoning), the loop used to take it as the final answer and hand the
+  reasoning back as the text. It is now sent back with an instruction to stop
+  deliberating and act; after 2 retries in a row the run ends as
+  `Outcome::Stuck` with the reason, and the reasoning is never reported as the
+  answer.
+- `harness run` exits with status 3 when the run ends `Stuck` or
+  `BudgetExhausted`, instead of 0. A cancelled run still exits 130.
+
 ## 0.0.68
 
 ### Changed

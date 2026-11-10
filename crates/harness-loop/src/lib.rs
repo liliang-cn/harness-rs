@@ -340,6 +340,15 @@ impl Default for CompactPolicy {
 /// How often a streamed model call reports progress / a heartbeat.
 const MODEL_PROGRESS_EVERY: Duration = Duration::from_secs(5);
 const MODEL_HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+/// Turns in a row the model may be cut off by the output-token limit, with no
+/// tool call to show for it, before the run is ended as [`Outcome::Stuck`].
+/// Each one is sent back with an instruction to stop deliberating and act.
+const MAX_TRUNCATED_TURNS: u32 = 2;
+/// What a turn cut off by the output-token limit is told before it retries.
+const TRUNCATED_TURN_NUDGE: &str = "Your previous turn hit the output token limit before \
+     you produced an answer or a tool call, so nothing from it was used. Do not repeat that \
+     reasoning. Act now: either call the next tool you need, or write the final answer \
+     directly and keep it short.";
 
 const SPILL_PREVIEW_BYTES: usize = 4 * 1024;
 
@@ -1457,6 +1466,9 @@ impl<M: Model> AgentLoop<M> {
         let mut answered: std::collections::HashSet<String> = std::collections::HashSet::new();
         // How many times the model has stopped mid-work with nothing to show.
         let mut acceptance_retries_left = self.acceptance_retries;
+        // Consecutive turns cut off by the output-token limit with nothing to
+        // act on. Such a turn is not an answer, however the loop ends.
+        let mut truncated_turns: u32 = 0;
 
         // The contract as it stood before the model touched anything. Taken
         // now, not at verdict time, because the whole point is to compare
@@ -1636,6 +1648,40 @@ impl<M: Model> AgentLoop<M> {
                 m.tool_calls = calls;
                 self.recall_append(&recall_owner, &recall_session, m).await;
             }
+
+            if out.tool_calls.is_empty() && out.stop_reason == harness_core::StopReason::MaxTokens {
+                // The provider cut the turn off. Whatever came out (usually
+                // all reasoning, sometimes half an answer) is not the model
+                // saying "done", so it must never become `Outcome::Done`.
+                truncated_turns += 1;
+                tracing::warn!(
+                    truncated_turns,
+                    max_output_tokens = ctx.policy.max_output_tokens,
+                    "model turn hit the output token limit without a tool call"
+                );
+                if truncated_turns <= MAX_TRUNCATED_TURNS && iter + 1 < ctx.policy.max_iters {
+                    ctx.history.push(Turn {
+                        role: TurnRole::User,
+                        blocks: vec![Block::Text(TRUNCATED_TURN_NUDGE.into())],
+                    });
+                    continue;
+                }
+                let reason = format!(
+                    "the model hit the output token limit ({} tokens) {truncated_turns} turn(s) \
+                     in a row without producing an answer or a tool call",
+                    ctx.policy.max_output_tokens
+                );
+                self.hooks.fire(&Event::SessionEnd, world);
+                return Ok(Outcome::Stuck {
+                    reason,
+                    repeated: truncated_turns,
+                    iters: iter + 1,
+                    last_text: out.text.filter(|t| !t.trim().is_empty()),
+                    tools_called,
+                    usage: total_usage,
+                });
+            }
+            truncated_turns = 0;
 
             if out.tool_calls.is_empty() {
                 // The model stopping is its opinion that the work is done.

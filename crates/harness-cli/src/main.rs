@@ -563,6 +563,12 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
     // A Ctrl-C from here on means "quit", not "cancel"; the exit code below
     // reports that the run the user interrupted did not succeed.
     let cancelled = matches!(outcome, Outcome::Cancelled { .. });
+    // A run that stopped without finishing (stuck, out of budget) did not
+    // succeed, and a script driving `harness run` has to be able to tell.
+    let unfinished = matches!(
+        outcome,
+        Outcome::Stuck { .. } | Outcome::BudgetExhausted { .. }
+    );
 
     if opts.json {
         // Best-effort structured dump of the outcome.
@@ -675,8 +681,15 @@ async fn run_agent(opts: RunOpts) -> anyhow::Result<()> {
         // shell would have had we let SIGINT kill us: 128 + SIGINT.
         std::process::exit(130);
     }
+    if unfinished {
+        std::process::exit(EXIT_UNFINISHED);
+    }
     Ok(())
 }
+
+/// `harness run` exit status when the loop stopped without finishing:
+/// `Outcome::Stuck` or `Outcome::BudgetExhausted`.
+const EXIT_UNFINISHED: i32 = 3;
 
 // ------------------------------------------------------------------
 // `harness code` — interactive coding-agent REPL
